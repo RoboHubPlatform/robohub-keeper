@@ -18,6 +18,10 @@ targets:
         file: templates/home.html
       - name: modules
         file: templates/modules.html
+      - name: module-detail
+        file: templates/module-detail.html
+      - name: module-row
+        file: templates/module-row.html
     files:
       - path: app.go
         role: implementation

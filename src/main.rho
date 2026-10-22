@@ -10,6 +10,8 @@ import std.web.template
 route GET "/" => home
 route GET "/modules" => modules_page
 route GET "/module/{name}" => module_page
+route GET "/install" => install_page
+route GET "/uninstall" => uninstall_page
 route GET "/system" => system_page
 
 fn home(req: Request) Response {
@@ -36,22 +38,13 @@ fn module_page(req: Request) Response {
     let path: string = yaml.value(entry, "path")
     let git: string = yaml.value(entry, "git")
     let summary: string = yaml.value(entry, "summary")
+    let installed: string = "no"
     let version: string = ""
     if rho_path_exists(path + "/module.yml") {
+        installed = "yes"
         version = yaml.value(path + "/module.yml", "module.version")
     }
-    let installed: string = "no"
-    if rho_path_exists(path + "/module.yml") {
-        installed = "yes"
-    }
-    let info: string = "<h2>" + name + "</h2>" +
-        "<p><strong>Version:</strong> " + version + "</p>" +
-        "<p><strong>Role:</strong> " + role + "</p>" +
-        "<p><strong>Path:</strong> " + path + "</p>" +
-        "<p><strong>Git:</strong> " + git + "</p>" +
-        "<p><strong>Summary:</strong> " + summary + "</p>" +
-        "<p><strong>Installed:</strong> " + installed + "</p>" +
-        "<p><a href='/modules'>Back</a></p>"
+    let info: string = template_fill(template_get("module-detail"), vars("name", name) + vars("version", version) + vars("role", role) + vars("path", path) + vars("git", git) + vars("summary", summary) + vars("installed", installed))
     let body: string = template_fill(template_get("layout"), vars("title", name) + vars("body", info))
     return html(status_ok(), body)
 }
@@ -110,37 +103,51 @@ fn uninstall_page(req: Request) Response {
 }
 
 fn system_page(req: Request) Response {
-    let body: string = template_fill(template_get("layout"), vars("title", "System") + vars("body", "<h2>System dependencies</h2><p>Tools needed by the ecosystem.</p><ul><li>avr-gcc (AVR platform)</li><li>avrdude (AVR platform)</li><li>ssh, rsync (Linux platform)</li></ul><p><a href='/'>Back</a></p>"))
+    let tools: string = "avr-gcc avr-objcopy avr-size avrdude ssh rsync"
+    let body: string = template_fill(template_get("layout"), vars("title", "System") + vars("body", "<h2>System dependencies</h2><p>Tools the ecosystem needs.</p><p><a href='/'>Home</a></p>"))
     return html(status_ok(), body)
 }
 
 fn module_rows() string {
-    let modules: string = "robohub-common robohub-core robohub-devices robohub-drivers robohub-esp32 robohub-freertos robohub-gateway robohub-linux robohub-pico robohub-stm32 robohub-telemetry robohub-transport robohub-avr"
+    // Discover modules from the registry directory
+    let listing: string = ""
+    let code: u32 = rho_exec("sh", "-c \"ls registry/modules/\"", "build/reports/ls-modules.txt")
+    if code == 0 {
+        listing = rho_read_text("build/reports/ls-modules.txt")
+    }
     var result: string = ""
-    var rest: string = modules
+    var rest: string = listing
     while rest != "" {
-        let at: i32 = rho_str_index_of(rest, " ")
-        let name: string = ""
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let filename: string = ""
         if at < 0 {
-            name = rest
+            filename = rest
             rest = ""
         } else {
-            name = rho_str_slice(rest, 0, u32(at))
+            filename = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if name == "" {
+        if filename == "" {
             continue
         }
+        // Extract module name from filename (remove .yml extension)
+        if rho_str_index_of(filename, ".yml") < 0 {
+            continue
+        }
+        let name: string = rho_str_slice(filename, 0, u32(rho_str_index_of(filename, ".yml")))
         let entry: string = "registry/modules/" + name + ".yml"
         let role: string = yaml.value(entry, "role")
         let path: string = yaml.value(entry, "path")
         let installed: string = "no"
+        let version: string = ""
         let badge: string = "<a href='/install?module=" + name + "'>install</a>"
         if rho_path_exists(path + "/module.yml") {
             installed = "yes"
+            version = yaml.value(path + "/module.yml", "module.version")
             badge = "<a href='/uninstall?module=" + name + "'>uninstall</a>"
         }
-        result = result + "<tr><td><a href='/module/" + name + "'>" + name + "</a></td><td>" + role + "</td><td>" + installed + "</td><td>" + badge + "</td></tr>"
+        let row: string = template_fill(template_get("module-row"), vars("name", name) + vars("role", role) + vars("version", version) + vars("installed", installed) + vars("badge", badge))
+        result = result + row
     }
     return result
 }
