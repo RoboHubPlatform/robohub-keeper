@@ -8,7 +8,7 @@ import std.web.http
 import std.web.template
 
 /// The documentation tree the site is built from.
-const DOCS_TREE: string = "build/docs"
+const DOCS_TREE: string = "build/doctree"
 
 /// Where the built site is, which is what a page is served from when the store
 /// has not built one of its own.
@@ -38,13 +38,13 @@ fn modules_page(req: Request) Response {
 
 fn module_page(req: Request) Response {
     let name: string = param(req, "name")
-    let entry: string = "registry/modules/" + name + ".yml"
+    let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
         let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
         return html(status_not_found(), body)
     }
     let role: string = yaml.value(entry, "role")
-    let path: string = yaml.value(entry, "path")
+    let path: string = resolve_path(yaml.value(entry, "path"))
     let git: string = yaml.value(entry, "git")
     let summary: string = yaml.value(entry, "summary")
     let installed: string = "no"
@@ -64,13 +64,13 @@ fn install_page(req: Request) Response {
         let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
         return html(status_bad_request(), body)
     }
-    let entry: string = "registry/modules/" + name + ".yml"
+    let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
         let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
         return html(status_not_found(), body)
     }
     let git_url: string = yaml.value(entry, "git")
-    let path: string = yaml.value(entry, "path")
+    let path: string = resolve_path(yaml.value(entry, "path"))
     if rho_path_exists(path + "/module.yml") {
         let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>" + name + " is already installed.</p><p><a href='/modules'>Back</a></p>"))
         return html(status_ok(), body)
@@ -91,12 +91,12 @@ fn uninstall_page(req: Request) Response {
         let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
         return html(status_bad_request(), body)
     }
-    let entry: string = "registry/modules/" + name + ".yml"
+    let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
         let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
         return html(status_not_found(), body)
     }
-    let path: string = yaml.value(entry, "path")
+    let path: string = resolve_path(yaml.value(entry, "path"))
     if !rho_path_exists(path + "/module.yml") {
         let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>" + name + " is not installed.</p><p><a href='/modules'>Back</a></p>"))
         return html(status_ok(), body)
@@ -126,15 +126,22 @@ fn docs_page(req: Request) Response {
 
 fn doc_page(req: Request) Response {
     let path: string = param(req, "path")
+    // The path from the URL may or may not have the docs/ prefix.
+    var full_path: string = path
+    if rho_str_index_of(path, "docs/") != 0 {
+        full_path = "docs/" + path
+    }
     // The page is the one the generator wrote, so a page served here and a page
     // a build writes are the same page.
-    // The content of the page, rendered by the generator, and the keeper's own
-    // frame around it. A page carries the chrome of the site that built it, and
-    // the keeper has its own chrome: a reader who moves from the modules to the
-    // documentation should still be in the keeper.
-    let content: string = docs_render_source(DOCS_TREE + "/" + path + ".md")
+    let content: string = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + full_path + ".md")
     if content == "" {
-        content = docs_render_source(DOCS_TREE + "/" + path + "/index.md")
+        content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + full_path + "/index.md")
+    }
+    if content == "" {
+        content = docs_render_source(DOCS_TREE + "/" + full_path + "/docs/index.md")
+    }
+    if content == "" {
+        content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + path + "/docs/index.md")
     }
     if content == "" {
         let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>No documentation has been built for " + path + ".</p><p><a href='/docs'>All docs</a></p>"))
@@ -146,7 +153,7 @@ fn doc_page(req: Request) Response {
 
 fn docs_rows() string {
     // The pages the store holds: path, title and section, one per line.
-    let listing: string = docs_list(DOCS_TREE)
+    let listing: string = docs_list(robohub_root() + "/" + DOCS_TREE)
     var result: string = ""
     var rest: string = listing
     while rest != "" {
@@ -174,21 +181,84 @@ fn docs_rows() string {
         if tab2 >= 0 {
             title = rho_str_slice(tail, 0, u32(tab2))
         }
-        // The link is the path without its extension: the site is built from
-        // the sources, and a page in the site is the page the source became.
+        // The link is the path without its extension and without the docs/
+        // prefix: the store lists paths relative to the tree root, which
+        // includes the docs/ directory, but the keeper serves them from /docs/.
+        // Strip the docs/ directory from the path: the store lists paths
+        // relative to the tree root, which includes docs/ as a directory, but
+        // the keeper serves them from /docs/.
+        // The store lists paths relative to the tree root, which includes
+        // docs/ as a directory. Strip the docs/ segment, keeping what is
+        // before and after it.
         let link: string = path
+        // Strip docs/ from the beginning (orchestrator's own docs)
+        if rho_str_index_of(link, "docs/") == 0 {
+            link = rho_str_slice(link, 5, u32(rho_strlen(link)) - 5)
+        } else {
+            // Strip /docs/ from the middle (module docs)
+            let docs_pos: i32 = rho_str_index_of(link, "/docs/")
+            if docs_pos >= 0 {
+                let before: string = rho_str_slice(link, 0, u32(docs_pos))
+                let after: string = rho_str_slice(link, u32(docs_pos) + 6, u32(rho_strlen(link)) - u32(docs_pos) - 6)
+                if before == "" {
+                    link = after
+                } else {
+                    link = before + "/" + after
+                }
+            }
+        }
         if rho_str_index_of(link, ".md") >= 0 {
             link = rho_str_slice(link, 0, u32(rho_str_index_of(link, ".md")))
         }
-        result = result + "<tr><td><a href='/docs/" + link + "'>" + title + "</a></td><td>" + path + "</td></tr>"
+        let link_name: string = link
+        let slash: i32 = rho_str_index_of(link_name, "/")
+        if slash >= 0 {
+            link_name = rho_str_slice(link_name, 0, u32(slash))
+        }
+        result = result + "<tr><td><a href='/docs/" + link_name + "'>" + title + "</a></td><td>" + path + "</td></tr>"
     }
     return result
+}
+
+// resolve_path turns a module's path into one that does not depend on where the
+// keeper was started from. A path that is already absolute is taken as written;
+// a relative path is taken relative to the workspace root.
+// robohub_root is where the orchestrator lives. It is said by the
+// environment, because a path into another repository belongs to the machine.
+fn robohub_root() string {
+    // The workspace is said by the environment, because a path into another
+    // repository belongs to the machine, and a machine that says nothing has
+    // the orchestrator where the keeper was started.
+    let root: string = getenv("ROBOHUB_WORKSPACE")
+    if root == "" {
+        if rho_path_exists("registry/modules") {
+            return "."
+        }
+        print("robohub keeper: set ROBOHUB_WORKSPACE to the directory holding the ecosystem\n")
+        return "."
+    }
+    if rho_path_exists(root + "/robohub/registry/modules") {
+        return root + "/robohub"
+    }
+    if rho_path_exists(root + "/registry/modules") {
+        return root
+    }
+    return root + "/robohub"
+}
+
+fn resolve_path(path: string) string {
+    if rho_str_index_of(path, "/") == 0 {
+        return path
+    }
+    let root: string = robohub_root()
+    return root + "/" + path
 }
 
 fn module_rows() string {
     // Discover modules from the registry directory
     let listing: string = ""
-    let code: u32 = rho_exec("sh", "-c \"ls registry/modules/\"", "build/reports/ls-modules.txt")
+    let reg_dir: string = robohub_root() + "/registry/modules"
+    let code: u32 = rho_exec("sh", "-c \"ls " + reg_dir + "/\"", "build/reports/ls-modules.txt")
     if code == 0 {
         listing = rho_read_text("build/reports/ls-modules.txt")
     }
@@ -212,9 +282,9 @@ fn module_rows() string {
             continue
         }
         let name: string = rho_str_slice(filename, 0, u32(rho_str_index_of(filename, ".yml")))
-        let entry: string = "registry/modules/" + name + ".yml"
+        let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
         let role: string = yaml.value(entry, "role")
-        let path: string = yaml.value(entry, "path")
+        let path: string = resolve_path(yaml.value(entry, "path"))
         let installed: string = "no"
         let version: string = ""
         let badge: string = "<a href='/install?module=" + name + "'>install</a>"
