@@ -8,3 +8,10 @@ extern fn rho_exec(program: string, arguments: string, output_path: string) u32
 extern fn rho_strlen(s: string) u64
 extern fn rho_str_slice(s: string, start: u32, length: u32) string
 extern fn rho_str_index_of(s: string, needle: string) i32
+
+// The documentation store, read through the port.
+//
+// The pages are rendered by the generator the rest of the toolchain documents
+// with, so a page served here and a page a build writes are the same page.
+extern fn docs_list(dir: string) string
+extern fn docs_render(path: string) string

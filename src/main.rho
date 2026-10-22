@@ -7,6 +7,13 @@ include "keeper/storage.rho"
 import std.web.http
 import std.web.template
 
+/// The documentation tree the site is built from.
+const DOCS_TREE: string = "build/docs"
+
+/// Where the built site is, which is what a page is served from when the store
+/// has not built one of its own.
+const DOCS_SITE: string = "build/site"
+
 route GET "/" => home
 route GET "/modules" => modules_page
 route GET "/module/{name}" => module_page
@@ -14,6 +21,7 @@ route GET "/install" => install_page
 route GET "/uninstall" => uninstall_page
 route GET "/system" => system_page
 route GET "/docs" => docs_page
+route GET "/docs/{path...}" => doc_page
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
@@ -116,32 +124,63 @@ fn docs_page(req: Request) Response {
     return html(status_ok(), page)
 }
 
-fn docs_rows() string {
-    let listing: string = ""
-    let code: u32 = rho_exec("sh", "-c \"ls registry/modules/\"", "build/reports/ls-modules.txt")
-    if code == 0 {
-        listing = rho_read_text("build/reports/ls-modules.txt")
+fn doc_page(req: Request) Response {
+    let path: string = param(req, "path")
+    // The page is the one the generator wrote, so a page served here and a page
+    // a build writes are the same page.
+    var rendered: string = docs_render(path)
+    if rendered == "" {
+        rendered = docs_render(path + "/index")
     }
+    if rendered == "" {
+        // The store builds a site of its own when it is told where the tree is.
+        // A keeper that is told nothing serves the site that was built for it.
+        rendered = rho_read_text(DOCS_SITE + "/" + path + ".html")
+    }
+    if rendered == "" {
+        let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>No documentation has been built for " + path + ".</p><p><a href='/docs'>All docs</a></p>"))
+        return html(status_not_found(), body)
+    }
+    return html(status_ok(), rendered)
+}
+
+fn docs_rows() string {
+    // The pages the store holds: path, title and section, one per line.
+    let listing: string = docs_list(DOCS_TREE)
     var result: string = ""
     var rest: string = listing
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let filename: string = ""
+        let line: string = ""
         if at < 0 {
-            filename = rest
+            line = rest
             rest = ""
         } else {
-            filename = rho_str_slice(rest, 0, u32(at))
+            line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if filename == "" {
+        if line == "" {
             continue
         }
-        if rho_str_index_of(filename, ".yml") < 0 {
+        // path<TAB>title<TAB>section
+        let tab: i32 = rho_str_index_of(line, "\t")
+        if tab < 0 {
             continue
         }
-        let name: string = rho_str_slice(filename, 0, u32(rho_str_index_of(filename, ".yml")))
-        result = result + "<tr><td><a href='/module/" + name + "'>" + name + "</a></td><td><a href='/docs/" + name + "'>docs</a></td></tr>"
+        let path: string = rho_str_slice(line, 0, u32(tab))
+        let tail: string = rho_str_slice(line, u32(tab) + 1, u32(rho_strlen(line)) - u32(tab) - 1)
+        let tab2: i32 = rho_str_index_of(tail, "\t")
+        var title: string = tail
+        if tab2 >= 0 {
+            title = rho_str_slice(tail, 0, u32(tab2))
+        }
+        // The link is the path without its extension: the site is built from
+        // the sources, and a page in the site is the page the source became.
+        let link: string = path
+        if rho_str_index_of(link, ".md") >= 0 {
+            link = rho_str_slice(link, 0, u32(rho_str_index_of(link, ".md")))
+        }
+        result = result + "<tr><td><a href='/docs/" + link + "'>" + title + "</a></td><td>" + path + "</td></tr>"
     }
     return result
 }

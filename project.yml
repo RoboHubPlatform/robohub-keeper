@@ -9,6 +9,11 @@ targets:
     kind: server
     description: RoboHub keeper HTTP service
     router: serveMux
+    # The documentation-store port renders the pages, through the generator the
+    # rest of the toolchain documents with, so a page served here and a page a
+    # build writes are the same page.
+    ports:
+      - docstore
     api:
       public_paths: "/, /modules"
     templates:
