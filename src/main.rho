@@ -128,20 +128,20 @@ fn doc_page(req: Request) Response {
     let path: string = param(req, "path")
     // The page is the one the generator wrote, so a page served here and a page
     // a build writes are the same page.
-    var rendered: string = docs_render(path)
-    if rendered == "" {
-        rendered = docs_render(path + "/index")
+    // The content of the page, rendered by the generator, and the keeper's own
+    // frame around it. A page carries the chrome of the site that built it, and
+    // the keeper has its own chrome: a reader who moves from the modules to the
+    // documentation should still be in the keeper.
+    let content: string = docs_render_source(DOCS_TREE + "/" + path + ".md")
+    if content == "" {
+        content = docs_render_source(DOCS_TREE + "/" + path + "/index.md")
     }
-    if rendered == "" {
-        // The store builds a site of its own when it is told where the tree is.
-        // A keeper that is told nothing serves the site that was built for it.
-        rendered = rho_read_text(DOCS_SITE + "/" + path + ".html")
-    }
-    if rendered == "" {
+    if content == "" {
         let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>No documentation has been built for " + path + ".</p><p><a href='/docs'>All docs</a></p>"))
         return html(status_not_found(), body)
     }
-    return html(status_ok(), rendered)
+    let body: string = template_fill(template_get("layout"), vars("title", path) + vars("body", content))
+    return html(status_ok(), body)
 }
 
 fn docs_rows() string {

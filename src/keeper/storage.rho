@@ -15,3 +15,4 @@ extern fn rho_str_index_of(s: string, needle: string) i32
 // with, so a page served here and a page a build writes are the same page.
 extern fn docs_list(dir: string) string
 extern fn docs_render(path: string) string
+extern fn docs_render_source(path: string) string
