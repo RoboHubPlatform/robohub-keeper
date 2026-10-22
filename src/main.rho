@@ -1,0 +1,20 @@
+module keeper
+
+// The RoboHub keeper: a local dashboard for the ecosystem.
+//
+// A web-based admin panel that shows the ecosystem's registry, which modules
+// are installed, and what the machine needs to run them. It helps with the
+// installation process: a user clones only the orchestrator, and the keeper
+// retrieves the elements they need.
+
+include "keeper/storage.rho"
+
+import std.web.http
+
+
+route GET "/" => home
+
+fn home(req: Request) Response {
+    let body: string = "<h1>RoboHub Keeper</h1><p>The ecosystem dashboard.</p>"
+    return html(status_ok(), body)
+}

@@ -1,0 +1,24 @@
+module:
+  name: keeper
+  type: rho
+  version: 0.1.0
+  author: Aurel Miron
+  maintainer: Aurel Miron
+description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
+main: src/main.rho
+
+build:
+  language: go
+  targets:
+    - go-server
+
+deps:
+  rho-log: ">=0.1.0"
+
+docs:
+  title: The RoboHub keeper
+  section: applications
+  order: "30"
+  index: docs/index.md
+  sources:
+    - docs/index.md
