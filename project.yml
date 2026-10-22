@@ -1,0 +1,31 @@
+version: 1
+
+output_dir: build/generated
+build_dir: build
+
+targets:
+  - id: go-server
+    emitter: go
+    kind: server
+    description: RoboHub keeper HTTP service
+    router: serveMux
+    api:
+      public_paths: "/, /modules"
+    templates:
+      - name: layout
+        file: templates/layout.html
+      - name: home
+        file: templates/home.html
+      - name: modules
+        file: templates/modules.html
+    files:
+      - path: app.go
+        role: implementation
+      - path: runtime.go
+        role: runtime
+      - path: server.go
+        role: server
+      - path: main.go
+        role: entrypoint
+      - path: go.mod
+        role: build

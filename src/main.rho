@@ -3,18 +3,69 @@ module keeper
 // The RoboHub keeper: a local dashboard for the ecosystem.
 //
 // A web-based admin panel that shows the ecosystem's registry, which modules
-// are installed, and what the machine needs to run them. It helps with the
-// installation process: a user clones only the orchestrator, and the keeper
-// retrieves the elements they need.
+// are installed, and what the machine needs to run them.
 
 include "keeper/storage.rho"
 
 import std.web.http
-
+import std.web.template
 
 route GET "/" => home
+route GET "/modules" => modules_page
 
 fn home(req: Request) Response {
-    let body: string = "<h1>RoboHub Keeper</h1><p>The ecosystem dashboard.</p>"
-    return html(status_ok(), body)
+    let body: string = template_fill(template_get("home"), vars("", ""))
+    let page: string = template_fill(template_get("layout"), vars("title", "RoboHub Keeper") + vars("body", body))
+    return html(status_ok(), page)
+}
+
+fn modules_page(req: Request) Response {
+    let rows: string = module_rows()
+    let body: string = template_fill(template_get("modules"), vars("rows", rows))
+    let page: string = template_fill(template_get("layout"), vars("title", "Modules") + vars("body", body))
+    return html(status_ok(), page)
+}
+
+fn module_rows() string {
+    let modules: string = "robohub-common robohub-core robohub-devices robohub-drivers robohub-esp32 robohub-freertos robohub-gateway robohub-linux robohub-pico robohub-stm32 robohub-telemetry robohub-transport robohub-avr"
+    var result: string = ""
+    var rest: string = modules
+    while rest != "" {
+        let at: i32 = index_of(rest, " ")
+        let name: string = ""
+        if at < 0 {
+            name = rest
+            rest = ""
+        } else {
+            name = slice(rest, 0, u32(at))
+            rest = slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if name == "" {
+            continue
+        }
+        let entry: string = "registry/modules/" + name + ".yml"
+        let role: string = yaml.value(entry, "role")
+        let path: string = yaml.value(entry, "path")
+        let installed: string = "no"
+        if rho_path_exists(path + "/module.yml") {
+            installed = "yes"
+        }
+        result = result + "<tr><td>" + name + "</td><td>" + role + "</td><td>" + installed + "</td></tr>"
+    }
+    return result
+}
+
+fn index_of(s: string, needle: string) i32 {
+    var i: u32 = 0
+    while i < u32(rho_strlen(s)) {
+        if slice(s, i, 1) == needle {
+            return i32(i)
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn slice(s: string, start: u32, length: u32) string {
+    return rho_str_slice(s, start, length)
 }
