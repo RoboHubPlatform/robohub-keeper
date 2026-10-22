@@ -10,6 +10,7 @@ import std.web.template
 route GET "/" => home
 route GET "/modules" => modules_page
 route GET "/module/{name}" => module_page
+route GET "/system" => system_page
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
@@ -105,6 +106,11 @@ fn uninstall_page(req: Request) Response {
         return html(status_internal(), body)
     }
     let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Uninstalled " + name + ".</p><p><a href='/modules'>Back</a></p>"))
+    return html(status_ok(), body)
+}
+
+fn system_page(req: Request) Response {
+    let body: string = template_fill(template_get("layout"), vars("title", "System") + vars("body", "<h2>System dependencies</h2><p>Tools needed by the ecosystem.</p><ul><li>avr-gcc (AVR platform)</li><li>avrdude (AVR platform)</li><li>ssh, rsync (Linux platform)</li></ul><p><a href='/'>Back</a></p>"))
     return html(status_ok(), body)
 }
 
