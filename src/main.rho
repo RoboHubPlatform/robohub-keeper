@@ -12,6 +12,7 @@ import std.web.template
 
 route GET "/" => home
 route GET "/modules" => modules_page
+route POST "/install" => install_page
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
@@ -26,12 +27,55 @@ fn modules_page(req: Request) Response {
     return html(status_ok(), page)
 }
 
+fn install_page(req: Request) Response {
+    // The module name comes from the form body: "module=NAME".
+    let raw: string = body_str(req, "")
+    let name: string = raw
+    // Parse "module=NAME" from the form body.
+    if rho_str_index_of(raw, "module=") >= 0 {
+        let start: u32 = u32(rho_str_index_of(raw, "module=")) + 7
+        let rest: string = slice(raw, start, u32(rho_strlen(raw)) - start)
+        let end: i32 = rho_str_index_of(rest, "&")
+        if end >= 0 {
+            name = slice(rest, 0, u32(end))
+        } else {
+            name = rest
+        }
+    }
+    if name == "" {
+        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_bad_request(), body)
+    }
+    // Check if the module exists in the registry
+    let entry: string = "registry/modules/" + name + ".yml"
+    if !rho_path_exists(entry) {
+        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_not_found(), body)
+    }
+    let git_url: string = yaml.value(entry, "git")
+    let path: string = yaml.value(entry, "path")
+    // Check if already installed
+    if rho_path_exists(path + "/module.yml") {
+        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>" + name + " is already installed.</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_ok(), body)
+    }
+    // Clone the module
+    let output: string = "build/reports/clone-" + name + ".txt"
+    let code: u32 = rho_exec("git", "clone " + git_url + " " + path, output)
+    if code != 0 {
+        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Failed to clone " + name + ".</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_internal(), body)
+    }
+    let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Installed " + name + ".</p><p><a href='/modules'>Back</a></p>"))
+    return html(status_created(), body)
+}
+
 fn module_rows() string {
     let modules: string = "robohub-common robohub-core robohub-devices robohub-drivers robohub-esp32 robohub-freertos robohub-gateway robohub-linux robohub-pico robohub-stm32 robohub-telemetry robohub-transport robohub-avr"
     var result: string = ""
     var rest: string = modules
     while rest != "" {
-        let at: i32 = index_of(rest, " ")
+        let at: i32 = rho_str_index_of(rest, " ")
         let name: string = ""
         if at < 0 {
             name = rest
@@ -53,17 +97,6 @@ fn module_rows() string {
         result = result + "<tr><td>" + name + "</td><td>" + role + "</td><td>" + installed + "</td></tr>"
     }
     return result
-}
-
-fn index_of(s: string, needle: string) i32 {
-    var i: u32 = 0
-    while i < u32(rho_strlen(s)) {
-        if slice(s, i, 1) == needle {
-            return i32(i)
-        }
-        i = i + 1
-    }
-    return -1
 }
 
 fn slice(s: string, start: u32, length: u32) string {
