@@ -1,9 +1,6 @@
 module keeper
 
 // The RoboHub keeper: a local dashboard for the ecosystem.
-//
-// A web-based admin panel that shows the ecosystem's registry, which modules
-// are installed, and what the machine needs to run them.
 
 include "keeper/storage.rho"
 
@@ -12,11 +9,11 @@ import std.web.template
 
 route GET "/" => home
 route GET "/modules" => modules_page
-route POST "/install" => install_page
+route GET "/module/{name}" => module_page
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
-    let page: string = template_fill(template_get("layout"), vars("title", "RoboHub Keeper") + vars("body", body))
+    let page: string = template_fill(template_get("layout"), vars("title", "Home") + vars("body", body))
     return html(status_ok(), page)
 }
 
@@ -27,26 +24,43 @@ fn modules_page(req: Request) Response {
     return html(status_ok(), page)
 }
 
-fn install_page(req: Request) Response {
-    // The module name comes from the form body: "module=NAME".
-    let raw: string = body_str(req, "")
-    let name: string = raw
-    // Parse "module=NAME" from the form body.
-    if rho_str_index_of(raw, "module=") >= 0 {
-        let start: u32 = u32(rho_str_index_of(raw, "module=")) + 7
-        let rest: string = slice(raw, start, u32(rho_strlen(raw)) - start)
-        let end: i32 = rho_str_index_of(rest, "&")
-        if end >= 0 {
-            name = slice(rest, 0, u32(end))
-        } else {
-            name = rest
-        }
+fn module_page(req: Request) Response {
+    let name: string = param(req, "name")
+    let entry: string = "registry/modules/" + name + ".yml"
+    if !rho_path_exists(entry) {
+        let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_not_found(), body)
     }
+    let role: string = yaml.value(entry, "role")
+    let path: string = yaml.value(entry, "path")
+    let git: string = yaml.value(entry, "git")
+    let summary: string = yaml.value(entry, "summary")
+    let version: string = ""
+    if rho_path_exists(path + "/module.yml") {
+        version = yaml.value(path + "/module.yml", "module.version")
+    }
+    let installed: string = "no"
+    if rho_path_exists(path + "/module.yml") {
+        installed = "yes"
+    }
+    let info: string = "<h2>" + name + "</h2>" +
+        "<p><strong>Version:</strong> " + version + "</p>" +
+        "<p><strong>Role:</strong> " + role + "</p>" +
+        "<p><strong>Path:</strong> " + path + "</p>" +
+        "<p><strong>Git:</strong> " + git + "</p>" +
+        "<p><strong>Summary:</strong> " + summary + "</p>" +
+        "<p><strong>Installed:</strong> " + installed + "</p>" +
+        "<p><a href='/modules'>Back</a></p>"
+    let body: string = template_fill(template_get("layout"), vars("title", name) + vars("body", info))
+    return html(status_ok(), body)
+}
+
+fn install_page(req: Request) Response {
+    let name: string = param(req, "module")
     if name == "" {
         let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
         return html(status_bad_request(), body)
     }
-    // Check if the module exists in the registry
     let entry: string = "registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
         let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
@@ -54,12 +68,10 @@ fn install_page(req: Request) Response {
     }
     let git_url: string = yaml.value(entry, "git")
     let path: string = yaml.value(entry, "path")
-    // Check if already installed
     if rho_path_exists(path + "/module.yml") {
         let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>" + name + " is already installed.</p><p><a href='/modules'>Back</a></p>"))
         return html(status_ok(), body)
     }
-    // Clone the module
     let output: string = "build/reports/clone-" + name + ".txt"
     let code: u32 = rho_exec("git", "clone " + git_url + " " + path, output)
     if code != 0 {
@@ -68,6 +80,32 @@ fn install_page(req: Request) Response {
     }
     let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Installed " + name + ".</p><p><a href='/modules'>Back</a></p>"))
     return html(status_created(), body)
+}
+
+fn uninstall_page(req: Request) Response {
+    let name: string = param(req, "module")
+    if name == "" {
+        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_bad_request(), body)
+    }
+    let entry: string = "registry/modules/" + name + ".yml"
+    if !rho_path_exists(entry) {
+        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_not_found(), body)
+    }
+    let path: string = yaml.value(entry, "path")
+    if !rho_path_exists(path + "/module.yml") {
+        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>" + name + " is not installed.</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_ok(), body)
+    }
+    let output: string = "build/reports/uninstall-" + name + ".txt"
+    let code: u32 = rho_exec("rm", "-rf " + path, output)
+    if code != 0 {
+        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Failed to uninstall " + name + ".</p><p><a href='/modules'>Back</a></p>"))
+        return html(status_internal(), body)
+    }
+    let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Uninstalled " + name + ".</p><p><a href='/modules'>Back</a></p>"))
+    return html(status_ok(), body)
 }
 
 fn module_rows() string {
@@ -81,8 +119,8 @@ fn module_rows() string {
             name = rest
             rest = ""
         } else {
-            name = slice(rest, 0, u32(at))
-            rest = slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            name = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if name == "" {
             continue
@@ -91,14 +129,12 @@ fn module_rows() string {
         let role: string = yaml.value(entry, "role")
         let path: string = yaml.value(entry, "path")
         let installed: string = "no"
+        let badge: string = "<a href='/install?module=" + name + "'>install</a>"
         if rho_path_exists(path + "/module.yml") {
             installed = "yes"
+            badge = "<a href='/uninstall?module=" + name + "'>uninstall</a>"
         }
-        result = result + "<tr><td>" + name + "</td><td>" + role + "</td><td>" + installed + "</td></tr>"
+        result = result + "<tr><td><a href='/module/" + name + "'>" + name + "</a></td><td>" + role + "</td><td>" + installed + "</td><td>" + badge + "</td></tr>"
     }
     return result
-}
-
-fn slice(s: string, start: u32, length: u32) string {
-    return rho_str_slice(s, start, length)
 }

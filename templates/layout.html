@@ -3,22 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ title }}</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
-  h1, h2 { color: #00d4ff; }
-  a { color: #00d4ff; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #333; padding: 8px; text-align: left; }
-  th { background: #16213e; }
-  .installed { color: #4caf50; }
-  .not-installed { color: #f44336; }
-  nav { margin-bottom: 20px; }
-  nav a { margin-right: 15px; }
-</style>
+<title>{{ title }} — RoboHub Keeper</title>
+<link rel="stylesheet" href="/static/keeper.css">
 </head>
 <body>
-<nav><a href="/">Home</a> <a href="/modules">Modules</a></nav>
-{{{ body }}}
+<div class="shell">
+  <nav class="side">
+    <div class="brand">
+      <span class="hex" aria-hidden="true">⬡</span>
+      <span class="name">robohub keeper</span>
+    </div>
+    <ul class="nav">
+      <li><a href="/" data-nav="home"><span class="ico">◱</span>Home</a></li>
+      <li><a href="/modules" data-nav="modules"><span class="ico">▤</span>Modules</a></li>
+    </ul>
+  </nav>
+  <div class="main">
+    <header class="top">
+      <div class="crumb" id="crumb">{{ title }}</div>
+    </header>
+    <main>
+      {{{ body }}}
+    </main>
+  </div>
+</div>
 </body>
 </html>
