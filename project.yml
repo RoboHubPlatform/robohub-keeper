@@ -18,6 +18,8 @@ targets:
         file: templates/home.html
       - name: modules
         file: templates/modules.html
+      - name: docs
+        file: templates/docs.html
       - name: module-detail
         file: templates/module-detail.html
       - name: module-row

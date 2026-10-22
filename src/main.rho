@@ -13,6 +13,7 @@ route GET "/module/{name}" => module_page
 route GET "/install" => install_page
 route GET "/uninstall" => uninstall_page
 route GET "/system" => system_page
+route GET "/docs" => docs_page
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
@@ -44,7 +45,7 @@ fn module_page(req: Request) Response {
         installed = "yes"
         version = yaml.value(path + "/module.yml", "module.version")
     }
-    let info: string = template_fill(template_get("module-detail"), vars("name", name) + vars("version", version) + vars("role", role) + vars("path", path) + vars("git", git) + vars("summary", summary) + vars("installed", installed))
+    let info: string = template_fill(template_get("module-detail"), vars("name", name) + vars("version", version) + vars("role", role) + vars("path", path) + vars("git", git) + vars("summary", summary) + vars("installed", installed) + vars("docs_link", "<a href='/docs/" + name + "'>Documentation</a>"))
     let body: string = template_fill(template_get("layout"), vars("title", name) + vars("body", info))
     return html(status_ok(), body)
 }
@@ -106,6 +107,43 @@ fn system_page(req: Request) Response {
     let tools: string = "avr-gcc avr-objcopy avr-size avrdude ssh rsync"
     let body: string = template_fill(template_get("layout"), vars("title", "System") + vars("body", "<h2>System dependencies</h2><p>Tools the ecosystem needs.</p><p><a href='/'>Home</a></p>"))
     return html(status_ok(), body)
+}
+
+fn docs_page(req: Request) Response {
+    let rows: string = docs_rows()
+    let body: string = template_fill(template_get("docs"), vars("rows", rows))
+    let page: string = template_fill(template_get("layout"), vars("title", "Docs") + vars("body", body))
+    return html(status_ok(), page)
+}
+
+fn docs_rows() string {
+    let listing: string = ""
+    let code: u32 = rho_exec("sh", "-c \"ls registry/modules/\"", "build/reports/ls-modules.txt")
+    if code == 0 {
+        listing = rho_read_text("build/reports/ls-modules.txt")
+    }
+    var result: string = ""
+    var rest: string = listing
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let filename: string = ""
+        if at < 0 {
+            filename = rest
+            rest = ""
+        } else {
+            filename = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if filename == "" {
+            continue
+        }
+        if rho_str_index_of(filename, ".yml") < 0 {
+            continue
+        }
+        let name: string = rho_str_slice(filename, 0, u32(rho_str_index_of(filename, ".yml")))
+        result = result + "<tr><td><a href='/module/" + name + "'>" + name + "</a></td><td><a href='/docs/" + name + "'>docs</a></td></tr>"
+    }
+    return result
 }
 
 fn module_rows() string {
