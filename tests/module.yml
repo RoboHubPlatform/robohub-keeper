@@ -1,0 +1,16 @@
+# The Rho unit tests are a small C project of their own.
+#
+# The keeper is a go-server, so building a test file beside its own manifest
+# would ask for the keeper's target and generate the service. A test only needs
+# the C backend, and giving the test directory its own manifest is what says so.
+module:
+  name: keeper-tests
+  type: rho
+  version: 0.1.0
+
+main: wizard_test.rho
+
+build:
+  language: c
+  targets:
+    - c

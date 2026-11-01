@@ -3,9 +3,12 @@ module keeper
 // The RoboHub keeper: a local dashboard for the ecosystem.
 
 include "keeper/storage.rho"
+include "keeper/wizard.rho"
+include "keeper/mesh.rho"
 
 import std.web.http
 import std.web.template
+import rho.log
 
 /// The documentation tree the site is built from.
 const DOCS_TREE: string = "build/doctree"
@@ -22,6 +25,45 @@ route GET "/uninstall" => uninstall_page
 route GET "/system" => system_page
 route GET "/docs" => docs_page
 route GET "/docs/{path...}" => doc_page
+route GET "/mesh" => mesh_dashboard
+route GET "/mesh/plan" => mesh_page
+route GET "/mesh/project/{id}/settings" => mesh_project_settings_page
+route POST "/mesh/project/{id}/settings" => mesh_project_settings_post
+route GET "/mesh/project/{id}" => mesh_project_open_page
+route POST "/mesh/project/delete" => mesh_project_delete
+route POST "/mesh/project/new" => mesh_project_new
+route POST "/mesh/project/restart" => mesh_project_restart
+route POST "/mesh/project/stop" => mesh_project_stop
+route POST "/mesh/gateway/restart" => mesh_gateway_restart
+route POST "/mesh/gateway/stop" => mesh_gateway_stop
+route GET "/mesh/gateway" => mesh_gateway_page
+route POST "/mesh/gateway" => mesh_gateway_post
+route GET "/mesh/node/{index}" => mesh_node_page
+route POST "/mesh/node/{index}" => mesh_node_post
+route POST "/mesh/accept" => mesh_accept
+route POST "/mesh/reopen" => mesh_reopen
+route GET "/mesh/step/network" => mesh_network_page
+route GET "/mesh/network/link/{index}" => mesh_connection_page
+route POST "/mesh/network/link/{index}" => mesh_connection_post
+route GET "/mesh/network/node/{index}" => mesh_network_node_page
+route GET "/mesh/network/gateway" => mesh_network_gateway_page
+route POST "/mesh/network/gateway" => mesh_network_gateway_post
+route POST "/mesh/network/accept" => mesh_network_accept
+route GET "/mesh/step/build" => mesh_build_page
+route GET "/mesh/build/node/{index}" => mesh_build_node_page
+route POST "/mesh/build/node/{index}" => mesh_build_node_post
+route GET "/mesh/build/gateway" => mesh_build_gateway_page
+route POST "/mesh/build/gateway" => mesh_build_gateway_post
+route GET "/mesh/step/{step}" => mesh_step_page
+route POST "/mesh/step/{step}" => wizard_step_post
+route GET "/mesh/progress/{step}/{run}" => wizard_progress_run
+route GET "/mesh/progress/{step}" => wizard_progress
+route POST "/mesh/console/clear/{step}" => mesh_console_clear
+// The old path is kept as an alias so a bookmark lands on the mesh.
+route GET "/wizard" => mesh_dashboard
+route GET "/wizard/step/{step}" => mesh_step_page
+route POST "/wizard/step/{step}" => wizard_step_post
+route GET "/wizard/progress/{step}" => wizard_progress
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
@@ -234,7 +276,7 @@ fn robohub_root() string {
         if rho_path_exists("registry/modules") {
             return "."
         }
-        print("robohub keeper: set ROBOHUB_WORKSPACE to the directory holding the ecosystem\n")
+        warn("keeper", "set ROBOHUB_WORKSPACE to the directory holding the ecosystem")
         return "."
     }
     if rho_path_exists(root + "/robohub/registry/modules") {
