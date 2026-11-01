@@ -16,7 +16,7 @@ targets:
       - docstore
       - logemit
     api:
-      public_paths: "/, /modules, /wizard"
+      public_paths: "/, /modules, /applications, /docs"
     templates:
       - name: layout
         file: templates/layout.html
@@ -30,20 +30,10 @@ targets:
         file: templates/module-detail.html
       - name: module-row
         file: templates/module-row.html
-      - name: mesh
-        file: templates/mesh.html
-      - name: mesh-dashboard
-        file: templates/mesh-dashboard.html
-      - name: mesh-build
-        file: templates/mesh-build.html
-      - name: mesh-network
-        file: templates/mesh-network.html
-      - name: mesh-project-settings
-        file: templates/mesh-project-settings.html
-      - name: wizard
-        file: templates/wizard.html
-      - name: wizard-step
-        file: templates/wizard-step.html
+      - name: applications
+        file: templates/applications.html
+      - name: application-row
+        file: templates/application-row.html
     files:
       - path: app.go
         role: implementation

@@ -28,6 +28,8 @@ The keeper listens on port 8080 by default. Set the port with:
 - Install/uninstall modules via git clone
 - System dependencies page listing tools the ecosystem needs
 - Documentation pages for each module and the orchestrator
+- An applications registry: list, install, uninstall, open, start and stop
+  keeper-hosted applications, and add any of them to the keeper's left menu
 - Web-based admin panel with rho-keeper style
 
 ## Environment
@@ -37,42 +39,32 @@ The keeper listens on port 8080 by default. Set the port with:
 - `RHO_SITE_BUILD` — where the built site is (default: temp dir)
 - `RHO_SITE_TITLE` — the site title (default: "Rho language and toolchain")
 
-## RoboHub Mesh
+## Applications
 
-`/mesh` is the Mesh dashboard: the gateway status and address, restart/stop,
-last update, and the button that starts a new gateway plan. The wizard plan is
-`/mesh/plan`.
+The keeper is also the registry of the applications on the machine. An
+application is a module whose `module.yml` declares an `application` block:
 
-The plan is a gateway and a tree of nodes. The plan is a card tree with a link
-badge on every branch; accepting it locks the tree and opens the network, build
-and verify steps. In the network step a branch is a connection: click its badge
-to choose a transport both boards can serve and set both endpoints, or click a
-node to see its incoming and outgoing connections. Boards and drivers are
-discovered from the local registry at runtime, including the `capabilities` and
-`deployment` blocks in their `module.yml`; the available transports come from
-`robohub-transport` and each board's `capabilities.links`. `Console` is offered
-only when the parent is a host.
+```yaml
+application:
+  kind: keeper-hosted
+  title: RoboHub Mesh
+  route: /mesh
+  port: "8478"
+  command: mesh
+```
 
-The build step is the same tree with a status on every card. Clicking a node
-offers **Build node** and **Program node**; clicking the gateway offers **Build
-gateway** and **Program gateway**, and can change the root to another gateway
-board or to this host. The node build carries the selected transport into the
-firmware: UART uses a hardware UART, USB/Console use USB CDC, WiFi/Socket use
-TCP. Programming shows the board's boot-mode instruction and waits for an
-acknowledgement before writing. A console panel follows the live output, keeps
-the latest line in view until you scroll away, and has a **Clear console**
-action; it is reset before each action.
+`kind: keeper` is the dashboard itself, listed but not removable; a module
+without the block is not an application. The `/applications` page discovers
+applications from `applications/` on every request, installs one from a git URL
+or registers a folder that already exists, and uninstalls it again. Each row
+has **Open**, **Start**, **Stop**, **Add to menu** and **Uninstall**. The
+left-menu selection and the paths of externally registered applications live in
+`~/.rho/keeper/` (`menu.txt`, `applications.txt`), or in
+`RHO_KEEPER_STATE_DIR`.
 
-Projects are folders under `~/.rho/mesh/projects` (or `ROBOHUB_MESH_PROJECTS`).
-The Mesh dashboard lists them with their gateway status and a create-project
-form; project cards have Restart, Stop, Delete and **Project settings**.
-Opening a project shows its plan wizard at `/mesh/plan`. See
-[docs/mesh.md](docs/mesh.md) for the full guide.
-
-The keeper uses `rho-log` through the `logemit` port. Build, flash, network and
-project records go to standard error with a UTC timestamp, and `RHO_LOG_FILE`
-also appends them to a file. The web console prefixes live lines with the local
-date and time.
+The Mesh application is one of these: build it with
+`rho build applications/mesh` and launch it from the registry. Its own guide is
+the Mesh module's documentation.
 
 ## Tests
 
@@ -80,6 +72,7 @@ date and time.
 rho test applications/keeper
 ```
 
-The Rho unit suite checks the mesh's string helpers, and the smoke suite builds
-the keeper, walks the mesh over HTTP, saves a two-node tree, verifies the locked
-tree, projects and the event stream.
+The Rho unit suite checks the registry's name and list helpers, and the smoke
+suite builds the keeper, starts it, and walks the applications page over HTTP:
+discovery, the keeper row, install and uninstall of an external application,
+pinning it to the menu, and refusing to remove the keeper.

@@ -187,6 +187,21 @@
   .project-card .settings { margin: .7rem 0; }
   .project-card .actions { margin-top: .6rem; }
   .project-desc { margin: .4rem 0; color: var(--soft); font-size: .84rem; }
+
+  /* ---- Applications registry -------------------------------------------- */
+  .nav .subnav { list-style: none; margin: .1rem 0 .2rem .45rem; padding: 0 0 0 .65rem; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: .05rem; }
+  .nav .subnav a { padding: .28rem .45rem; font-size: .82rem; }
+  .nav .subnav .ico { opacity: .55; }
+  .app-status { display: inline-block; padding: .08rem .45rem; border-radius: 999px; font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .app-status.status-running { color: var(--accent); background: var(--accent-soft); }
+  .app-status.status-stopped { color: var(--soft); background: var(--line-soft); }
+  .app-status.status-not-built { color: var(--warn); background: var(--warn-soft); }
+  .app-actions { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+  .app-actions form { display: inline-flex; margin: 0; }
+  .app-actions .button, .app-actions button { padding: .3rem .55rem; font-size: .76rem; white-space: nowrap; }
+  .app-install { margin-top: 1.5rem; }
+  .app-install label.check { flex-direction: row; align-items: center; gap: .4rem; }
+  .app-install label.check input { min-height: 0; width: auto; }
 </style>
 </head>
 <body>
@@ -197,11 +212,7 @@
       <span class="name">robohub keeper</span>
     </div>
     <ul class="nav">
-      <li><a href="/" data-nav="home"><span class="ico">◱</span>Home</a></li>
-      <li><a href="/modules" data-nav="modules"><span class="ico">▤</span>Modules</a></li>
-      <li><a href="/docs" data-nav="docs"><span class="ico">▦</span>Docs</a></li>
-      <li><a href="/mesh" data-nav="mesh"><span class="ico">⌁</span>Mesh</a></li>
-      <li><a href="/system" data-nav="system"><span class="ico">⌘</span>System</a></li>
+      {{{ nav }}}
     </ul>
     <div class="side-foot">
       <span class="k">RoboHub</span>
@@ -219,6 +230,16 @@
 </div>
 <script>
 (function () {
+  // An application has its own listener, so its link is built from this page's
+  // host and the port the manifest declares. The server cannot know which
+  // address a browser reached it on.
+  document.querySelectorAll(".app-open").forEach(function (el) {
+    var port = el.getAttribute("data-app-port");
+    var route = el.getAttribute("data-app-route") || "/";
+    if (port) {
+      el.href = location.protocol + "//" + location.hostname + ":" + port + route;
+    }
+  });
   document.querySelectorAll(".local-time").forEach(function (el) {
     var ms = Number(el.getAttribute("data-ms"));
     if (ms > 0) {

@@ -1,0 +1,103 @@
+module keeper.apps_test
+
+include "../src/keeper/apps_text.rho"
+
+// Unit tests for the string half of the applications registry.
+//
+// The HTTP page is exercised by the smoke suite, which needs a built keeper.
+// These are the pure claims beneath it: a form body is decoded once, a name
+// that arrives in one cannot escape the applications directory, and the menu
+// list keeps one entry per line.
+
+extern fn rho_strlen(s: string) u64
+extern fn rho_str_slice(s: string, start: u32, length: u32) string
+extern fn rho_str_index_of(s: string, needle: string) i32
+extern fn rho_str_from_byte(b: u8) string
+extern fn abort()
+
+fn check(condition: bool, what: string) void {
+    if !condition {
+        print("FAIL: " + what + "\n")
+        abort()
+    }
+}
+
+test fn names_cannot_escape_the_applications_dir() void {
+    check(valid_name("mesh"), "a plain name")
+    check(valid_name("robohub-mesh_2.0"), "dashes, underscores and dots")
+    check(!valid_name(""), "an empty name")
+    check(!valid_name("."), "the current directory")
+    check(!valid_name(".."), "the parent directory")
+    check(!valid_name("../mesh"), "a parent traversal")
+    check(!valid_name("a/b"), "a path")
+    check(!valid_name("a b"), "a space")
+    print("[PASS] names_cannot_escape_the_applications_dir\n")
+}
+
+test fn slugs_keep_the_name_a_person_sees() void {
+    check(rho_str_eq(slug("RoboHub Mesh"), "RoboHub-Mesh"), "spaces become dashes")
+    check(rho_str_eq(slug("mesh/2.0"), "mesh2-0"), "punctuation becomes a dash")
+    check(rho_str_eq(slug("  "), "--"), "only the characters that can be named")
+    print("[PASS] slugs_keep_the_name_a_person_sees\n")
+}
+
+test fn a_git_url_names_the_repository() void {
+    check(rho_str_eq(source_name("https://github.com/RoboHubPlatform/robohub-mesh.git"), "robohub-mesh"),
+        "https repository")
+    check(rho_str_eq(source_name("git@github.com:RoboHubPlatform/robohub-mesh.git"), "robohub-mesh"),
+        "ssh repository")
+    check(rho_str_eq(source_name("/tmp/apps/mesh"), "mesh"), "a local path")
+    print("[PASS] a_git_url_names_the_repository\n")
+}
+
+test fn a_source_is_a_git_url_or_a_path() void {
+    check(source_is_git("https://github.com/x/y"), "https")
+    check(source_is_git("file:///tmp/y"), "a local git remote")
+    check(source_is_git("git@github.com:x/y.git"), "ssh")
+    check(!source_is_git("/tmp/apps/mesh"), "a path")
+    check(!source_is_git("./applications/mesh"), "a relative path")
+    print("[PASS] a_source_is_a_git_url_or_a_path\n")
+}
+
+test fn the_menu_holds_one_entry_per_line() void {
+    let start: string = "mesh\n"
+    check(line_in_list(start, "mesh"), "an entry that is there")
+    check(!line_in_list(start, "keeper"), "an entry that is not")
+    let added: string = list_add(start, "keeper")
+    check(line_in_list(added, "keeper"), "an added entry")
+    check(rho_str_eq(list_add(added, "keeper"), added), "adding twice is one entry")
+    let removed: string = list_remove(added, "mesh")
+    check(!line_in_list(removed, "mesh"), "a removed entry")
+    check(line_in_list(removed, "keeper"), "the entry that stayed")
+    print("[PASS] the_menu_holds_one_entry_per_line\n")
+}
+
+test fn a_form_body_is_decoded_once() void {
+    check(rho_str_eq(url_decode("a%20b%2Fc"), "a b/c"), "percent escapes")
+    check(rho_str_eq(url_decode("two+words"), "two words"), "plus as space")
+    check(rho_str_eq(form_value("name=mesh&pinned=1", "name"), "mesh"), "a field")
+    check(rho_str_eq(form_value("name=mesh&name=other", "name"), "mesh"), "the first duplicate")
+    check(rho_str_eq(form_value("name=mesh", "missing"), ""), "a missing field")
+    print("[PASS] a_form_body_is_decoded_once\n")
+}
+
+test fn whitespace_and_hex_are_values() void {
+    check(rho_str_eq(trim("  mesh  "), "mesh"), "surrounding spaces")
+    check(rho_str_eq(first_line("mesh\nkeeper"), "mesh"), "the first line")
+    check(decode_hex("0") == 0, "zero")
+    check(decode_hex("9") == 9, "nine")
+    check(decode_hex("A") == 10, "upper a")
+    check(decode_hex("f") == 15, "lower f")
+    print("[PASS] whitespace_and_hex_are_values\n")
+}
+
+fn main() void {
+    names_cannot_escape_the_applications_dir()
+    slugs_keep_the_name_a_person_sees()
+    a_git_url_names_the_repository()
+    a_source_is_a_git_url_or_a_path()
+    the_menu_holds_one_entry_per_line()
+    a_form_body_is_decoded_once()
+    whitespace_and_hex_are_values()
+    print("keeper apps text tests ok\n")
+}

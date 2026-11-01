@@ -1,15 +1,15 @@
 # The keeper's test suites.
 #
 # A suite is declared rather than discovered: the Rho unit tests check the
-# string helpers, and the smoke suite builds the keeper and walks the wizard
-# over HTTP, including the event stream that reports a long action.
+# registry's string helpers, and the smoke suite builds and walks the
+# applications page over HTTP.
 
 name: keeper
 suites:
-  - name: tests/wizard_test.rho
+  - name: tests/apps_test.rho
     kind: rho
     tags: [unit, rho]
-  - name: wizard-smoke
+  - name: apps-smoke
     kind: command
     tags: [smoke]
-    command: [python3, tests/wizard_smoke.py]
+    command: [python3, tests/apps_smoke.py]

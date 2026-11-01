@@ -1,0 +1,741 @@
+module keeper.apps
+
+include "apps_text.rho"
+
+// The applications registry.
+//
+// A module that declares an `application` block in its manifest is an
+// application the keeper can list, open and — when it is `keeper-hosted` —
+// start, stop and remove. The registry is read from the tree on every request,
+// so an application that is built beside the keeper appears without a rebuild.
+//
+// An application that lives outside `applications/` is registered by path in
+// the keeper's state directory. The same file records which applications were
+// added to the keeper's own left menu.
+
+import std.web.http
+import std.web.template
+import rho.log
+
+const APPLICATIONS_DIR_NAME: string = "applications"
+
+/* -------------------------------------------------------------------------- */
+/*  State                                                                     */
+/* -------------------------------------------------------------------------- */
+
+fn keeper_state_dir() string {
+    let override: string = getenv("RHO_KEEPER_STATE_DIR")
+    if override != "" {
+        return override
+    }
+    let home: string = getenv("HOME")
+    if home == "" {
+        return "build/keeper-state"
+    }
+    return home + "/.rho/keeper"
+}
+
+fn applications_state_file() string {
+    return keeper_state_dir() + "/applications.txt"
+}
+
+fn menu_state_file() string {
+    return keeper_state_dir() + "/menu.txt"
+}
+
+fn apps_report(name: string) string {
+    return keeper_state_dir() + "/" + name + ".txt"
+}
+
+fn ensure_keeper_state() void {
+    ignore_u32(rho_exec("mkdir", "-p " + keeper_state_dir(), apps_report("mkdir")))
+    ignore_u32(rho_exec("mkdir", "-p build/reports", apps_report("mkdir-reports")))
+}
+
+fn ignore_u32(value: u32) void {
+}
+
+fn ignore_bool(value: bool) void {
+}
+
+fn ignore_string(value: string) void {
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Lists of lines                                                            */
+/* -------------------------------------------------------------------------- */
+
+// Rho has no array in this dialect, so every list the registry keeps is a
+// newline-separated file and these are the operations over one.
+
+
+
+
+
+
+fn applications_dir() string {
+    return robohub_root() + "/" + APPLICATIONS_DIR_NAME
+}
+
+fn shell_quote(value: string) string {
+    return "'" + value + "'"
+}
+
+// rho_exec splits an argument string on spaces and treats only double quotes
+// as grouping, so a value passed to a program directly — not to a shell — is
+// quoted this way rather than with the shell's single quotes.
+fn arg_quote(value: string) string {
+    return "\"" + value + "\""
+}
+
+
+
+
+
+fn manifest_of(path: string) string {
+    return path + "/module.yml"
+}
+
+fn record(name: string, path: string, origin: string) string {
+    return name + "\t" + path + "\t" + origin + "\n"
+}
+
+fn bundled_records() string {
+    let dir: string = applications_dir()
+    if !rho_path_exists(dir) {
+        return ""
+    }
+    let report: string = apps_report("list-applications")
+    ignore_u32(rho_exec("ls", dir, report))
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let name: string = ""
+        if at < 0 {
+            name = rest
+            rest = ""
+        } else {
+            name = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if name == "" {
+            continue
+        }
+        let path: string = dir + "/" + name
+        if rho_path_exists(manifest_of(path)) &&
+            yaml.value(manifest_of(path), "application.kind") != "" {
+            out = out + record(name, path, "bundled")
+        }
+    }
+    return out
+}
+
+fn external_records() string {
+    var out: string = ""
+    var rest: string = rho_read_text(applications_state_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let tab: i32 = rho_str_index_of(line, "\t")
+        if tab < 0 {
+            continue
+        }
+        let name: string = rho_str_slice(line, 0, u32(tab))
+        let path: string = rho_str_slice(line, u32(tab) + 1, u32(rho_strlen(line)) - u32(tab) - 1)
+        if name == "" || path == "" {
+            continue
+        }
+        if rho_path_exists(manifest_of(path)) &&
+            yaml.value(manifest_of(path), "application.kind") != "" {
+            out = out + record(name, path, "external")
+        }
+    }
+    return out
+}
+
+fn application_records() string {
+    ensure_keeper_state()
+    return bundled_records() + external_records()
+}
+
+fn record_path(records: string, wanted: string) string {
+    var rest: string = records
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let tab: i32 = rho_str_index_of(line, "\t")
+        if tab < 0 {
+            continue
+        }
+        let name: string = rho_str_slice(line, 0, u32(tab))
+        if name != wanted {
+            continue
+        }
+        let tail: string = rho_str_slice(line, u32(tab) + 1, u32(rho_strlen(line)) - u32(tab) - 1)
+        let tab2: i32 = rho_str_index_of(tail, "\t")
+        if tab2 < 0 {
+            return tail
+        }
+        return rho_str_slice(tail, 0, u32(tab2))
+    }
+    return ""
+}
+
+fn record_origin(records: string, wanted: string) string {
+    var rest: string = records
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let tab: i32 = rho_str_index_of(line, "\t")
+        if tab < 0 {
+            continue
+        }
+        let name: string = rho_str_slice(line, 0, u32(tab))
+        if name != wanted {
+            continue
+        }
+        let tail: string = rho_str_slice(line, u32(tab) + 1, u32(rho_strlen(line)) - u32(tab) - 1)
+        let tab2: i32 = rho_str_index_of(tail, "\t")
+        if tab2 < 0 {
+            return "bundled"
+        }
+        return rho_str_slice(tail, u32(tab2) + 1, u32(rho_strlen(tail)) - u32(tab2) - 1)
+    }
+    return ""
+}
+
+fn app_path(name: string) string {
+    return record_path(application_records(), name)
+}
+
+fn app_kind(path: string) string {
+    return yaml.value(manifest_of(path), "application.kind")
+}
+
+fn app_title(name: string, path: string) string {
+    let title: string = yaml.value(manifest_of(path), "application.title")
+    if title == "" {
+        return name
+    }
+    return title
+}
+
+fn app_port(path: string) string {
+    return yaml.value(manifest_of(path), "application.port")
+}
+
+fn app_route(path: string) string {
+    let address: string = yaml.value(manifest_of(path), "application.route")
+    if address == "" {
+        return "/"
+    }
+    return address
+}
+
+fn app_command(name: string, path: string) string {
+    let command: string = yaml.value(manifest_of(path), "application.command")
+    if command == "" {
+        return name
+    }
+    return command
+}
+
+fn app_version(path: string) string {
+    return yaml.value(manifest_of(path), "module.version")
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Running and menu state                                                    */
+/* -------------------------------------------------------------------------- */
+
+fn port_answers(port: string, path: string) bool {
+    if port == "" {
+        return false
+    }
+    let report: string = apps_report("probe-" + port)
+    let code: u32 = rho_exec("curl",
+        "-fsS -m 1 -o /dev/null http://127.0.0.1:" + port + path, report)
+    return code == 0
+}
+
+fn app_binary(name: string, path: string) string {
+    return path + "/build/" + app_command(name, path)
+}
+
+fn app_running(name: string, path: string) bool {
+    if app_kind(path) == "keeper" {
+        return true
+    }
+    return port_answers(app_port(path), app_route(path))
+}
+
+fn pinned(name: string) bool {
+    return line_in_list(rho_read_text(menu_state_file()), name)
+}
+
+fn pin(name: string) void {
+    ignore_bool(rho_write_text(menu_state_file(),
+        list_add(rho_read_text(menu_state_file()), name)))
+}
+
+fn unpin(name: string) void {
+    ignore_bool(rho_write_text(menu_state_file(),
+        list_remove(rho_read_text(menu_state_file()), name)))
+}
+
+fn register_external(name: string, path: string) void {
+    let current: string = rho_read_text(applications_state_file())
+    ignore_bool(rho_write_text(applications_state_file(),
+        list_add(current, name + "\t" + path)))
+}
+
+fn unregister_external(name: string) void {
+    var out: string = ""
+    var rest: string = rho_read_text(applications_state_file()) + "\n"
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        if at < 0 {
+            break
+        }
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if line == "" {
+            continue
+        }
+        let tab: i32 = rho_str_index_of(line, "\t")
+        if tab >= 0 && rho_str_slice(line, 0, u32(tab)) == name {
+            continue
+        }
+        out = out + line + "\n"
+    }
+    ignore_bool(rho_write_text(applications_state_file(), out))
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Pages                                                                     */
+/* -------------------------------------------------------------------------- */
+
+fn page(title: string, content: string) Response {
+    return page_status(status_ok(), title, content)
+}
+
+fn page_status(status: u32, title: string, content: string) Response {
+    let document: string = template_fill(template_get("layout"),
+        vars("title", title) + vars("nav", keeper_nav()) + vars("body", content))
+    return html(status, document)
+}
+
+fn keeper_nav() string {
+    var out: string = ""
+    out = out + "<li><a href=\"/\" data-nav=\"home\"><span class=\"ico\">◱</span>Home</a></li>"
+    out = out + "<li><a href=\"/modules\" data-nav=\"modules\"><span class=\"ico\">▤</span>Modules</a></li>"
+    // The applications a person pinned are the Applications entry's own
+    // submenu, so the registry link and what it opens read as one thing.
+    out = out + "<li class=\"nav-group\"><a href=\"/applications\" data-nav=\"applications\">" +
+        "<span class=\"ico\">▩</span>Applications</a>" + pinned_nav() + "</li>"
+    out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>Docs</a></li>"
+    out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>System</a></li>"
+    return out
+}
+
+fn pinned_nav() string {
+    var out: string = ""
+    var rest: string = rho_read_text(menu_state_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let name: string = ""
+        if at < 0 {
+            name = rest
+            rest = ""
+        } else {
+            name = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if name == "" {
+            continue
+        }
+        let path: string = app_path(name)
+        if path == "" {
+            continue
+        }
+        let title: string = app_title(name, path)
+        let icon: string = "<span class=\"ico\">▸</span>"
+        if app_kind(path) == "keeper" {
+            out = out + "<li><a href=\"/\">" + icon +
+                escape_html(title) + "</a></li>"
+        } else {
+            out = out + "<li><a href=\"#\" class=\"app-open\" data-app-port=\"" +
+                escape_html(app_port(path)) + "\" data-app-route=\"" +
+                escape_html(app_route(path)) + "\">" + icon +
+                escape_html(title) + "</a></li>"
+        }
+    }
+    if out == "" {
+        return ""
+    }
+    return "<ul class=\"subnav\">" + out + "</ul>"
+}
+
+fn open_link(path: string) string {
+    if app_kind(path) == "keeper" {
+        return "<a class=\"button quiet\" href=\"/\">Open</a>"
+    }
+    return "<a class=\"button app-open\" href=\"#\" data-app-port=\"" +
+        escape_html(app_port(path)) + "\" data-app-route=\"" +
+        escape_html(app_route(path)) + "\">Open</a>"
+}
+
+fn app_actions(name: string, path: string, origin: string) string {
+    var out: string = open_link(path)
+    if app_kind(path) != "keeper" {
+        if app_running(name, path) {
+            out = out + " <form method=\"post\" action=\"/applications/stop\">" +
+                "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+                "<button type=\"submit\" class=\"quiet\">Stop</button></form>"
+        } else {
+            out = out + " <form method=\"post\" action=\"/applications/start\">" +
+                "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+                "<button type=\"submit\">Start</button></form>"
+        }
+    }
+    if pinned(name) {
+        out = out + " <form method=\"post\" action=\"/applications/menu\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<input type=\"hidden\" name=\"pinned\" value=\"0\">" +
+            "<button type=\"submit\" class=\"quiet\">Remove from menu</button></form>"
+    } else {
+        out = out + " <form method=\"post\" action=\"/applications/menu\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<input type=\"hidden\" name=\"pinned\" value=\"1\">" +
+            "<button type=\"submit\" class=\"quiet\">Add to menu</button></form>"
+    }
+    if app_kind(path) != "keeper" {
+        let hint: string = ""
+        if origin == "bundled" {
+            hint = "Delete this application's folder; a module you clone again is installed again."
+        } else if origin == "external" {
+            hint = "Remove it from the registry; the folder it lives in is left alone."
+        }
+        out = out + " <form method=\"post\" action=\"/applications/uninstall\" " +
+            "onsubmit=\"return confirm('Remove this application from the keeper?');\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<input type=\"hidden\" name=\"origin\" value=\"" + escape_html(origin) + "\">" +
+            "<button type=\"submit\" class=\"danger\" title=\"" + escape_html(hint) + "\">Uninstall</button></form>"
+    }
+    return out
+}
+
+fn application_status(name: string, path: string) string {
+    if app_kind(path) == "keeper" {
+        return "<span class=\"app-status status-running\">this keeper</span>"
+    }
+    if !rho_path_exists(app_binary(name, path)) {
+        return "<span class=\"app-status status-not-built\">not built</span>"
+    }
+    if app_running(name, path) {
+        return "<span class=\"app-status status-running\">running</span>"
+    }
+    return "<span class=\"app-status status-stopped\">stopped</span>"
+}
+
+fn applications_rows() string {
+    let records: string = application_records()
+    var out: string = ""
+    var rest: string = records
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let tab: i32 = rho_str_index_of(line, "\t")
+        if tab < 0 {
+            continue
+        }
+        let name: string = rho_str_slice(line, 0, u32(tab))
+        let tail: string = rho_str_slice(line, u32(tab) + 1, u32(rho_strlen(line)) - u32(tab) - 1)
+        let tab2: i32 = rho_str_index_of(tail, "\t")
+        if tab2 < 0 {
+            continue
+        }
+        let path: string = rho_str_slice(tail, 0, u32(tab2))
+        let origin: string = rho_str_slice(tail, u32(tab2) + 1, u32(rho_strlen(tail)) - u32(tab2) - 1)
+        let row: string = template_fill(template_get("application-row"),
+            vars("name", escape_html(name)) +
+            vars("title", escape_html(app_title(name, path))) +
+            vars("kind", escape_html(app_kind(path))) +
+            vars("version", escape_html(app_version(path))) +
+            vars("path", escape_html(path)) +
+            vars("status", application_status(name, path)) +
+            vars("actions", app_actions(name, path, origin)))
+        out = out + row + "\n"
+    }
+    if out == "" {
+        out = "<tr><td colspan=\"6\">No applications declare an <code>application</code> block yet.</td></tr>"
+    }
+    return out
+}
+
+fn applications_page_message(message: string) Response {
+    let notice: string = ""
+    if message != "" {
+        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+    }
+    let body: string = template_fill(template_get("applications"),
+        vars("notice", notice) + vars("rows", applications_rows()))
+    return page("Applications", body)
+}
+
+fn applications_page(req: Request) Response {
+    return applications_page_message("")
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Actions                                                                   */
+/* -------------------------------------------------------------------------- */
+
+
+
+
+fn applications_menu(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    let wanted: string = form_value(body, "pinned")
+    if name == "" || app_path(name) == "" {
+        return applications_page_message("No such application: " + name)
+    }
+    if wanted == "0" {
+        unpin(name)
+        info("keeper", "removed " + name + " from the keeper menu")
+        return applications_page_message(name + " is no longer in the keeper menu.")
+    }
+    pin(name)
+    info("keeper", "added " + name + " to the keeper menu")
+    return applications_page_message(name + " was added to the keeper menu.")
+}
+
+// The port this keeper listens on, said to a hosted application so it can
+// offer a way back. RHO_HTTP_ADDR is `:8080`, `127.0.0.1:19090` or a bare port.
+fn keeper_listen_port() string {
+    let address: string = getenv("RHO_HTTP_ADDR")
+    if address == "" {
+        return "8080"
+    }
+    var port: string = ""
+    var rest: string = address
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, ":")
+        if at < 0 {
+            if port == "" {
+                port = rest
+            }
+            break
+        }
+        port = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+    }
+    if port == "" {
+        return "8080"
+    }
+    return port
+}
+
+fn app_start(name: string) string {
+    let path: string = app_path(name)
+    if path == "" {
+        return "No such application: " + name
+    }
+    if app_kind(path) == "keeper" {
+        return "The keeper cannot start itself."
+    }
+    let binary: string = app_binary(name, path)
+    if !rho_path_exists(binary) {
+        return name + " is not built yet. Build it with: rho build " + path
+    }
+    let port: string = app_port(path)
+    if port == "" {
+        return name + " does not declare an application.port."
+    }
+    if port_answers(port, app_route(path)) {
+        return name + " is already running on port " + port + "."
+    }
+    ignore_u32(rho_exec("mkdir", "-p " + path + "/build", apps_report("mkdir-app")))
+    // The paths after `cd` are relative to the application folder, not to the
+    // keeper's own working directory. The workspace is captured before the
+    // move, so a hosted application reads the same registry the keeper does.
+    // The value of an assignment is not field-split, so a path with spaces is
+    // still one workspace. The background job is the whole subshell, and its
+    // pid is written from the keeper's directory, where the stop action looks
+    // for it.
+    let pid_file: string = path + "/build/app.pid"
+    let script: string = "workspace=$(pwd); (cd " + shell_quote(path) +
+        " && ROBOHUB_WORKSPACE=$workspace RHO_KEEPER_PORT=" + keeper_listen_port() +
+        " RHO_HTTP_ADDR=:" + port +
+        " nohup ./build/" + app_command(name, path) +
+        " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)
+    let code: u32 = rho_exec("sh", "-c \"" + script + "\"", apps_report("start-" + name))
+    if code != 0 {
+        return "Could not start " + name + ". See " + apps_report("start-" + name) + "."
+    }
+    info("keeper", "started application " + name + " on port " + port)
+    return name + " is starting on port " + port + "."
+}
+
+fn app_stop(name: string) string {
+    let path: string = app_path(name)
+    if path == "" {
+        return "No such application: " + name
+    }
+    if app_kind(path) == "keeper" {
+        return "The keeper cannot stop itself."
+    }
+    let pid: string = first_line(rho_read_text(path + "/build/app.pid"))
+    if pid == "" {
+        return name + " has no pid; start it from this page so the keeper can stop it."
+    }
+    let code: u32 = rho_exec("kill", pid, apps_report("stop-" + name))
+    ignore_bool(rho_write_text(path + "/build/app.pid", ""))
+    if code != 0 {
+        return "Could not stop " + name + " (pid " + pid + "). See " + apps_report("stop-" + name) + "."
+    }
+    info("keeper", "stopped application " + name)
+    return name + " was stopped."
+}
+
+fn applications_start(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    return applications_page_message(app_start(name))
+}
+
+fn applications_stop(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    return applications_page_message(app_stop(name))
+}
+
+fn applications_uninstall(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    let path: string = app_path(name)
+    if path == "" {
+        return applications_page_message("No such application: " + name)
+    }
+    if app_kind(path) == "keeper" {
+        return applications_page_message("The keeper cannot uninstall itself.")
+    }
+    let origin: string = record_origin(application_records(), name)
+    ignore_string(app_stop(name))
+    unpin(name)
+    if origin == "external" {
+        unregister_external(name)
+        info("keeper", "unregistered application " + name)
+        return applications_page_message(name + " was removed from the registry.")
+    }
+    let dir: string = applications_dir()
+    if rho_str_index_of(path, dir + "/") != 0 {
+        unregister_external(name)
+        return applications_page_message(name + " was removed from the registry.")
+    }
+    ignore_u32(rho_exec("rm", "-rf " + arg_quote(path), apps_report("uninstall-" + name)))
+    info("keeper", "uninstalled application " + name)
+    return applications_page_message(name + " was uninstalled.")
+}
+
+fn applications_install(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    let source: string = trim(form_value(body, "source"))
+    let add_to_menu: string = form_value(body, "menu")
+    if source == "" {
+        return applications_page_message("Name a location to install from.")
+    }
+    let is_git: bool = source_is_git(source)
+    var path: string = ""
+    if is_git {
+        if name == "" {
+            name = source_name(source)
+        }
+        if !valid_name(name) {
+            return applications_page_message("The application name can use letters, digits, '-', '_' and '.' only.")
+        }
+        path = applications_dir() + "/" + name
+        if rho_path_exists(path) || app_path(name) != "" {
+            return applications_page_message(name + " is already installed at " + path + ".")
+        }
+        ignore_u32(rho_exec("mkdir", "-p " + applications_dir(), apps_report("mkdir-apps")))
+        let log: string = apps_report("install-" + name)
+        let code: u32 = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(path), log)
+        if code != 0 {
+            return applications_page_message("Could not clone " + source + ". See " + log + ".")
+        }
+    } else {
+        path = resolve_path(source)
+        if !rho_path_exists(manifest_of(path)) {
+            return applications_page_message("No module.yml at " + path + ".")
+        }
+        if name == "" {
+            name = yaml.value(manifest_of(path), "module.name")
+        }
+        if !valid_name(name) {
+            return applications_page_message("The application name can use letters, digits, '-', '_' and '.' only.")
+        }
+        let existing: string = app_path(name)
+        if existing != "" && existing != path {
+            return applications_page_message(name + " is already registered at " + existing + ".")
+        }
+        register_external(name, path)
+    }
+    let kind: string = app_kind(path)
+    if kind != "keeper-hosted" {
+        if is_git {
+            ignore_u32(rho_exec("rm", "-rf " + arg_quote(path), apps_report("remove-not-hosted")))
+        } else {
+            unregister_external(name)
+        }
+        return applications_page_message(path + " is not a keeper-hosted application.")
+    }
+    if add_to_menu == "1" {
+        pin(name)
+    }
+    info("keeper", "installed application " + name + " from " + source)
+    return applications_page_message(name + " was installed. Build it with: rho build " + path)
+}

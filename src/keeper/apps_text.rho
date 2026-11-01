@@ -1,0 +1,291 @@
+module keeper.apps_text
+
+// The parts of the applications registry that are only strings: reading a form
+// body, naming an application, and keeping the menu and registration lists in
+// order. They are in a file of their own because they are what the unit suite
+// can test without building or starting anything.
+//
+// Two rules keep this file portable between the Go server and the C backend a
+// test runs on: a string is compared with rho_str_eq rather than `==`, and a
+// character is placed in a class by looking it up in the alphabet it belongs
+// to rather than by comparing the pointers of two literals. Both are the same
+// claim in either backend, and the C one is only true when written this way.
+//
+// The string primitives are declared by the module that includes this file.
+// Equality is named here because the file uses it directly, and the compiler's
+// own lowering is not a function a program may call by name.
+extern fn rho_str_eq(a: string, b: string) bool
+
+fn is_lower(ch: string) bool {
+    return rho_strlen(ch) == 1 && rho_str_index_of("abcdefghijklmnopqrstuvwxyz", ch) >= 0
+}
+
+fn is_upper(ch: string) bool {
+    return rho_strlen(ch) == 1 && rho_str_index_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ch) >= 0
+}
+
+fn is_digit(ch: string) bool {
+    return rho_strlen(ch) == 1 && rho_str_index_of("0123456789", ch) >= 0
+}
+
+fn first_line(text: string) string {
+    let at: i32 = rho_str_index_of(text, "\n")
+    if at < 0 {
+        return text
+    }
+    return rho_str_slice(text, 0, u32(at))
+}
+
+fn line_in_list(text: string, wanted: string) bool {
+    var rest: string = text + "\n"
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        if at < 0 {
+            break
+        }
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if rho_str_eq(line, wanted) {
+            return true
+        }
+    }
+    return false
+}
+
+fn list_add(text: string, value: string) string {
+    if line_in_list(text, value) {
+        return text
+    }
+    if rho_strlen(text) == 0 {
+        return value + "\n"
+    }
+    return text + value + "\n"
+}
+
+fn list_remove(text: string, wanted: string) string {
+    var out: string = ""
+    var rest: string = text + "\n"
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        if at < 0 {
+            break
+        }
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if !rho_str_eq(line, wanted) && rho_strlen(line) > 0 {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+fn trim(text: string) string {
+    var out: string = text
+    while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, 0, 1), " ") {
+        out = rho_str_slice(out, 1, u32(rho_strlen(out)) - 1)
+    }
+    while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, u32(rho_strlen(out)) - 1, 1), " ") {
+        out = rho_str_slice(out, 0, u32(rho_strlen(out)) - 1)
+    }
+    return out
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Names and paths                                                           */
+/* -------------------------------------------------------------------------- */
+
+fn valid_name(name: string) bool {
+    if rho_strlen(name) == 0 || rho_str_eq(name, ".") || rho_str_eq(name, "..") ||
+        rho_str_index_of(name, "/") >= 0 || rho_str_index_of(name, "..") >= 0 {
+        return false
+    }
+    var i: u32 = 0
+    let length: u32 = u32(rho_strlen(name))
+    while i < length {
+        let ch: string = rho_str_slice(name, i, 1)
+        let allowed: bool = is_lower(ch) || is_upper(ch) || is_digit(ch) ||
+            rho_str_eq(ch, "-") || rho_str_eq(ch, "_") || rho_str_eq(ch, ".")
+        if !allowed {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn slug(value: string) string {
+    var out: string = ""
+    var i: u32 = 0
+    let length: u32 = u32(rho_strlen(value))
+    while i < length {
+        let ch: string = rho_str_slice(value, i, 1)
+        if is_lower(ch) || is_upper(ch) || is_digit(ch) ||
+            rho_str_eq(ch, "-") || rho_str_eq(ch, "_") {
+            out = out + ch
+        } else if rho_str_eq(ch, " ") || rho_str_eq(ch, ".") {
+            out = out + "-"
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn source_name(source: string) string {
+    var tail: string = source
+    let slash: i32 = rho_str_index_of(tail, "/")
+    if slash >= 0 {
+        var rest: string = tail
+        var last: string = ""
+        while rho_strlen(rest) > 0 {
+            let at: i32 = rho_str_index_of(rest, "/")
+            if at < 0 {
+                last = rest
+                rest = ""
+            } else {
+                last = rho_str_slice(rest, 0, u32(at))
+                rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            }
+        }
+        tail = last
+    }
+    let git_suffix: i32 = rho_str_index_of(tail, ".git")
+    if git_suffix >= 0 && u32(git_suffix) + 4 == u32(rho_strlen(tail)) {
+        tail = rho_str_slice(tail, 0, u32(git_suffix))
+    }
+    return slug(tail)
+}
+
+fn source_is_git(source: string) bool {
+    return rho_str_index_of(source, "http://") == 0 ||
+        rho_str_index_of(source, "https://") == 0 ||
+        rho_str_index_of(source, "git@") == 0 ||
+        rho_str_index_of(source, "ssh://") == 0 ||
+        rho_str_index_of(source, "git://") == 0 ||
+        rho_str_index_of(source, "file://") == 0
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Forms                                                                     */
+/* -------------------------------------------------------------------------- */
+
+fn form_value(body: string, name: string) string {
+    var rest: string = body + "&"
+    while rho_strlen(rest) > 0 {
+        let amp: i32 = rho_str_index_of(rest, "&")
+        if amp < 0 {
+            break
+        }
+        let pair: string = rho_str_slice(rest, 0, u32(amp))
+        rest = rho_str_slice(rest, u32(amp) + 1, u32(rho_strlen(rest)) - u32(amp) - 1)
+        if rho_strlen(pair) == 0 {
+            continue
+        }
+        let equals: i32 = rho_str_index_of(pair, "=")
+        if equals < 0 {
+            continue
+        }
+        let key: string = url_decode(rho_str_slice(pair, 0, u32(equals)))
+        if rho_str_eq(key, name) {
+            return url_decode(rho_str_slice(pair, u32(equals) + 1,
+                u32(rho_strlen(pair)) - u32(equals) - 1))
+        }
+    }
+    return ""
+}
+
+fn url_decode(value: string) string {
+    // A form body is percent-encoded. The registry only needs the characters a
+    // path or a name can contain, so the decoder keeps the ones it knows and
+    // leaves the rest as written.
+    var out: string = ""
+    var i: u32 = 0
+    let length: u32 = u32(rho_strlen(value))
+    while i < length {
+        let ch: string = rho_str_slice(value, i, 1)
+        if rho_str_eq(ch, "+") {
+            out = out + " "
+            i = i + 1
+            continue
+        }
+        if rho_str_eq(ch, "%") && i + 2 < length {
+            let high: u32 = decode_hex(rho_str_slice(value, i + 1, 1))
+            let low: u32 = decode_hex(rho_str_slice(value, i + 2, 1))
+            out = out + rho_str_from_byte(u8(high * 16 + low))
+            i = i + 3
+            continue
+        }
+        out = out + ch
+        i = i + 1
+    }
+    return out
+}
+
+fn decode_hex(ch: string) u32 {
+    if is_digit(ch) {
+        if rho_str_eq(ch, "0") {
+            return 0
+        }
+        if rho_str_eq(ch, "1") {
+            return 1
+        }
+        if rho_str_eq(ch, "2") {
+            return 2
+        }
+        if rho_str_eq(ch, "3") {
+            return 3
+        }
+        if rho_str_eq(ch, "4") {
+            return 4
+        }
+        if rho_str_eq(ch, "5") {
+            return 5
+        }
+        if rho_str_eq(ch, "6") {
+            return 6
+        }
+        if rho_str_eq(ch, "7") {
+            return 7
+        }
+        if rho_str_eq(ch, "8") {
+            return 8
+        }
+        return 9
+    }
+    if is_lower(ch) {
+        if rho_str_eq(ch, "a") {
+            return 10
+        }
+        if rho_str_eq(ch, "b") {
+            return 11
+        }
+        if rho_str_eq(ch, "c") {
+            return 12
+        }
+        if rho_str_eq(ch, "d") {
+            return 13
+        }
+        if rho_str_eq(ch, "e") {
+            return 14
+        }
+        return 15
+    }
+    if is_upper(ch) {
+        if rho_str_eq(ch, "A") {
+            return 10
+        }
+        if rho_str_eq(ch, "B") {
+            return 11
+        }
+        if rho_str_eq(ch, "C") {
+            return 12
+        }
+        if rho_str_eq(ch, "D") {
+            return 13
+        }
+        if rho_str_eq(ch, "E") {
+            return 14
+        }
+        return 15
+    }
+    return 0
+}

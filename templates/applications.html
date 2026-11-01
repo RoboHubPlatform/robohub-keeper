@@ -1,0 +1,33 @@
+<h1>Applications</h1>
+<p>Applications declare an <code>application</code> block in their manifest. A
+<code>keeper-hosted</code> application is built and run on its own port; the
+keeper can start and stop it, and can add it to the left menu.</p>
+{{{ notice }}}
+<table>
+<thead>
+<tr><th>Application</th><th>Kind</th><th>Version</th><th>Location</th><th>Status</th><th></th></tr>
+</thead>
+<tbody>
+{{{ rows }}}
+</tbody>
+</table>
+
+<h2 class="app-install">Install an application</h2>
+<p>Clone an application from a git URL, or register one that already lives on
+this machine. A registered application is not moved or copied; its folder stays
+where it is.</p>
+<form class="grid app-install" method="post" action="/applications/install">
+  <label>Name
+    <input name="name" placeholder="mesh">
+    <small>Empty for a git URL uses the repository name.</small>
+  </label>
+  <label>Source
+    <input name="source" placeholder="https://github.com/RoboHubPlatform/robohub-mesh or /path/to/app">
+    <small>A git URL, or a folder with a module.yml.</small>
+  </label>
+  <label class="check">
+    <input type="checkbox" name="menu" value="1">
+    Add to the keeper menu
+  </label>
+  <button type="submit">Install</button>
+</form>

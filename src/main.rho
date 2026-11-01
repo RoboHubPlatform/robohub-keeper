@@ -3,8 +3,7 @@ module keeper
 // The RoboHub keeper: a local dashboard for the ecosystem.
 
 include "keeper/storage.rho"
-include "keeper/wizard.rho"
-include "keeper/mesh.rho"
+include "keeper/apps.rho"
 
 import std.web.http
 import std.web.template
@@ -25,65 +24,29 @@ route GET "/uninstall" => uninstall_page
 route GET "/system" => system_page
 route GET "/docs" => docs_page
 route GET "/docs/{path...}" => doc_page
-route GET "/mesh" => mesh_dashboard
-route GET "/mesh/plan" => mesh_page
-route GET "/mesh/project/{id}/settings" => mesh_project_settings_page
-route POST "/mesh/project/{id}/settings" => mesh_project_settings_post
-route GET "/mesh/project/{id}" => mesh_project_open_page
-route POST "/mesh/project/delete" => mesh_project_delete
-route POST "/mesh/project/new" => mesh_project_new
-route POST "/mesh/project/restart" => mesh_project_restart
-route POST "/mesh/project/stop" => mesh_project_stop
-route POST "/mesh/gateway/restart" => mesh_gateway_restart
-route POST "/mesh/gateway/stop" => mesh_gateway_stop
-route GET "/mesh/gateway" => mesh_gateway_page
-route POST "/mesh/gateway" => mesh_gateway_post
-route GET "/mesh/node/{index}" => mesh_node_page
-route POST "/mesh/node/{index}" => mesh_node_post
-route POST "/mesh/accept" => mesh_accept
-route POST "/mesh/reopen" => mesh_reopen
-route GET "/mesh/step/network" => mesh_network_page
-route GET "/mesh/network/link/{index}" => mesh_connection_page
-route POST "/mesh/network/link/{index}" => mesh_connection_post
-route GET "/mesh/network/node/{index}" => mesh_network_node_page
-route GET "/mesh/network/gateway" => mesh_network_gateway_page
-route POST "/mesh/network/gateway" => mesh_network_gateway_post
-route POST "/mesh/network/accept" => mesh_network_accept
-route GET "/mesh/step/build" => mesh_build_page
-route GET "/mesh/build/node/{index}" => mesh_build_node_page
-route POST "/mesh/build/node/{index}" => mesh_build_node_post
-route GET "/mesh/build/gateway" => mesh_build_gateway_page
-route POST "/mesh/build/gateway" => mesh_build_gateway_post
-route GET "/mesh/step/{step}" => mesh_step_page
-route POST "/mesh/step/{step}" => wizard_step_post
-route GET "/mesh/progress/{step}/{run}" => wizard_progress_run
-route GET "/mesh/progress/{step}" => wizard_progress
-route POST "/mesh/console/clear/{step}" => mesh_console_clear
-// The old path is kept as an alias so a bookmark lands on the mesh.
-route GET "/wizard" => mesh_dashboard
-route GET "/wizard/step/{step}" => mesh_step_page
-route POST "/wizard/step/{step}" => wizard_step_post
-route GET "/wizard/progress/{step}" => wizard_progress
+route GET "/applications" => applications_page
+route POST "/applications/install" => applications_install
+route POST "/applications/uninstall" => applications_uninstall
+route POST "/applications/start" => applications_start
+route POST "/applications/stop" => applications_stop
+route POST "/applications/menu" => applications_menu
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))
-    let page: string = template_fill(template_get("layout"), vars("title", "Home") + vars("body", body))
-    return html(status_ok(), page)
+    return page("Home", body)
 }
 
 fn modules_page(req: Request) Response {
     let rows: string = module_rows()
     let body: string = template_fill(template_get("modules"), vars("rows", rows))
-    let page: string = template_fill(template_get("layout"), vars("title", "Modules") + vars("body", body))
-    return html(status_ok(), page)
+    return page("Modules", body)
 }
 
 fn module_page(req: Request) Response {
     let name: string = param(req, "name")
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
-        let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_not_found(), body)
+        return page_status(status_not_found(), "Not found", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>")
     }
     let role: string = yaml.value(entry, "role")
     let path: string = resolve_path(yaml.value(entry, "path"))
@@ -96,74 +59,61 @@ fn module_page(req: Request) Response {
         version = yaml.value(path + "/module.yml", "module.version")
     }
     let info: string = template_fill(template_get("module-detail"), vars("name", name) + vars("version", version) + vars("role", role) + vars("path", path) + vars("git", git) + vars("summary", summary) + vars("installed", installed) + vars("docs_link", "<a href='/docs/" + name + "'>Documentation</a>"))
-    let body: string = template_fill(template_get("layout"), vars("title", name) + vars("body", info))
-    return html(status_ok(), body)
+    return page(name, info)
 }
 
 fn install_page(req: Request) Response {
     let name: string = param(req, "module")
     if name == "" {
-        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_bad_request(), body)
+        return page_status(status_bad_request(), "Install", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>")
     }
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
-        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_not_found(), body)
+        return page_status(status_not_found(), "Install", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>")
     }
     let git_url: string = yaml.value(entry, "git")
     let path: string = resolve_path(yaml.value(entry, "path"))
     if rho_path_exists(path + "/module.yml") {
-        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>" + name + " is already installed.</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_ok(), body)
+        return page("Install", "<p>" + name + " is already installed.</p><p><a href='/modules'>Back</a></p>")
     }
     let output: string = "build/reports/clone-" + name + ".txt"
     let code: u32 = rho_exec("git", "clone " + git_url + " " + path, output)
     if code != 0 {
-        let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Failed to clone " + name + ".</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_internal(), body)
+        return page_status(status_internal(), "Install", "<p>Failed to clone " + name + ".</p><p><a href='/modules'>Back</a></p>")
     }
-    let body: string = template_fill(template_get("layout"), vars("title", "Install") + vars("body", "<p>Installed " + name + ".</p><p><a href='/modules'>Back</a></p>"))
-    return html(status_created(), body)
+    return page_status(status_created(), "Install", "<p>Installed " + name + ".</p><p><a href='/modules'>Back</a></p>")
 }
 
 fn uninstall_page(req: Request) Response {
     let name: string = param(req, "module")
     if name == "" {
-        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_bad_request(), body)
+        return page_status(status_bad_request(), "Uninstall", "<p>No module specified.</p><p><a href='/modules'>Back</a></p>")
     }
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
-        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_not_found(), body)
+        return page_status(status_not_found(), "Uninstall", "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>")
     }
     let path: string = resolve_path(yaml.value(entry, "path"))
     if !rho_path_exists(path + "/module.yml") {
-        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>" + name + " is not installed.</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_ok(), body)
+        return page("Uninstall", "<p>" + name + " is not installed.</p><p><a href='/modules'>Back</a></p>")
     }
     let output: string = "build/reports/uninstall-" + name + ".txt"
     let code: u32 = rho_exec("rm", "-rf " + path, output)
     if code != 0 {
-        let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Failed to uninstall " + name + ".</p><p><a href='/modules'>Back</a></p>"))
-        return html(status_internal(), body)
+        return page_status(status_internal(), "Uninstall", "<p>Failed to uninstall " + name + ".</p><p><a href='/modules'>Back</a></p>")
     }
-    let body: string = template_fill(template_get("layout"), vars("title", "Uninstall") + vars("body", "<p>Uninstalled " + name + ".</p><p><a href='/modules'>Back</a></p>"))
-    return html(status_ok(), body)
+    return page("Uninstall", "<p>Uninstalled " + name + ".</p><p><a href='/modules'>Back</a></p>")
 }
 
 fn system_page(req: Request) Response {
     let tools: string = "avr-gcc avr-objcopy avr-size avrdude ssh rsync"
-    let body: string = template_fill(template_get("layout"), vars("title", "System") + vars("body", "<h2>System dependencies</h2><p>Tools the ecosystem needs.</p><p><a href='/'>Home</a></p>"))
-    return html(status_ok(), body)
+    return page("System", "<h2>System dependencies</h2><p>Tools the ecosystem needs.</p><p><a href='/'>Home</a></p>")
 }
 
 fn docs_page(req: Request) Response {
     let rows: string = docs_rows()
     let body: string = template_fill(template_get("docs"), vars("rows", rows))
-    let page: string = template_fill(template_get("layout"), vars("title", "Docs") + vars("body", body))
-    return html(status_ok(), page)
+    return page("Docs", body)
 }
 
 fn doc_page(req: Request) Response {
@@ -186,11 +136,9 @@ fn doc_page(req: Request) Response {
         content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + path + "/docs/index.md")
     }
     if content == "" {
-        let body: string = template_fill(template_get("layout"), vars("title", "Not found") + vars("body", "<p>No documentation has been built for " + path + ".</p><p><a href='/docs'>All docs</a></p>"))
-        return html(status_not_found(), body)
+        return page_status(status_not_found(), "Not found", "<p>No documentation has been built for " + path + ".</p><p><a href='/docs'>All docs</a></p>")
     }
-    let body: string = template_fill(template_get("layout"), vars("title", path) + vars("body", content))
-    return html(status_ok(), body)
+    return page(path, content)
 }
 
 fn docs_rows() string {

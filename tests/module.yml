@@ -8,7 +8,7 @@ module:
   type: rho
   version: 0.1.0
 
-main: wizard_test.rho
+main: apps_test.rho
 
 build:
   language: c
