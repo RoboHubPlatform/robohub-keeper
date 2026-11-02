@@ -84,6 +84,14 @@ documentation.
 `/modules` is the RoboHub registry: the repositories this orchestrator publishes
 and tracks, with their versions and whether they are installed.
 
+## Menu
+
+The left menu keeps one entry per top-level concern: Home, Registry,
+Applications, Docs and System. **Applications** opens the applications list and
+also carries the current application, the pinned applications, **Modules** and
+**Plugins** as sub-items, because those are things an application carries rather
+than separate top-level destinations.
+
 ## Modules
 
 `/app-modules` lists the reusable modules in `modules/registry.yml`: each row

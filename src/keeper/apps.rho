@@ -308,12 +308,16 @@ fn keeper_nav() string {
     var out: string = ""
     out = out + "<li><a href=\"/\" data-nav=\"home\"><span class=\"ico\">◱</span>Home</a></li>"
     out = out + "<li><a href=\"/modules\" data-nav=\"registry\"><span class=\"ico\">▤</span>Registry</a></li>"
-    // The applications a person pinned are the Applications entry's own
-    // submenu, so the registry link and what it opens read as one thing.
+    // Applications is the one place an application, its modules and its
+    // plugins are found. The current application is the first sub-item; the
+    // pinned applications follow it.
     out = out + "<li class=\"nav-group\"><a href=\"/applications\" data-nav=\"applications\">" +
-        "<span class=\"ico\">▩</span>Applications</a>" + pinned_nav() + "</li>"
-    out = out + "<li><a href=\"/app-modules\" data-nav=\"modules\"><span class=\"ico\">▧</span>Modules</a></li>"
-    out = out + "<li><a href=\"/plugins\" data-nav=\"plugins\"><span class=\"ico\">⚙</span>Plugins</a></li>"
+        "<span class=\"ico\">▩</span>Applications</a><ul class=\"subnav\">" +
+        "<li><a href=\"/\"><span class=\"ico\">▩</span>RoboHub Application</a></li>" +
+        pinned_nav() +
+        "<li><a href=\"/app-modules\"><span class=\"ico\">▧</span>Modules</a></li>" +
+        "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>Plugins</a></li>" +
+        "</ul></li>"
     out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>Docs</a></li>"
     out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>System</a></li>"
     return out
@@ -351,10 +355,7 @@ fn pinned_nav() string {
                 escape_html(title) + "</a></li>"
         }
     }
-    if out == "" {
-        return ""
-    }
-    return "<ul class=\"subnav\">" + out + "</ul>"
+    return out
 }
 
 fn open_link(path: string) string {

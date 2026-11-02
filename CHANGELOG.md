@@ -4,6 +4,10 @@ All notable changes to this module are recorded here, one section per release.
 
 ## [0.5.1] - 2026-11-02
 
+The left menu nests the current RoboHub application, the pinned applications,
+Modules and Plugins under **Applications**; Modules and Plugins are no longer
+separate top-level entries.
+
 The Modules page lists modules without an Open link: a module can be included by
 more than one application, so there is no single host to follow. Module versions
 are the module's own; a host declares a dependency constraint in its
