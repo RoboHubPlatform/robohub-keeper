@@ -6,9 +6,9 @@ All notable changes to this module are recorded here, one section per release.
 
 A Modules registry at `/app-modules` for the reusable modules under
 `modules/`. It lists the installed set from `modules/registry.yml`, confirms each
-path on disk, installs one from a git URL or folder, removes one, and opens a
-module through the application that hosts it. A module has no port or process of
-its own; the host application owns the router and the port.
+path on disk, installs one from a git URL or folder, and removes one. A module
+has no port or process of its own and no single host: every application that
+includes it serves its routes on its own router and port.
 
 ## [0.4.0] - 2026-11-02
 

@@ -87,12 +87,10 @@ and tracks, with their versions and whether they are installed.
 ## Modules
 
 `/app-modules` lists the reusable modules in `modules/registry.yml`: each row
-shows the module's title, category, version and the application that hosts it,
-links to the module's routes there, and can remove it. **Install a module** adds
-one from a git URL or a folder. A module has no port or process of its own; its
-host application owns the router and the port. A module's records stay in a
-workspace named for the hosting application, so installing the same module in
-another application does not move or share its database.
+shows the module's title, category and version, and can remove it. **Install a
+module** adds one from a git URL or a folder. A module has no port or process of
+its own, and no single host: every application that includes it serves its
+routes on its own router, on that application's port and workspace.
 
 ## Plugins
 

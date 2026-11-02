@@ -131,126 +131,14 @@ fn micro_app_description(manifest: string) string {
     return description
 }
 
-// micro_app_instance_entries reads an application's app_modules block:
-//   name|route|enabled
-fn micro_app_instance_entries(manifest: string) string {
-    let text: string = rho_read_text(manifest)
-    let marker: string = "\napp_modules:\n"
-    let start: i32 = rho_str_index_of(text, marker)
-    if start < 0 {
-        return ""
-    }
-    var out: string = ""
-    var name: string = ""
-    var prefix: string = ""
-    var enabled: string = "true"
-    var i: u32 = u32(start) + u32(rho_strlen(marker))
-    while i < u32(rho_strlen(text)) {
-        let at: i32 = rho_str_index_of(
-            rho_str_slice(text, i, u32(rho_strlen(text)) - i), "\n")
-        let end: u32 = u32(rho_strlen(text))
-        if at >= 0 {
-            end = i + u32(at)
-        }
-        let line: string = rho_str_slice(text, i, end - i)
-        let trimmed: string = trim(line)
-        if trimmed == "" {
-            i = end + 1
-            continue
-        }
-        if plugin_indent(line) == 0 && !rho_str_eq(trimmed, "app_modules:") {
-            break
-        }
-        if rho_str_index_of(trimmed, "- name:") == 0 {
-            if name != "" {
-                out = out + name + "|" + prefix + "|" + enabled + "\n"
-            }
-            name = unquote(rho_str_slice(trimmed, 7, u32(rho_strlen(trimmed)) - 7))
-            prefix = ""
-            enabled = "true"
-        } else if rho_str_index_of(trimmed, "route:") == 0 {
-            prefix = unquote(rho_str_slice(trimmed, 6,
-                u32(rho_strlen(trimmed)) - 6))
-        } else if rho_str_index_of(trimmed, "enabled:") == 0 {
-            enabled = unquote(rho_str_slice(trimmed, 8,
-                u32(rho_strlen(trimmed)) - 8))
-        }
-        i = end + 1
-    }
-    if name != "" {
-        out = out + name + "|" + prefix + "|" + enabled + "\n"
-    }
-    return out
-}
-
-// find_micro_app_host answers the first application that includes the module:
-//   application|port|route
-fn find_micro_app_host(module_name: string) string {
-    let dir: string = applications_dir()
-    if !rho_path_exists(dir) {
-        return ""
-    }
-    let report: string = apps_report("list-micro-app-hosts")
-    ignore_u32(rho_exec("ls", dir, report))
-    var rest: string = rho_read_text(report)
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        let app_name: string = ""
-        if at < 0 {
-            app_name = rest
-            rest = ""
-        } else {
-            app_name = rho_str_slice(rest, 0, u32(at))
-            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        }
-        if app_name == "" {
-            continue
-        }
-        let manifest: string = dir + "/" + app_name + "/module.yml"
-        if !rho_path_exists(manifest) {
-            continue
-        }
-        let entries: string = micro_app_instance_entries(manifest)
-        var members: string = entries
-        while members != "" {
-            let nl: i32 = rho_str_index_of(members, "\n")
-            let line: string = ""
-            if nl < 0 {
-                line = members
-                members = ""
-            } else {
-                line = rho_str_slice(members, 0, u32(nl))
-                members = rho_str_slice(members, u32(nl) + 1,
-                    u32(rho_strlen(members)) - u32(nl) - 1)
-            }
-            if line == "" || !rho_str_eq(field(line, 0), module_name) ||
-                !rho_str_eq(field(line, 2), "true") {
-                continue
-            }
-            let port: string = yaml.value(manifest, "application.port")
-            if port == "" {
-                continue
-            }
-            return app_name + "|" + port + "|" + field(line, 1)
-        }
-    }
-    return ""
-}
-
 fn micro_app_actions(name: string, location: string, enabled: bool) string {
-    let instance: string = find_micro_app_host(name)
-    var out: string = ""
-    if instance != "" {
-        out = "<a class=\"button app-open\" href=\"#\" data-app-port=\"" +
-            escape_html(field(instance, 1)) + "\" data-app-route=\"" +
-            escape_html(field(instance, 2)) + "\">Open in " +
-            escape_html(field(instance, 0)) + "</a>"
-    }
-    out = out + " <form method=\"post\" action=\"/app-modules/uninstall\" " +
+    // A module can be included by more than one application, so there is no
+    // single host to open from here. The registry lists the installed module;
+    // the application that uses it serves its routes.
+    return "<form method=\"post\" action=\"/app-modules/uninstall\" " +
         "onsubmit=\"return confirm('Remove this module and its folder?');\">" +
         "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
         "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
-    return out
 }
 
 fn micro_app_rows() string {
@@ -282,16 +170,11 @@ fn micro_app_rows() string {
         var description: string = "not found on disk"
         var category: string = ""
         var version: string = ""
-        var host: string = ""
         if present {
             title = micro_app_title(manifest, name)
             description = micro_app_description(manifest)
             category = yaml.value(manifest, "module_app.category")
             version = yaml.value(manifest, "module.version")
-            let instance: string = find_micro_app_host(name)
-            if instance != "" {
-                host = field(instance, 0)
-            }
         }
         out = out + template_fill(template_get("microapp-row"),
             vars("name", escape_html(name)) +
@@ -299,7 +182,6 @@ fn micro_app_rows() string {
             vars("category", escape_html(category)) +
             vars("description", escape_html(description)) +
             vars("version", escape_html(version)) +
-            vars("host", escape_html(host)) +
             vars("status", status) +
             vars("actions", micro_app_actions(name, location, enabled)))
     }
