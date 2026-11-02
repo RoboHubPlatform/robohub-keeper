@@ -1,9 +1,18 @@
 <h1>RoboHub Keeper</h1>
 <p>A local dashboard for the RoboHub ecosystem.</p>
-<p>The ecosystem is a set of repositories. Each is versioned apart and built
-apart. The keeper shows what is installed and helps with the installation.</p>
+<p>The ecosystem is a set of repositories, each versioned and built apart. The
+keeper shows what is installed, what runs, and which reusable pieces an
+application carries.</p>
+
 <ul>
-  <li><a href="/modules">Modules</a> — the ecosystem registry and what is installed</li>
-  <li><a href="/applications">Applications</a> — the dashboard's own registry, with open, start, stop and menu entries</li>
+  <li><a href="/modules">Registry</a> — the RoboHub repositories and what is installed</li>
+  <li><a href="/applications">Applications</a> — the applications the keeper hosts, with open, start, stop and menu entries</li>
+  <li><a href="/app-modules">Modules</a> — reusable application modules, included by a host application rather than running on a port of their own</li>
+  <li><a href="/plugins">Plugins</a> — alert channels and other plugins an application loads</li>
   <li><a href="/docs">Docs</a> — the documentation built from the ecosystem</li>
 </ul>
+
+<p><small><strong>Registry</strong> is the repositories the orchestrator publishes
+and installs. <strong>Modules</strong> are the full-stack pieces an application
+includes — the inventory tracker in the aquarium, for example. A module has no
+process or port; its host application serves its routes.</small></p>
