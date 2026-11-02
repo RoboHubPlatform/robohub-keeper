@@ -135,7 +135,8 @@ fn micro_app_description(manifest: string) string {
 //   name|route|enabled
 fn micro_app_instance_entries(manifest: string) string {
     let text: string = rho_read_text(manifest)
-    let start: i32 = rho_str_index_of(text, "\napp_modules:\n")
+    let marker: string = "\napp_modules:\n"
+    let start: i32 = rho_str_index_of(text, marker)
     if start < 0 {
         return ""
     }
@@ -143,7 +144,7 @@ fn micro_app_instance_entries(manifest: string) string {
     var name: string = ""
     var prefix: string = ""
     var enabled: string = "true"
-    var i: u32 = u32(start) + 13
+    var i: u32 = u32(start) + u32(rho_strlen(marker))
     while i < u32(rho_strlen(text)) {
         let at: i32 = rho_str_index_of(
             rho_str_slice(text, i, u32(rho_strlen(text)) - i), "\n")
@@ -153,6 +154,10 @@ fn micro_app_instance_entries(manifest: string) string {
         }
         let line: string = rho_str_slice(text, i, end - i)
         let trimmed: string = trim(line)
+        if trimmed == "" {
+            i = end + 1
+            continue
+        }
         if plugin_indent(line) == 0 && !rho_str_eq(trimmed, "app_modules:") {
             break
         }

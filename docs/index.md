@@ -79,6 +79,11 @@ directory, which is what the tests use.
 start it from its registry row. Its own guide is the Mesh module's
 documentation.
 
+## Registry
+
+`/modules` is the RoboHub registry: the repositories this orchestrator publishes
+and tracks, with their versions and whether they are installed.
+
 ## Modules
 
 `/app-modules` lists the reusable modules in `modules/registry.yml`: each row

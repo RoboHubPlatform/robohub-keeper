@@ -52,7 +52,7 @@ fn home(req: Request) Response {
 fn modules_page(req: Request) Response {
     let rows: string = module_rows()
     let body: string = template_fill(template_get("modules"), vars("rows", rows))
-    return page("Modules", body)
+    return page("Registry", body)
 }
 
 fn module_page(req: Request) Response {
