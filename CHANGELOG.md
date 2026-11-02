@@ -2,6 +2,26 @@
 
 All notable changes to this module are recorded here, one section per release.
 
+## [0.5.0] - 2026-11-02
+
+A Modules registry at `/app-modules` for the reusable modules under
+`modules/`. It lists the installed set from `modules/registry.yml`, confirms each
+path on disk, installs one from a git URL or folder, removes one, and opens a
+module through the application that hosts it. A module has no port or process of
+its own; the host application owns the router and the port.
+
+## [0.4.0] - 2026-11-02
+
+The keeper has a plugin registry at `/plugins`. It lists the plugins in
+`plugins/registry.yml`, confirms each path on disk, installs one from a git URL
+or a folder, removes one, enables or disables it for the keeper, and sends a
+test alert through it. A path whose folder is gone is shown as missing.
+
+Application failures from the applications registry now raise alerts through
+the configured dispatcher. The keeper's own plugin settings come from its
+`module.yml`; a dashboard toggle is written to `~/.rho/keeper/plugins.txt` so the
+installed manifest is not edited.
+
 ## [0.3.0] - 2026-11-01
 
 The Applications registry. A module whose manifest declares an `application`

@@ -3,7 +3,12 @@ module keeper
 // The RoboHub keeper: a local dashboard for the ecosystem.
 
 include "keeper/storage.rho"
+include "keeper/apps_text.rho"
+include "../../../plugins/manager.rho"
+include "keeper/alerts.rho"
 include "keeper/apps.rho"
+include "keeper/plugins.rho"
+include "keeper/microapps.rho"
 
 import std.web.http
 import std.web.template
@@ -30,6 +35,14 @@ route POST "/applications/uninstall" => applications_uninstall
 route POST "/applications/start" => applications_start
 route POST "/applications/stop" => applications_stop
 route POST "/applications/menu" => applications_menu
+route GET "/plugins" => plugins_page
+route POST "/plugins/toggle" => plugins_toggle
+route POST "/plugins/test" => plugins_test
+route POST "/plugins/install" => plugins_install
+route POST "/plugins/uninstall" => plugins_uninstall
+route GET "/app-modules" => micro_apps_page
+route POST "/app-modules/install" => micro_apps_install
+route POST "/app-modules/uninstall" => micro_apps_uninstall
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))

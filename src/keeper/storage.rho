@@ -11,6 +11,7 @@ extern fn rho_str_slice(s: string, start: u32, length: u32) string
 extern fn rho_str_index_of(s: string, needle: string) i32
 extern fn rho_str_from_byte(b: u8) string
 extern fn rho_str_starts_with(s: string, prefix: string) bool
+extern fn rho_str_eq(a: string, b: string) bool
 extern fn rho_int_from_str(s: string) u32
 extern fn rho_int_to_str(value: u32) string
 
@@ -21,3 +22,45 @@ extern fn rho_int_to_str(value: u32) string
 extern fn docs_list(dir: string) string
 extern fn docs_render(path: string) string
 extern fn docs_render_source(path: string) string
+
+/* -------------------------------------------------------------------------- */
+/*  Keeper state and the argument quoting every component shares              */
+/* -------------------------------------------------------------------------- */
+
+fn keeper_state_dir() string {
+    let override: string = getenv("RHO_KEEPER_STATE_DIR")
+    if override != "" {
+        return override
+    }
+    let home: string = getenv("HOME")
+    if home == "" {
+        return "build/keeper-state"
+    }
+    return home + "/.rho/keeper"
+}
+
+fn apps_report(name: string) string {
+    return keeper_state_dir() + "/" + name + ".txt"
+}
+
+fn ensure_keeper_state() void {
+    ignore_u32(rho_exec("mkdir", "-p " + keeper_state_dir(), apps_report("mkdir")))
+    ignore_u32(rho_exec("mkdir", "-p build/reports", apps_report("mkdir-reports")))
+}
+
+fn ignore_u32(value: u32) void {
+}
+
+fn ignore_bool(value: bool) void {
+}
+
+fn ignore_string(value: string) void {
+}
+
+fn shell_quote(value: string) string {
+    return "'" + value + "'"
+}
+
+fn arg_quote(value: string) string {
+    return "\"" + value + "\""
+}

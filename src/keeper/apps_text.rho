@@ -14,7 +14,6 @@ module keeper.apps_text
 // The string primitives are declared by the module that includes this file.
 // Equality is named here because the file uses it directly, and the compiler's
 // own lowering is not a function a program may call by name.
-extern fn rho_str_eq(a: string, b: string) bool
 
 fn is_lower(ch: string) bool {
     return rho_strlen(ch) == 1 && rho_str_index_of("abcdefghijklmnopqrstuvwxyz", ch) >= 0
@@ -79,6 +78,24 @@ fn list_remove(text: string, wanted: string) string {
     return out
 }
 
+fn field(line: string, index: u32) string {
+    var rest: string = line
+    var i: u32 = 0
+    while i < index {
+        let at: i32 = rho_str_index_of(rest, "|")
+        if at < 0 {
+            return ""
+        }
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        i = i + 1
+    }
+    let at: i32 = rho_str_index_of(rest, "|")
+    if at < 0 {
+        return rest
+    }
+    return rho_str_slice(rest, 0, u32(at))
+}
+
 fn trim(text: string) string {
     var out: string = text
     while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, 0, 1), " ") {
@@ -93,6 +110,19 @@ fn trim(text: string) string {
 /* -------------------------------------------------------------------------- */
 /*  Names and paths                                                           */
 /* -------------------------------------------------------------------------- */
+
+fn unquote(text: string) string {
+    let value: string = trim(text)
+    if rho_strlen(value) >= 2 {
+        let first: string = rho_str_slice(value, 0, 1)
+        let last: string = rho_str_slice(value, u32(rho_strlen(value)) - 1, 1)
+        if (rho_str_eq(first, "\"") || rho_str_eq(first, "'")) &&
+            rho_str_eq(first, last) {
+            return rho_str_slice(value, 1, u32(rho_strlen(value)) - 2)
+        }
+    }
+    return value
+}
 
 fn valid_name(name: string) bool {
     if rho_strlen(name) == 0 || rho_str_eq(name, ".") || rho_str_eq(name, "..") ||

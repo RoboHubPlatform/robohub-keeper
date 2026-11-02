@@ -1,7 +1,5 @@
 module keeper.apps
 
-include "apps_text.rho"
-
 // The applications registry.
 //
 // A module that declares an `application` block in its manifest is an
@@ -23,18 +21,6 @@ const APPLICATIONS_DIR_NAME: string = "applications"
 /*  State                                                                     */
 /* -------------------------------------------------------------------------- */
 
-fn keeper_state_dir() string {
-    let override: string = getenv("RHO_KEEPER_STATE_DIR")
-    if override != "" {
-        return override
-    }
-    let home: string = getenv("HOME")
-    if home == "" {
-        return "build/keeper-state"
-    }
-    return home + "/.rho/keeper"
-}
-
 fn applications_state_file() string {
     return keeper_state_dir() + "/applications.txt"
 }
@@ -43,54 +29,9 @@ fn menu_state_file() string {
     return keeper_state_dir() + "/menu.txt"
 }
 
-fn apps_report(name: string) string {
-    return keeper_state_dir() + "/" + name + ".txt"
-}
-
-fn ensure_keeper_state() void {
-    ignore_u32(rho_exec("mkdir", "-p " + keeper_state_dir(), apps_report("mkdir")))
-    ignore_u32(rho_exec("mkdir", "-p build/reports", apps_report("mkdir-reports")))
-}
-
-fn ignore_u32(value: u32) void {
-}
-
-fn ignore_bool(value: bool) void {
-}
-
-fn ignore_string(value: string) void {
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Lists of lines                                                            */
-/* -------------------------------------------------------------------------- */
-
-// Rho has no array in this dialect, so every list the registry keeps is a
-// newline-separated file and these are the operations over one.
-
-
-
-
-
-
 fn applications_dir() string {
     return robohub_root() + "/" + APPLICATIONS_DIR_NAME
 }
-
-fn shell_quote(value: string) string {
-    return "'" + value + "'"
-}
-
-// rho_exec splits an argument string on spaces and treats only double quotes
-// as grouping, so a value passed to a program directly — not to a shell — is
-// quoted this way rather than with the shell's single quotes.
-fn arg_quote(value: string) string {
-    return "\"" + value + "\""
-}
-
-
-
-
 
 fn manifest_of(path: string) string {
     return path + "/module.yml"
@@ -100,12 +41,15 @@ fn record(name: string, path: string, origin: string) string {
     return name + "\t" + path + "\t" + origin + "\n"
 }
 
-fn bundled_records() string {
-    let dir: string = applications_dir()
+fn modules_dir() string {
+    return robohub_root() + "/modules"
+}
+
+fn records_in(dir: string, origin: string, report_name: string) string {
     if !rho_path_exists(dir) {
         return ""
     }
-    let report: string = apps_report("list-applications")
+    let report: string = apps_report(report_name)
     ignore_u32(rho_exec("ls", dir, report))
     var out: string = ""
     var rest: string = rho_read_text(report)
@@ -125,10 +69,14 @@ fn bundled_records() string {
         let path: string = dir + "/" + name
         if rho_path_exists(manifest_of(path)) &&
             yaml.value(manifest_of(path), "application.kind") != "" {
-            out = out + record(name, path, "bundled")
+            out = out + record(name, path, origin)
         }
     }
     return out
+}
+
+fn bundled_records() string {
+    return records_in(applications_dir(), "bundled", "list-applications")
 }
 
 fn external_records() string {
@@ -359,11 +307,13 @@ fn page_status(status: u32, title: string, content: string) Response {
 fn keeper_nav() string {
     var out: string = ""
     out = out + "<li><a href=\"/\" data-nav=\"home\"><span class=\"ico\">◱</span>Home</a></li>"
-    out = out + "<li><a href=\"/modules\" data-nav=\"modules\"><span class=\"ico\">▤</span>Modules</a></li>"
+    out = out + "<li><a href=\"/modules\" data-nav=\"registry\"><span class=\"ico\">▤</span>Registry</a></li>"
     // The applications a person pinned are the Applications entry's own
     // submenu, so the registry link and what it opens read as one thing.
     out = out + "<li class=\"nav-group\"><a href=\"/applications\" data-nav=\"applications\">" +
         "<span class=\"ico\">▩</span>Applications</a>" + pinned_nav() + "</li>"
+    out = out + "<li><a href=\"/app-modules\" data-nav=\"modules\"><span class=\"ico\">▧</span>Modules</a></li>"
+    out = out + "<li><a href=\"/plugins\" data-nav=\"plugins\"><span class=\"ico\">⚙</span>Plugins</a></li>"
     out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>Docs</a></li>"
     out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>System</a></li>"
     return out
@@ -606,13 +556,19 @@ fn app_start(name: string) string {
     // pid is written from the keeper's directory, where the stop action looks
     // for it.
     let pid_file: string = path + "/build/app.pid"
+    let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
+    let app_manifest: string = path + "/module.yml"
     let script: string = "workspace=$(pwd); (cd " + shell_quote(path) +
-        " && ROBOHUB_WORKSPACE=$workspace RHO_KEEPER_PORT=" + keeper_listen_port() +
+        " && ROBOHUB_WORKSPACE=$workspace ROBOHUB_APP_WORKSPACE=" +
+        shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
+        shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
         " RHO_HTTP_ADDR=:" + port +
         " nohup ./build/" + app_command(name, path) +
         " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)
     let code: u32 = rho_exec("sh", "-c \"" + script + "\"", apps_report("start-" + name))
     if code != 0 {
+        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not start",
+            "app=" + name))
         return "Could not start " + name + ". See " + apps_report("start-" + name) + "."
     }
     info("keeper", "started application " + name + " on port " + port)
@@ -634,6 +590,8 @@ fn app_stop(name: string) string {
     let code: u32 = rho_exec("kill", pid, apps_report("stop-" + name))
     ignore_bool(rho_write_text(path + "/build/app.pid", ""))
     if code != 0 {
+        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not stop",
+            "app=" + name))
         return "Could not stop " + name + " (pid " + pid + "). See " + apps_report("stop-" + name) + "."
     }
     info("keeper", "stopped application " + name)
@@ -705,6 +663,8 @@ fn applications_install(req: Request) Response {
         let log: string = apps_report("install-" + name)
         let code: u32 = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(path), log)
         if code != 0 {
+            ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be installed",
+                "app=" + name))
             return applications_page_message("Could not clone " + source + ". See " + log + ".")
         }
     } else {

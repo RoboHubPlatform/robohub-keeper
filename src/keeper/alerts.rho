@@ -1,0 +1,42 @@
+module keeper.alerts
+
+// The keeper's view of the plugin registry. It lives apart from the plugins
+// page so the application registry can raise an alert without depending on a
+// page, and the page can use the same registry the application does.
+
+fn plugin_root() string {
+    return robohub_root() + "/plugins"
+}
+
+fn keeper_manifest_path() string {
+    if rho_path_exists("module.yml") &&
+        yaml.value("module.yml", "module.name") == "keeper" {
+        return "module.yml"
+    }
+    let path: string = robohub_root() + "/applications/keeper/module.yml"
+    if rho_path_exists(path) {
+        return path
+    }
+    return ""
+}
+
+fn keeper_plugin_state_file() string {
+    ensure_keeper_state()
+    return keeper_state_dir() + "/plugins.txt"
+}
+
+fn keeper_registry() string {
+    let manifest: string = keeper_manifest_path()
+    if manifest == "" {
+        return ""
+    }
+    return registry_load_app(plugin_root(), manifest, keeper_plugin_state_file())
+}
+
+fn keeper_alert(level: string, message: string, metadata: string) u32 {
+    let registry: string = keeper_registry()
+    if registry == "" {
+        return 0
+    }
+    return registry_alert(plugin_root(), registry, level, message, metadata)
+}

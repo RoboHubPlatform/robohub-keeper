@@ -118,6 +118,7 @@ def main() -> int:
         env = dict(os.environ)
         env["ROBOHUB_WORKSPACE"] = str(ROBOHUB)
         env["RHO_KEEPER_STATE_DIR"] = os.path.join(state, "state")
+        env["HOME"] = state
         env["RHO_HTTP_ADDR"] = f":{port}"
         process = subprocess.Popen(
             [str(binary)],
@@ -141,6 +142,32 @@ def main() -> int:
                     "Install an application",
                 ],
                 "applications page",
+            )
+
+            plugins = get(base, "/plugins")
+            assert_contains(
+                plugins,
+                ["Plugins", "alert-dispatcher", "alert-log", "email-alert",
+                 "telegram-notifier", "webhook-alert", "Install a plugin"],
+                "plugin registry",
+            )
+            tested = post(base, "/plugins/test", {"name": "alert-log"})
+            assert_contains(tested, ["handed to alert-log"], "plugin test")
+            alert_log = Path(state) / ".rho" / "keeper" / "alerts.log"
+            if not alert_log.exists() or "Test alert" not in alert_log.read_text():
+                raise AssertionError("the local alert channel wrote no alert")
+            toggled = post(base, "/plugins/toggle", {"name": "email-alert", "enabled": "1"})
+            assert_contains(toggled, ["enabled for the keeper"], "plugin toggle")
+            plugin_state = Path(state) / "state" / "plugins.txt"
+            if "email-alert=1" not in plugin_state.read_text():
+                raise AssertionError("the keeper plugin override was not written")
+
+            micro = get(base, "/app-modules")
+            assert_contains(
+                micro,
+                ["Modules", "Inventory", "inventory", "inventory",
+                 "Install a module"],
+                "modules registry",
             )
 
             # The keeper is listed, but it cannot remove itself.

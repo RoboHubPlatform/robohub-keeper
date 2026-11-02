@@ -1,7 +1,7 @@
 module:
   name: keeper
   type: rho
-  version: 0.3.0
+  version: 0.5.0
   author: Aurel Miron
   maintainer: Aurel Miron
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
@@ -25,6 +25,35 @@ application:
   route: /
   port: "8080"
   command: keeper
+
+# The alert channels this application uses. The dispatcher is the one alert
+# plugin the application calls; it fans out to the channels named in targets.
+plugins:
+  - name: alert-dispatcher
+    enabled: true
+    config:
+      targets: "alert-log,email-alert,telegram-notifier"
+      severity_threshold: INFO
+  - name: alert-log
+    enabled: true
+    config:
+      path: "~/.rho/keeper/alerts.log"
+      severity_threshold: INFO
+  - name: email-alert
+    enabled: false
+    config:
+      provider: local
+      from_address: "alerts@robohub.internal"
+      to_address: "ops@robohub.internal"
+      subject_template: "[RoboHub {app}] {level}: {rule}"
+      body_template: "{message}"
+      severity_threshold: ERROR
+  - name: telegram-notifier
+    enabled: false
+    config:
+      bot_token: ""
+      chat_id: ""
+      severity_threshold: WARNING
 
 docs:
   title: The RoboHub keeper

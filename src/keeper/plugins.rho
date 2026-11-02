@@ -1,0 +1,233 @@
+module keeper.plugins
+
+// The keeper's plugin registry.
+//
+// The plugins themselves are Rho modules under the ecosystem's plugins/
+// directory. This page lists what is installed, what the keeper has enabled, and
+// lets a person install or remove one and send a test alert through it. The
+// application's own module.yml says which plugins it wants; an override written
+// here changes only this keeper, so a source-controlled default is not edited by
+// a dashboard.
+
+import std.web.http
+import std.web.template
+import rho.log
+
+fn plugin_state_set(name: string, enabled: string) void {
+    let file: string = keeper_plugin_state_file()
+    let text: string = rho_read_text(file)
+    var out: string = ""
+    var rest: string = text
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let equals: i32 = rho_str_index_of(line, "=")
+        if equals >= 0 && rho_str_eq(rho_str_slice(line, 0, u32(equals)), name) {
+            continue
+        }
+        out = out + line + "\n"
+    }
+    out = out + name + "=" + enabled + "\n"
+    ignore_bool(rho_write_text(file, out))
+}
+
+fn plugin_action_forms(name: string, enabled: bool) string {
+    var out: string = ""
+    if enabled {
+        out = out + "<form method=\"post\" action=\"/plugins/toggle\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<input type=\"hidden\" name=\"enabled\" value=\"0\">" +
+            "<button type=\"submit\" class=\"quiet\">Disable</button></form>"
+    } else {
+        out = out + "<form method=\"post\" action=\"/plugins/toggle\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<input type=\"hidden\" name=\"enabled\" value=\"1\">" +
+            "<button type=\"submit\">Enable</button></form>"
+    }
+    out = out + " <form method=\"post\" action=\"/plugins/test\">" +
+        "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+        "<button type=\"submit\" class=\"quiet\">Send test</button></form>"
+    out = out + " <form method=\"post\" action=\"/plugins/uninstall\" " +
+        "onsubmit=\"return confirm('Remove this plugin from the tree?');\">" +
+        "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+        "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
+    return out
+}
+
+fn plugin_rows_html() string {
+    let registry: string = keeper_registry()
+    var out: string = ""
+    var rest: string = plugin_rows(plugin_root())
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let name: string = field(line, 0)
+        let enabled: bool = registry_enabled(registry, name)
+        var status: string = "<span class=\"app-status status-stopped\">disabled</span>"
+        if enabled {
+            status = "<span class=\"app-status status-running\">enabled</span>"
+        }
+        if field(line, 5) == "false" {
+            status = "<span class=\"app-status status-not-built\">missing</span>"
+        }
+        out = out + template_fill(template_get("plugin-row"),
+            vars("name", escape_html(name)) +
+            vars("kind", escape_html(field(line, 1))) +
+            vars("transport", escape_html(field(line, 2))) +
+            vars("summary", escape_html(field(line, 3))) +
+            vars("status", status) +
+            vars("actions", plugin_action_forms(name, enabled)))
+    }
+    if out == "" {
+        out = "<tr><td colspan=\"6\">No plugins were found under plugins/.</td></tr>"
+    }
+    return out
+}
+
+fn plugins_page_message(message: string) Response {
+    let notice: string = ""
+    if message != "" {
+        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+    }
+    let body: string = template_fill(template_get("plugins"),
+        vars("notice", notice) + vars("rows", plugin_rows_html()) +
+        vars("root", escape_html(plugin_root())))
+    return page("Plugins", body)
+}
+
+fn plugins_page(req: Request) Response {
+    return plugins_page_message("")
+}
+
+fn plugins_toggle(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    let enabled: string = form_value(body, "enabled")
+    if !valid_name(name) || plugin_manifest(plugin_root(), name) == "" {
+        return plugins_page_message("No such plugin: " + name)
+    }
+    plugin_state_set(name, enabled)
+    if enabled == "0" {
+        info("keeper", "disabled plugin " + name)
+        return plugins_page_message(name + " is disabled for the keeper.")
+    }
+    info("keeper", "enabled plugin " + name)
+    return plugins_page_message(name + " is enabled for the keeper.")
+}
+
+fn plugins_test(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    if plugin_manifest(plugin_root(), name) == "" {
+        return plugins_page_message("No such plugin: " + name)
+    }
+    let sent: u32 = registry_alert_one(plugin_root(), keeper_registry(), name, "INFO",
+        "Test alert from the RoboHub keeper", "app=keeper")
+    if sent == 0 {
+        return plugins_page_message("The test alert from " + name +
+            " was not delivered. Its settings or its provider are incomplete.")
+    }
+    info("keeper", "sent a test alert through " + name)
+    return plugins_page_message("The test alert was handed to " + name + ".")
+}
+
+fn plugin_source_name(source: string) string {
+    var tail: string = source
+    let slash: i32 = rho_str_index_of(tail, "/")
+    if slash >= 0 {
+        var rest: string = tail
+        var last: string = ""
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "/")
+            if at < 0 {
+                last = rest
+                rest = ""
+            } else {
+                last = rho_str_slice(rest, 0, u32(at))
+                rest = rho_str_slice(rest, u32(at) + 1,
+                    u32(rho_strlen(rest)) - u32(at) - 1)
+            }
+        }
+        tail = last
+    }
+    let suffix: i32 = rho_str_index_of(tail, ".git")
+    if suffix >= 0 && u32(suffix) + 4 == u32(rho_strlen(tail)) {
+        tail = rho_str_slice(tail, 0, u32(suffix))
+    }
+    return slug(tail)
+}
+
+fn plugins_install(req: Request) Response {
+    let body: string = request_body(req)
+    var name: string = trim(form_value(body, "name"))
+    let source: string = trim(form_value(body, "source"))
+    if source == "" {
+        return plugins_page_message("Name a plugin to install.")
+    }
+    if name == "" {
+        name = plugin_source_name(source)
+    }
+    if !valid_name(name) {
+        return plugins_page_message("The plugin name can use letters, digits, '-', '_' and '.' only.")
+    }
+    let target: string = plugin_root() + "/" + name
+    if rho_path_exists(target) {
+        return plugins_page_message(name + " is already installed.")
+    }
+    ignore_u32(rho_exec("mkdir", "-p " + plugin_root(), apps_report("mkdir-plugins")))
+    var code: u32 = 0
+    if source_is_git(source) {
+        code = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(target),
+            apps_report("install-plugin-" + name))
+    } else {
+        let path: string = resolve_path(source)
+        if !rho_path_exists(path + "/module.yml") {
+            return plugins_page_message("No plugin module.yml at " + path + ".")
+        }
+        code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
+            apps_report("install-plugin-" + name))
+    }
+    if code != 0 {
+        return plugins_page_message("Could not install " + source + ".")
+    }
+    if yaml.value(target + "/module.yml", "plugin.kind") == "" {
+        ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-plugin")))
+        return plugins_page_message(source + " is not a plugin module.")
+    }
+    ignore_bool(plugin_db_add(plugin_root(), name))
+    info("keeper", "installed plugin " + name)
+    return plugins_page_message(name + " was installed. It is disabled until enabled.")
+}
+
+fn plugins_uninstall(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    if !valid_name(name) || plugin_manifest(plugin_root(), name) == "" {
+        return plugins_page_message("No such plugin: " + name)
+    }
+    let target: string = plugin_root() + "/" + name
+    ignore_bool(plugin_db_remove(plugin_root(), name))
+    ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-plugin-" + name)))
+    info("keeper", "uninstalled plugin " + name)
+    return plugins_page_message(name + " was uninstalled.")
+}

@@ -79,6 +79,29 @@ directory, which is what the tests use.
 start it from its registry row. Its own guide is the Mesh module's
 documentation.
 
+## Modules
+
+`/app-modules` lists the reusable modules in `modules/registry.yml`: each row
+shows the module's title, category, version and the application that hosts it,
+links to the module's routes there, and can remove it. **Install a module** adds
+one from a git URL or a folder. A module has no port or process of its own; its
+host application owns the router and the port. A module's records stay in a
+workspace named for the hosting application, so installing the same module in
+another application does not move or share its database.
+
+## Plugins
+
+`/plugins` lists the plugin registry in `plugins/registry.yml`. A row shows the
+plugin's kind, transport and whether the keeper has it enabled; a path whose
+folder is gone is marked missing. The keeper can install a plugin from a git URL
+or a folder, remove one, enable or disable it for itself, and send a test alert.
+
+The keeper's own `module.yml` names its plugins and settings. The dashboard's
+override in `~/.rho/keeper/plugins.txt` changes only this installation, leaving
+the manifest the application was installed with intact. Alerts raised by the
+application registry — an application that fails to start, stop or install —
+go through the same dispatcher.
+
 ## Logging
 
 The keeper's `project.yml` asks the backend for the `logemit` port and the app
