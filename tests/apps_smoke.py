@@ -165,7 +165,7 @@ def main() -> int:
             micro = get(base, "/app-modules")
             assert_contains(
                 micro,
-                ["Modules", "Inventory", "inventory", "Scheduler", "scheduler",
+                ["Modules", "Inventory", "inventory", "Scheduler", "scheduler", "Widgets", "widgets",
                  "Install a module"],
                 "modules registry",
             )
