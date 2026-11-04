@@ -1,4 +1,4 @@
-module keeper.microapps
+module keeper.app_modules
 
 // The keeper's application module registry.
 //
@@ -11,20 +11,20 @@ import std.web.http
 import std.web.template
 import rho.log
 
-fn micro_apps_root() string {
+fn app_modules_root() string {
     return robohub_root() + "/modules"
 }
 
-fn micro_apps_file() string {
-    return micro_apps_root() + "/registry.yml"
+fn app_modules_file() string {
+    return app_modules_root() + "/registry.yml"
 }
 
-fn micro_app_manifest(name: string, location: string) string {
-    return micro_apps_root() + "/" + location + "/module.yml"
+fn app_module_manifest(name: string, location: string) string {
+    return app_modules_root() + "/" + location + "/module.yml"
 }
 
-fn micro_app_entries() string {
-    let path: string = micro_apps_file()
+fn app_module_entries() string {
+    let path: string = app_modules_file()
     if !rho_path_exists(path) {
         return ""
     }
@@ -66,8 +66,8 @@ fn micro_app_entries() string {
     return out
 }
 
-fn micro_app_add(name: string) bool {
-    let path: string = micro_apps_file()
+fn app_module_add(name: string) bool {
+    let path: string = app_modules_file()
     let text: string = rho_read_text(path)
     if rho_str_index_of(text, "  - name: " + name + "\n") >= 0 {
         return true
@@ -80,8 +80,8 @@ fn micro_app_add(name: string) bool {
     return rho_write_text(path, out)
 }
 
-fn micro_app_remove_entry(name: string) bool {
-    let path: string = micro_apps_file()
+fn app_module_remove_entry(name: string) bool {
+    let path: string = app_modules_file()
     let text: string = rho_read_text(path)
     var out: string = ""
     var skip: bool = false
@@ -109,7 +109,7 @@ fn micro_app_remove_entry(name: string) bool {
     return rho_write_text(path, out)
 }
 
-fn micro_app_title(manifest: string, name: string) string {
+fn app_module_title(manifest: string, name: string) string {
     let title: string = yaml.value(manifest, "module_app.title")
     if title == "" {
         title = yaml.value(manifest, "application.title")
@@ -120,7 +120,7 @@ fn micro_app_title(manifest: string, name: string) string {
     return title
 }
 
-fn micro_app_description(manifest: string) string {
+fn app_module_description(manifest: string) string {
     let description: string = yaml.value(manifest, "module_app.description")
     if description == "" {
         description = yaml.value(manifest, "module.description")
@@ -131,7 +131,7 @@ fn micro_app_description(manifest: string) string {
     return description
 }
 
-fn micro_app_actions(name: string, location: string, enabled: bool) string {
+fn app_module_actions(name: string, location: string, enabled: bool) string {
     // A module can be included by more than one application, so there is no
     // single host to open from here. The registry lists the installed module;
     // the application that uses it serves its routes.
@@ -141,9 +141,9 @@ fn micro_app_actions(name: string, location: string, enabled: bool) string {
         "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
 }
 
-fn micro_app_rows() string {
+fn app_module_rows() string {
     var out: string = ""
-    var rest: string = micro_app_entries()
+    var rest: string = app_module_entries()
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
         let line: string = ""
@@ -160,7 +160,7 @@ fn micro_app_rows() string {
         let name: string = field(line, 0)
         let location: string = field(line, 1)
         let enabled: bool = rho_str_eq(field(line, 2), "true")
-        let manifest: string = micro_app_manifest(name, location)
+        let manifest: string = app_module_manifest(name, location)
         var present: bool = rho_path_exists(manifest)
         var status: string = "<span class=\"app-status status-running\">installed</span>"
         if !present {
@@ -171,19 +171,19 @@ fn micro_app_rows() string {
         var category: string = ""
         var version: string = ""
         if present {
-            title = micro_app_title(manifest, name)
-            description = micro_app_description(manifest)
+            title = app_module_title(manifest, name)
+            description = app_module_description(manifest)
             category = yaml.value(manifest, "module_app.category")
             version = yaml.value(manifest, "module.version")
         }
-        out = out + template_fill(template_get("microapp-row"),
+        out = out + template_fill(template_get("app-module-row"),
             vars("name", escape_html(name)) +
             vars("title", escape_html(title)) +
             vars("category", escape_html(category)) +
             vars("description", escape_html(description)) +
             vars("version", escape_html(version)) +
             vars("status", status) +
-            vars("actions", micro_app_actions(name, location, enabled)))
+            vars("actions", app_module_actions(name, location, enabled)))
     }
     if out == "" {
         out = "<tr><td colspan=\"7\">No modules were found under modules/.</td></tr>"
@@ -191,38 +191,38 @@ fn micro_app_rows() string {
     return out
 }
 
-fn micro_apps_page_message(message: string) Response {
+fn app_modules_page_message(message: string) Response {
     let notice: string = ""
     if message != "" {
         notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
     }
-    let body: string = template_fill(template_get("microapps"),
-        vars("notice", notice) + vars("rows", micro_app_rows()))
+    let body: string = template_fill(template_get("app-modules"),
+        vars("notice", notice) + vars("rows", app_module_rows()))
     return page("Modules", body)
 }
 
-fn micro_apps_page(req: Request) Response {
-    return micro_apps_page_message("")
+fn app_modules_page(req: Request) Response {
+    return app_modules_page_message("")
 }
 
-fn micro_apps_install(req: Request) Response {
+fn app_modules_install(req: Request) Response {
     let body: string = request_body(req)
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
-        return micro_apps_page_message("Name a module to install.")
+        return app_modules_page_message("Name a module to install.")
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return micro_apps_page_message("The module name can use letters, digits, '-', '_' and '.' only.")
+        return app_modules_page_message("The module name can use letters, digits, '-', '_' and '.' only.")
     }
-    let target: string = micro_apps_root() + "/" + name
+    let target: string = app_modules_root() + "/" + name
     if rho_path_exists(target) {
-        return micro_apps_page_message(name + " is already installed.")
+        return app_modules_page_message(name + " is already installed.")
     }
-    ignore_u32(rho_exec("mkdir", "-p " + micro_apps_root(), apps_report("mkdir-micro-apps")))
+    ignore_u32(rho_exec("mkdir", "-p " + app_modules_root(), apps_report("mkdir-micro-apps")))
     var code: u32 = 0
     if source_is_git(source) {
         code = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(target),
@@ -230,32 +230,32 @@ fn micro_apps_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return micro_apps_page_message("No module.yml at " + path + ".")
+            return app_modules_page_message("No module.yml at " + path + ".")
         }
         code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
             apps_report("install-module-" + name))
     }
     if code != 0 {
-        return micro_apps_page_message("Could not install " + source + ".")
+        return app_modules_page_message("Could not install " + source + ".")
     }
     if yaml.value(target + "/module.yml", "module_app.title") == "" {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
             apps_report("remove-not-module")))
-        return micro_apps_page_message(source + " is not a module.")
+        return app_modules_page_message(source + " is not a module.")
     }
-    ignore_bool(micro_app_add(name))
+    ignore_bool(app_module_add(name))
     info("keeper", "installed module " + name)
-    return micro_apps_page_message(name + " was installed.")
+    return app_modules_page_message(name + " was installed.")
 }
 
-fn micro_apps_uninstall(req: Request) Response {
+fn app_modules_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) {
-        return micro_apps_page_message("No such module: " + name)
+        return app_modules_page_message("No such module: " + name)
     }
     let location: string = name
-    var rest: string = micro_app_entries()
+    var rest: string = app_module_entries()
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
         let line: string = ""
@@ -270,11 +270,10 @@ fn micro_apps_uninstall(req: Request) Response {
             location = field(line, 1)
         }
     }
-    let target: string = micro_apps_root() + "/" + location
-    ignore_string(app_stop(name))
-    ignore_bool(micro_app_remove_entry(name))
+    let target: string = app_modules_root() + "/" + location
+    ignore_bool(app_module_remove_entry(name))
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
         apps_report("uninstall-module-" + name)))
     info("keeper", "uninstalled module " + name)
-    return micro_apps_page_message(name + " was uninstalled.")
+    return app_modules_page_message(name + " was uninstalled.")
 }

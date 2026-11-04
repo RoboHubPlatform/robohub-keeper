@@ -16,7 +16,7 @@ targets:
       - docstore
       - logemit
     api:
-      public_paths: "/, /modules, /applications, /plugins, /app-modules, /docs"
+      public_paths: "/, /modules, /applications, /plugins, /providers, /app-modules, /docs"
     templates:
       - name: layout
         file: templates/layout.html
@@ -38,10 +38,14 @@ targets:
         file: templates/plugins.html
       - name: plugin-row
         file: templates/plugin-row.html
-      - name: microapps
-        file: templates/microapps.html
-      - name: microapp-row
-        file: templates/microapp-row.html
+      - name: providers
+        file: templates/providers.html
+      - name: provider-row
+        file: templates/provider-row.html
+      - name: app-modules
+        file: templates/app-modules.html
+      - name: app-module-row
+        file: templates/app-module-row.html
     files:
       - path: app.go
         role: implementation

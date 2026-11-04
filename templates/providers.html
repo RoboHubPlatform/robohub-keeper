@@ -1,0 +1,30 @@
+<h1>Providers</h1>
+<p>Providers are Rho modules under <code>providers/</code>. Each one implements a
+gateway contract's transport; a plugin names the provider it dispatches to.
+This page manages the installed provider set, the same way the Plugins page
+manages the installed plugins.</p>
+{{{ notice }}}
+<table>
+<thead>
+<tr><th>Provider</th><th>Contract</th><th>Transport</th><th>Description</th><th>State</th><th></th></tr>
+</thead>
+<tbody>
+{{{ rows }}}
+</tbody>
+</table>
+
+<h2 class="app-install">Install a provider</h2>
+<p>Clone a provider from a git URL, or install one that already exists on this
+machine. A provider is a module whose manifest says <code>provider.contract</code>.</p>
+<form class="grid app-install" method="post" action="/providers/install">
+  <label>Name
+    <input name="name" placeholder="robohub-provider-mesh">
+    <small>Empty uses the repository or folder name.</small>
+  </label>
+  <label>Source
+    <input name="source" placeholder="https://github.com/RoboHubPlatform/robohub-provider-mesh or /path/to/provider">
+    <small>A git URL, or a folder with a provider module.yml.</small>
+  </label>
+  <button type="submit">Install</button>
+</form>
+<p><small>Installed into <code>{{{ root }}}</code>.</small></p>

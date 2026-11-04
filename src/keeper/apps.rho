@@ -315,8 +315,9 @@ fn keeper_nav() string {
         "<span class=\"ico\">▩</span>Applications</a><ul class=\"subnav\">" +
         "<li><a href=\"/\"><span class=\"ico\">▩</span>RoboHub Application</a></li>" +
         pinned_nav() +
-        "<li><a href=\"/app-modules\"><span class=\"ico\">▧</span>Modules</a></li>" +
+        "<li><a href=\"/app-modules\"><span class=\"ico\">▧</span>App modules</a></li>" +
         "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>Plugins</a></li>" +
+        "<li><a href=\"/providers\"><span class=\"ico\">◇</span>Providers</a></li>" +
         "</ul></li>"
     out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>Docs</a></li>"
     out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>System</a></li>"

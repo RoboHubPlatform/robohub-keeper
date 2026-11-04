@@ -4,11 +4,12 @@ module keeper
 
 include "keeper/storage.rho"
 include "keeper/apps_text.rho"
-include "../../../plugins/manager.rho"
+include "../../../contracts/alert/manager.rho"
 include "keeper/alerts.rho"
 include "keeper/apps.rho"
 include "keeper/plugins.rho"
-include "keeper/microapps.rho"
+include "keeper/providers.rho"
+include "keeper/app_modules.rho"
 
 import std.web.http
 import std.web.template
@@ -40,9 +41,12 @@ route POST "/plugins/toggle" => plugins_toggle
 route POST "/plugins/test" => plugins_test
 route POST "/plugins/install" => plugins_install
 route POST "/plugins/uninstall" => plugins_uninstall
-route GET "/app-modules" => micro_apps_page
-route POST "/app-modules/install" => micro_apps_install
-route POST "/app-modules/uninstall" => micro_apps_uninstall
+route GET "/providers" => providers_page
+route POST "/providers/install" => providers_install
+route POST "/providers/uninstall" => providers_uninstall
+route GET "/app-modules" => app_modules_page
+route POST "/app-modules/install" => app_modules_install
+route POST "/app-modules/uninstall" => app_modules_uninstall
 
 fn home(req: Request) Response {
     let body: string = template_fill(template_get("home"), vars("", ""))

@@ -88,11 +88,11 @@ and tracks, with their versions and whether they are installed.
 
 The left menu keeps one entry per top-level concern: Home, Registry,
 Applications, Docs and System. **Applications** opens the applications list and
-also carries the current application, the pinned applications, **Modules** and
-**Plugins** as sub-items, because those are things an application carries rather
-than separate top-level destinations.
+also carries the current application, the pinned applications, **App modules**
+and **Plugins** as sub-items, because those are things an application carries
+rather than separate top-level destinations.
 
-## Modules
+## App modules
 
 `/app-modules` lists the reusable modules in `modules/registry.yml`: each row
 shows the module's title, category and version, and can remove it. **Install a

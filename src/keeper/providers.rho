@@ -1,0 +1,233 @@
+module keeper.providers
+
+// The keeper's provider registry.
+//
+// A provider is a module with its own module.yml, version, docs and changelog.
+// It is installed and removed like a plugin, but it is not selected by an
+// application: the plugin that names it is. This page manages the installed
+// set under providers/, which is the same model plugins/ uses.
+
+import std.web.http
+import std.web.template
+import rho.log
+
+fn provider_root() string {
+    return robohub_root() + "/providers"
+}
+
+fn provider_rows(root: string) string {
+    let entries: string = plugin_db_entries(root)
+    if entries != "" {
+        var out: string = ""
+        var rest: string = entries
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "\n")
+            let line: string = ""
+            if at < 0 {
+                line = rest
+                rest = ""
+            } else {
+                line = rho_str_slice(rest, 0, u32(at))
+                rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            }
+            let pipe: i32 = rho_str_index_of(line, "|")
+            if pipe < 0 {
+                continue
+            }
+            let name: string = rho_str_slice(line, 0, u32(pipe))
+            var location: string = rho_str_slice(line, u32(pipe) + 1,
+                u32(rho_strlen(line)) - u32(pipe) - 1)
+            if location == "" {
+                location = name
+            }
+            let manifest: string = root + "/" + location + "/module.yml"
+            var present: string = "true"
+            if !rho_path_exists(manifest) {
+                present = "false"
+            }
+            var contract: string = ""
+            var transport: string = ""
+            var summary: string = "not found on disk"
+            if rho_str_eq(present, "true") {
+                contract = yaml.value(manifest, "provider.contract")
+                transport = yaml.value(manifest, "provider.transport")
+                summary = yaml.value(manifest, "module.description")
+                if summary == ">" {
+                    summary = ""
+                }
+                if summary == "" {
+                    summary = yaml.value(manifest, "provider.summary")
+                }
+            }
+            out = out + name + "|" + contract + "|" + transport + "|" + summary + "|" +
+                manifest + "|" + present + "\n"
+        }
+        return out
+    }
+    let report: string = plugin_state_dir() + "/find-providers.txt"
+    ignore_u32(rho_exec("mkdir", "-p " + plugin_state_dir(), report))
+    let code: u32 = rho_exec("find", root + " -maxdepth 2 -type f -name module.yml", report)
+    if code != 0 {
+        return ""
+    }
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let manifest: string = ""
+        if at < 0 {
+            manifest = rest
+            rest = ""
+        } else {
+            manifest = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if manifest == "" {
+            continue
+        }
+        let name: string = yaml.value(manifest, "module.name")
+        if name == "" {
+            continue
+        }
+        let contract: string = yaml.value(manifest, "provider.contract")
+        let transport: string = yaml.value(manifest, "provider.transport")
+        var summary: string = yaml.value(manifest, "module.description")
+        if summary == ">" {
+            summary = ""
+        }
+        if summary == "" {
+            summary = yaml.value(manifest, "provider.summary")
+        }
+        out = out + name + "|" + contract + "|" + transport + "|" + summary + "|" +
+            manifest + "|true\n"
+    }
+    return out
+}
+
+fn provider_db_add(root: string, name: string) bool {
+    let path: string = root + "/registry.yml"
+    let text: string = rho_read_text(path)
+    if rho_str_index_of(text, "  - name: " + name + "\n") >= 0 {
+        return true
+    }
+    let manifest: string = root + "/" + name + "/module.yml"
+    let contract: string = yaml.value(manifest, "provider.contract")
+    let transport: string = yaml.value(manifest, "provider.transport")
+    var out: string = text
+    if rho_strlen(out) == 0 {
+        out = "providers:\n"
+    }
+    out = out + "  - name: " + name + "\n    path: " + name +
+        "\n    contract: " + contract + "\n    transport: " + transport +
+        "\n    enabled: true\n"
+    return rho_write_text(path, out)
+}
+
+fn provider_rows_html() string {
+    var out: string = ""
+    var rest: string = provider_rows(provider_root())
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" {
+            continue
+        }
+        let name: string = field(line, 0)
+        var status: string = "<span class=\"app-status status-running\">installed</span>"
+        if field(line, 5) == "false" {
+            status = "<span class=\"app-status status-not-built\">missing</span>"
+        }
+        let actions: string = "<form method=\"post\" action=\"/providers/uninstall\" " +
+            "onsubmit=\"return confirm('Remove this provider from the tree?');\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
+        out = out + template_fill(template_get("provider-row"),
+            vars("name", escape_html(name)) +
+            vars("contract", escape_html(field(line, 1))) +
+            vars("transport", escape_html(field(line, 2))) +
+            vars("summary", escape_html(field(line, 3))) +
+            vars("status", status) +
+            vars("actions", actions))
+    }
+    if out == "" {
+        out = "<tr><td colspan=\"6\">No providers were found under providers/.</td></tr>"
+    }
+    return out
+}
+
+fn providers_page_message(message: string) Response {
+    let notice: string = ""
+    if message != "" {
+        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+    }
+    let body: string = template_fill(template_get("providers"),
+        vars("notice", notice) + vars("rows", provider_rows_html()) +
+        vars("root", escape_html(provider_root())))
+    return page("Providers", body)
+}
+
+fn providers_page(req: Request) Response {
+    return providers_page_message("")
+}
+
+fn providers_install(req: Request) Response {
+    let body: string = request_body(req)
+    var name: string = trim(form_value(body, "name"))
+    let source: string = trim(form_value(body, "source"))
+    if source == "" {
+        return providers_page_message("Name a provider to install.")
+    }
+    if name == "" {
+        name = plugin_source_name(source)
+    }
+    if !valid_name(name) {
+        return providers_page_message("The provider name can use letters, digits, '-', '_' and '.' only.")
+    }
+    let target: string = provider_root() + "/" + name
+    if rho_path_exists(target) {
+        return providers_page_message(name + " is already installed.")
+    }
+    ignore_u32(rho_exec("mkdir", "-p " + provider_root(), apps_report("mkdir-providers")))
+    var code: u32 = 0
+    if source_is_git(source) {
+        code = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(target),
+            apps_report("install-provider-" + name))
+    } else {
+        let path: string = resolve_path(source)
+        if !rho_path_exists(path + "/module.yml") {
+            return providers_page_message("No provider module.yml at " + path + ".")
+        }
+        code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
+            apps_report("install-provider-" + name))
+    }
+    if code != 0 {
+        return providers_page_message("Could not install " + source + ".")
+    }
+    if yaml.value(target + "/module.yml", "provider.contract") == "" {
+        ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-provider")))
+        return providers_page_message(source + " is not a provider module.")
+    }
+    ignore_bool(provider_db_add(provider_root(), name))
+    info("keeper", "installed provider " + name)
+    return providers_page_message(name + " was installed.")
+}
+
+fn providers_uninstall(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    if !valid_name(name) || plugin_manifest(provider_root(), name) == "" {
+        return providers_page_message("No such provider: " + name)
+    }
+    let target: string = provider_root() + "/" + name
+    ignore_bool(plugin_db_remove(provider_root(), name))
+    ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-provider-" + name)))
+    info("keeper", "uninstalled provider " + name)
+    return providers_page_message(name + " was uninstalled.")
+}
