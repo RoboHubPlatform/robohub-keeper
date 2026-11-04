@@ -1,0 +1,16 @@
+<h1>Access token</h1>
+<p>The access token is what you enter on the Keeper and application sign-in
+pages. It is stored owner-only on this machine and is never shown here.</p>
+{{{ notice }}}
+{{{ token_block }}}
+<style>.auth-token-row { display:flex; gap:.5rem; align-items:center; margin:.5rem 0; }.auth-token-row input { flex:1; min-width:0; }</style>
+<form class="panel-form" method="post" action="/auth/token">
+  <div class="grid">
+    <label>New access token<input name="token" type="password" autocomplete="new-password"></label>
+    <label>Confirm access token<input name="confirm" type="password" autocomplete="new-password"></label>
+  </div>
+  <div class="form-actions">
+    <button type="button" class="quiet" onclick="var a=new Uint8Array(24);crypto.getRandomValues(a);var t=Array.from(a,function(b){return b.toString(16).padStart(2,'0')}).join('');this.form.token.value=t;this.form.confirm.value=t;">Generate</button>
+    <button type="submit">Update token</button>
+  </div>
+</form>

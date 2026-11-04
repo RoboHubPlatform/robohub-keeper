@@ -16,7 +16,19 @@ targets:
       - docstore
       - logemit
     api:
-      public_paths: "/, /modules, /applications, /plugins, /providers, /app-modules, /docs"
+      public_paths: "/, /modules, /applications, /plugins, /providers, /app-modules, /auth/login, /docs"
+    middleware:
+      - name: auth
+        options:
+          issuer: keeper
+          audience: keeper
+          cookie: keeper_session
+          public_key: ${RHO_HOME}/auth/public.pem
+          mode: direct
+          login_url: "/auth/login?audience=keeper"
+          session_file: ~/.rho/keeper/auth-sessions.txt
+          skip_paths: /auth/login,/healthz,/static
+          scheme: auto
     templates:
       - name: layout
         file: templates/layout.html
@@ -46,6 +58,10 @@ targets:
         file: templates/app-modules.html
       - name: app-module-row
         file: templates/app-module-row.html
+      - name: auth-login
+        file: templates/auth-login.html
+      - name: auth-token
+        file: templates/auth-token.html
     files:
       - path: app.go
         role: implementation

@@ -126,3 +126,11 @@ and the subject:
 
 `RHO_LOG_FILE` also appends those records to a file. The generated HTTP server
 logs requests with its own date/time.
+
+## Authentication
+
+Keeper is the RoboHub authorization server. `/auth/login` validates the master
+token, opens a keeper session, and mints a short-lived ES256 ticket for the
+requesting application. The admin UI is behind that session. Tickets are
+verified by the application with Keeper's public key; a ticket carries the
+application audience, redirect URI, one-use id and a 30-second lifetime.

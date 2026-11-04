@@ -319,6 +319,7 @@ fn keeper_nav() string {
         "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>Plugins</a></li>" +
         "<li><a href=\"/providers\"><span class=\"ico\">◇</span>Providers</a></li>" +
         "</ul></li>"
+    out = out + "<li><a href=\"/auth/token\" data-nav=\"auth\"><span class=\"ico\">⚿</span>Access token</a></li>"
     out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>Docs</a></li>"
     out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>System</a></li>"
     return out

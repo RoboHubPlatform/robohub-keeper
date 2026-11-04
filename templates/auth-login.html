@@ -1,0 +1,38 @@
+<style>
+  .auth-shell { min-height: calc(100vh - 9rem); display: grid; place-items: center; padding: 1rem; }
+  .auth-card { width: min(26rem, 100%); padding: 2.2rem; border: 1px solid #c7d7ea; border-radius: 18px; background: #eef4fb; color: #1b2a3a; box-shadow: 0 24px 60px rgba(47, 111, 176, .14); }
+  .auth-mark { width: 2.4rem; height: 2.4rem; display: grid; place-items: center; border-radius: 12px; background: #dbe8f7; color: #2f6fb0; font-size: 1.25rem; }
+  .auth-card h1 { margin: .9rem 0 .25rem; font-size: 1.55rem; color: #1b2a3a; }
+  .auth-card > p { margin: 0 0 1.5rem; color: #4f6a86; }
+  .auth-field { display: flex; flex-direction: column; gap: .35rem; font-size: .78rem; font-weight: 700; letter-spacing: .02em; color: #4f6a86; }
+  .auth-field input { padding: .8rem .9rem; border: 1.5px solid #9db8d6; border-radius: 10px; background: #ffffff; color: #142033; font: inherit; }
+  .auth-field input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .auth-row { display: flex; gap: .5rem; align-items: stretch; }
+  .auth-row input { flex: 1; min-width: 0; }
+  .auth-reveal { flex: 0 0 auto; margin: 0; padding: 0 .85rem; border: 1.5px solid #9db8d6; border-radius: 10px; background: #f5f9ff; color: #24486e; font-weight: 700; cursor: pointer; }
+  .auth-reveal:hover { border-color: #2f6fb0; color: #2f6fb0; }
+  .auth-submit { width: 100%; margin-top: 1.1rem; padding: .85rem; border: 0; border-radius: 10px; background: #2f6fb0; color: #ffffff; font-size: .95rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: .5rem; }
+  .auth-submit:hover { filter: brightness(1.06); }
+  .auth-foot { margin-top: 1.2rem; text-align: center; font-size: .7rem; color: #5f7690; }
+</style>
+<div class="auth-shell">
+  <div class="auth-card">
+    <div class="auth-mark">⬡</div>
+    <h1>Welcome back</h1>
+    <p>Sign in to your RoboHub ecosystem.</p>
+    {{{ notice }}}
+    <form method="post" action="/auth/login">
+      <input type="hidden" name="return_to" value="{{{ return_to }}}">
+      <input type="hidden" name="audience" value="{{{ audience }}}">
+      <input type="hidden" name="next" value="{{{ next }}}">
+      <label class="auth-field">Access token
+        <div class="auth-row">
+          <input id="auth-token" name="token" type="password" autofocus autocomplete="current-password">
+          <button type="button" class="auth-reveal" onclick="var i=document.getElementById('auth-token');var show=i.type==='password';i.type=show?'text':'password';this.textContent=show?'Hide':'Show';">Show</button>
+        </div>
+      </label>
+      <button type="submit" class="auth-submit">Sign in <span aria-hidden="true">→</span></button>
+    </form>
+    <div class="auth-foot">Self-hosted · everything stays on this machine</div>
+  </div>
+</div>

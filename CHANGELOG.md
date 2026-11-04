@@ -2,6 +2,15 @@
 
 All notable changes to this module are recorded here, one section per release.
 
+## [0.5.3] - 2026-11-05
+
+The keeper has an Access token page: a signed-in administrator can replace the
+master token, generate a random one, and copy the new token once after saving.
+
+## [0.5.2] - 2026-11-04
+
+Keeper is the SSO authorization server: master login, session store, ticket minting, protected admin UI and the redesigned login page. Auth is a selectable plugin, and providers are listed beside plugins.
+
 ## [0.5.1] - 2026-11-02
 
 The left menu nests the current RoboHub application, the pinned applications,
