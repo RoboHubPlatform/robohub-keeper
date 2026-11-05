@@ -2,7 +2,14 @@
 
 All notable changes to this module are recorded here, one section per release.
 
-## [0.5.3] - 2026-11-05
+## [0.5.4] - 2026-11-05
+
+A keeper session now stores an absolute expiry, which is what the generated auth
+middleware reads; a master login and the pages it protects agree again. Starting
+an application records the application's own pid instead of a wrapper's, so Stop
+works and a later Start is not told a dead instance is still running. Aquarium's
+menu shows the Keeper link when the keeper is the one that started it.
+
 
 The keeper has an Access token page: a signed-in administrator can replace the
 master token, generate a random one, and copy the new token once after saving.

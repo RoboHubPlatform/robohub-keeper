@@ -1,7 +1,7 @@
 module:
   name: keeper
   type: rho
-  version: 0.5.3
+  version: 0.5.4
   author: Aurel Miron
   maintainer: Aurel Miron
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs

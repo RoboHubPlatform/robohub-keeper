@@ -13,7 +13,7 @@ import std.web.template
 import rho.log
 
 const AUTH_COOKIE: string = "keeper_session"
-const AUTH_TTL_SECONDS: string = "28800"
+const AUTH_TTL_SECONDS: u32 = 28800
 
 fn auth_clean(text: string) string {
     var out: string = text
@@ -44,6 +44,17 @@ fn auth_master_file() string {
 fn auth_report(name: string) string {
     let dir: string = keeper_state_dir()
     return dir + "/" + name + ".log"
+}
+
+// auth_now is the wall clock the session file stores absolute expiry in. The
+// generated auth middleware reads the second field as an epoch, not a TTL, so
+// the login writes `now + ttl` rather than the duration.
+fn auth_now() u32 {
+    let report: string = auth_report("auth-now")
+    if rho_exec("date", "+%s", report) == 0 {
+        return rho_int_from_str(auth_clean(rho_read_text(report)))
+    }
+    return 0
 }
 
 fn auth_random() string {
@@ -94,7 +105,14 @@ fn auth_session_valid(req: Request) bool {
         }
         let first: i32 = rho_str_index_of(line, "|")
         if first >= 0 && rho_str_eq(rho_str_slice(line, 0, u32(first)), sid) {
-            return true
+            let tail: string = rho_str_slice(line, u32(first) + 1,
+                u32(rho_strlen(line)) - u32(first) - 1)
+            let second: i32 = rho_str_index_of(tail, "|")
+            let expiry: string = tail
+            if second >= 0 {
+                expiry = rho_str_slice(tail, 0, u32(second))
+            }
+            return auth_now() < rho_int_from_str(expiry)
         }
     }
     return false
@@ -148,7 +166,7 @@ fn auth_login_post(req: Request) Response {
     }
     let sid: string = auth_random()
     let sessions: string = rho_read_text(auth_sessions_file()) + sid + "|" +
-        AUTH_TTL_SECONDS + "|keeper\n"
+        rho_int_to_str(auth_now() + AUTH_TTL_SECONDS) + "|keeper\n"
     ignore_bool(rho_write_text(auth_sessions_file(), sessions))
     info("keeper", "master session opened")
     let target: string = "/auth/login?return_to=" + return_to + "&audience=" + audience + "&next=" + next

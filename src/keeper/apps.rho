@@ -555,9 +555,9 @@ fn app_start(name: string) string {
     // keeper's own working directory. The workspace is captured before the
     // move, so a hosted application reads the same registry the keeper does.
     // The value of an assignment is not field-split, so a path with spaces is
-    // still one workspace. The background job is the whole subshell, and its
-    // pid is written from the keeper's directory, where the stop action looks
-    // for it.
+    // still one workspace. The subshell execs the application, so the pid the
+    // keeper records is the application's, not a short-lived wrapper's, and the
+    // stop action can end it.
     let pid_file: string = path + "/build/app.pid"
     let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
     let app_manifest: string = path + "/module.yml"
@@ -566,7 +566,7 @@ fn app_start(name: string) string {
         shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
         shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
         " RHO_HTTP_ADDR=:" + port +
-        " nohup ./build/" + app_command(name, path) +
+        " exec nohup ./build/" + app_command(name, path) +
         " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)
     let code: u32 = rho_exec("sh", "-c \"" + script + "\"", apps_report("start-" + name))
     if code != 0 {
