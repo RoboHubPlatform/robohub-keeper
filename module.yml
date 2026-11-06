@@ -1,7 +1,7 @@
 module:
   name: keeper
   type: rho
-  version: 0.5.4
+  version: 0.5.5
   author: Aurel Miron
   maintainer: Aurel Miron
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
@@ -54,6 +54,10 @@ plugins:
       bot_token: ""
       chat_id: ""
       severity_threshold: WARNING
+
+deploy:
+  port: 19090
+  service: robohub-keeper
 
 docs:
   title: The RoboHub keeper

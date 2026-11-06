@@ -82,3 +82,9 @@ configured, and the transport is chosen from what the two boards and
 programming shows the boot-mode instruction and waits for the acknowledgement.
 Long actions stream their output over Server-Sent Events with timestamps and a
 clearable console. Board and driver discovery is entirely runtime.
+
+## [0.5.5] - 2026-11-06
+
+Deploy system: bootstrap script, per-app deploy script, deploy.port/depends
+metadata in module.yml, Update/Restart buttons in web UI, dependency enforcement.
+Fixed keeper session expiry (absolute epoch). Fixed app_start pid recording.

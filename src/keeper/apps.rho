@@ -199,8 +199,35 @@ fn app_title(name: string, path: string) string {
     return title
 }
 
+
+// app_depends returns the list of applications this app requires to be running
+// before it can start, as declared in its module.yml deploy block.
+fn app_depends(name: string, path: string) string {
+    let raw: string = yaml.value(path + "/module.yml", "deploy.depends")
+    if raw == "" { return "" }
+    var out: string = ""
+    var rest: string = raw
+    if rho_str_starts_with(rest, "[") {
+        rest = rho_str_slice(rest, 1, u32(rho_strlen(rest)) - 2)
+    }
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var token: string = rest
+        if at < 0 { rest = "" } else { token = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        token = trim(token)
+        if rho_str_starts_with(token, "\"") && rho_str_slice(token, u32(rho_strlen(token)) - 1, 1) == "\"" {
+            token = rho_str_slice(token, 1, u32(rho_strlen(token)) - 2)
+        }
+        if token == "" { continue }
+        out = out + token + "\n"
+    }
+    return out
+}
+
 fn app_port(path: string) string {
-    return yaml.value(manifest_of(path), "application.port")
+    let port: string = yaml.value(manifest_of(path), "application.port")
+    if port != "" { return port }
+    return yaml.value(manifest_of(path), "deploy.port")
 }
 
 fn app_route(path: string) string {
@@ -376,11 +403,18 @@ fn app_actions(name: string, path: string, origin: string) string {
             out = out + " <form method=\"post\" action=\"/applications/stop\">" +
                 "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
                 "<button type=\"submit\" class=\"quiet\">Stop</button></form>"
+            out = out + " <form method=\"post\" action=\"/applications/restart\">" +
+                "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+                "<button type=\"submit\" class=\"quiet\">Restart</button></form>"
         } else {
             out = out + " <form method=\"post\" action=\"/applications/start\">" +
                 "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
                 "<button type=\"submit\">Start</button></form>"
         }
+        out = out + " <form method=\"post\" action=\"/applications/update\">" +
+            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
+            "<button type=\"submit\" class=\"quiet\" onclick=\"return confirm('Rebuild and restart " +
+            escape_html(name) + "?');\">Update</button></form>"
     }
     if pinned(name) {
         out = out + " <form method=\"post\" action=\"/applications/menu\">" +
@@ -510,7 +544,9 @@ fn applications_menu(req: Request) Response {
 fn keeper_listen_port() string {
     let address: string = getenv("RHO_HTTP_ADDR")
     if address == "" {
-        return "8080"
+        // Fall back to the keeper's own deploy.port; the deploy script sets
+        // RHO_HTTP_ADDR, so this only matters for a keeper started by hand.
+        return "19090"
     }
     var port: string = ""
     var rest: string = address
@@ -546,6 +582,23 @@ fn app_start(name: string) string {
     let port: string = app_port(path)
     if port == "" {
         return name + " does not declare an application.port."
+    }
+    // Deploy dependencies first.
+    let plan: string = app_depends(name, path)
+    var plan_rest: string = plan
+    while plan_rest != "" {
+        let plan_at: i32 = rho_str_index_of(plan_rest, "\n")
+        var dep_name: string = plan_rest
+        if plan_at < 0 { plan_rest = "" } else { dep_name = rho_str_slice(plan_rest, 0, u32(plan_at)); plan_rest = rho_str_slice(plan_rest, u32(plan_at) + 1, u32(rho_strlen(plan_rest)) - u32(plan_at) - 1) }
+        if dep_name == "" || dep_name == name { continue }
+        let dep_path: string = app_path(dep_name)
+        if dep_path == "" { continue }
+        if !app_running(dep_name, dep_path) {
+            let dep_msg: string = app_start(dep_name)
+            if rho_str_index_of(dep_msg, "already on") < 0 && rho_str_index_of(dep_msg, "started") < 0 {
+                return "dependency " + dep_name + " did not start: " + dep_msg
+            }
+        }
     }
     if port_answers(port, app_route(path)) {
         return name + " is already running on port " + port + "."
@@ -601,6 +654,30 @@ fn app_stop(name: string) string {
     return name + " was stopped."
 }
 
+// app_build runs "rho build ." in the application directory and returns the
+// build log so the Update handler can check whether it succeeded.
+fn app_build(name: string, path: string) string {
+    let report: string = apps_report("build-" + name)
+    ignore_u32(rho_exec("rho", "build " + path, report))
+    return rho_read_text(report)
+}
+
+// app_update rebuilds, stops and restarts the application.
+fn app_update(name: string, path: string) string {
+    let build: string = app_build(name, path)
+    if rho_str_index_of(build, "Generated project:") < 0 {
+        return "build failed: " + build
+    }
+    ignore_string(app_stop(name))
+    return app_start(name)
+}
+
+// app_restart stops and starts the application without rebuilding.
+fn app_restart(name: string, path: string) string {
+    ignore_string(app_stop(name))
+    return app_start(name)
+}
+
 fn applications_start(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
@@ -611,6 +688,29 @@ fn applications_stop(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     return applications_page_message(app_stop(name))
+}
+
+fn applications_update(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    if name == "" { return applications_page_message("No name given") }
+    let path: string = app_path(name)
+    if path == "" { return applications_page_message("Unknown application") }
+    let result: string = app_update(name, path)
+    if rho_str_index_of(result, "build failed:") >= 0 {
+        return applications_page_message(escape_html(result))
+    }
+    return applications_page_message("Updated " + escape_html(name))
+}
+
+fn applications_restart(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    if name == "" { return applications_page_message("No name given") }
+    let path: string = app_path(name)
+    if path == "" { return applications_page_message("Unknown application") }
+    let result: string = app_restart(name, path)
+    return applications_page_message("Restarted " + escape_html(name))
 }
 
 fn applications_uninstall(req: Request) Response {
