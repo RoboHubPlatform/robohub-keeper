@@ -68,7 +68,7 @@ fn records_in(dir: string, origin: string, report_name: string) string {
         }
         let path: string = dir + "/" + name
         if rho_path_exists(manifest_of(path)) &&
-            yaml.value(manifest_of(path), "application.kind") != "" {
+            (yaml.value(manifest_of(path), "module.kind") != "" || yaml.value(manifest_of(path), "application.kind") != "") {
             out = out + record(name, path, origin)
         }
     }
@@ -105,7 +105,7 @@ fn external_records() string {
             continue
         }
         if rho_path_exists(manifest_of(path)) &&
-            yaml.value(manifest_of(path), "application.kind") != "" {
+            (yaml.value(manifest_of(path), "module.kind") != "" || yaml.value(manifest_of(path), "application.kind") != "") {
             out = out + record(name, path, "external")
         }
     }
@@ -188,11 +188,18 @@ fn app_path(name: string) string {
 }
 
 fn app_kind(path: string) string {
-    return yaml.value(manifest_of(path), "application.kind")
+    let k: string = yaml.value(manifest_of(path), "module.kind")
+    if k == "" {
+        k = yaml.value(manifest_of(path), "application.kind")
+    }
+    return k
 }
 
 fn app_title(name: string, path: string) string {
-    let title: string = yaml.value(manifest_of(path), "application.title")
+    let title: string = yaml.value(manifest_of(path), "module.title")
+    if title == "" {
+        title = yaml.value(manifest_of(path), "application.title")
+    }
     if title == "" {
         return name
     }
@@ -225,13 +232,19 @@ fn app_depends(name: string, path: string) string {
 }
 
 fn app_port(path: string) string {
-    let port: string = yaml.value(manifest_of(path), "application.port")
+    let port: string = yaml.value(manifest_of(path), "module.port")
+    if port == "" {
+        port = yaml.value(manifest_of(path), "application.port")
+    }
     if port != "" { return port }
     return yaml.value(manifest_of(path), "deploy.port")
 }
 
 fn app_route(path: string) string {
-    let address: string = yaml.value(manifest_of(path), "application.route")
+    let address: string = yaml.value(manifest_of(path), "module.route")
+    if address == "" {
+        address = yaml.value(manifest_of(path), "application.route")
+    }
     if address == "" {
         return "/"
     }
@@ -239,7 +252,10 @@ fn app_route(path: string) string {
 }
 
 fn app_command(name: string, path: string) string {
-    let command: string = yaml.value(manifest_of(path), "application.command")
+    let command: string = yaml.value(manifest_of(path), "module.command")
+    if command == "" {
+        command = yaml.value(manifest_of(path), "application.command")
+    }
     if command == "" {
         return name
     }
@@ -499,6 +515,10 @@ fn applications_rows() string {
         out = "<tr><td colspan=\"6\">No applications declare an <code>application</code> block yet.</td></tr>"
     }
     return out
+}
+
+fn applications_rows_endpoint(req: Request) Response {
+    return html(status_ok(), applications_rows())
 }
 
 fn applications_page_message(message: string) Response {

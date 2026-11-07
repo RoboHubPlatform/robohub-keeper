@@ -210,7 +210,7 @@ fn plugins_install(req: Request) Response {
     if code != 0 {
         return plugins_page_message("Could not install " + source + ".")
     }
-    if yaml.value(target + "/module.yml", "plugin.kind") == "" {
+    if (yaml.value(target + "/module.yml", "module.kind") == "" && yaml.value(target + "/module.yml", "plugin.kind") == "") {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-plugin")))
         return plugins_page_message(source + " is not a plugin module.")
     }

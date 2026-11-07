@@ -1,6 +1,11 @@
 module:
   name: keeper
   type: rho
+  kind: keeper
+  title: RoboHub Keeper
+  route: /
+  port: "8080"
+  command: keeper
   version: 0.5.5
   author: Aurel Miron
   maintainer: Aurel Miron
@@ -18,13 +23,6 @@ deps:
 # The keeper is the application a person is already looking at, and the one
 # that runs the others. The block is what makes it the first row of its own
 # registry and what stops that registry offering to remove it.
-application:
-  kind: keeper
-  title: RoboHub Keeper
-  description: The dashboard for the ecosystem and the registry of the applications it hosts.
-  route: /
-  port: "8080"
-  command: keeper
 
 # The alert channels this application uses. The dispatcher is the one alert
 # plugin the application calls; it fans out to the channels named in targets.

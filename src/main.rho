@@ -32,6 +32,7 @@ route GET "/system" => system_page
 route GET "/docs" => docs_page
 route GET "/docs/{path...}" => doc_page
 route GET "/applications" => applications_page
+route GET "/api/applications/rows" => applications_rows_endpoint
 route POST "/applications/install" => applications_install
 route POST "/applications/uninstall" => applications_uninstall
 route POST "/applications/start" => applications_start
