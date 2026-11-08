@@ -51,8 +51,13 @@ def wait_for(base: str, timeout: float = 20.0) -> None:
     raise SystemExit(f"keeper did not start at {base}")
 
 
+SESSION = "smoke-session"
+
+
 def get(base: str, path: str) -> str:
-    with urllib.request.urlopen(base + path, timeout=10) as response:
+    request = urllib.request.Request(base + path)
+    request.add_header("Cookie", f"keeper_session={SESSION}")
+    with urllib.request.urlopen(request, timeout=10) as response:
         return response.read().decode("utf-8", "replace")
 
 
@@ -60,6 +65,7 @@ def post(base: str, path: str, fields: dict) -> str:
     body = urllib.parse.urlencode(fields).encode()
     request = urllib.request.Request(base + path, data=body, method="POST")
     request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    request.add_header("Cookie", f"keeper_session={SESSION}")
     with urllib.request.urlopen(request, timeout=20) as response:
         return response.read().decode("utf-8", "replace")
 
@@ -120,6 +126,14 @@ def main() -> int:
         env["RHO_KEEPER_STATE_DIR"] = os.path.join(state, "state")
         env["HOME"] = state
         env["RHO_HTTP_ADDR"] = f":{port}"
+        # The applications page is behind the keeper's own session. Give the
+        # smoke run one valid local session instead of disabling auth.
+        state_dir = Path(env["RHO_KEEPER_STATE_DIR"])
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "auth-sessions.txt").write_text(
+            f"{SESSION}|{int(time.time()) + 3600}|smoke\n",
+            encoding="utf-8",
+        )
         process = subprocess.Popen(
             [str(binary)],
             cwd=ROBOHUB,
