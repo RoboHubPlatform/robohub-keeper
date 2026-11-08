@@ -147,3 +147,10 @@ Set `ROBOHUB_ARTIFACT_PUBKEY` to the base64 Ed25519 public key that must sign
 artifacts. Checksum-only verification is available for a development machine by
 setting `ROBOHUB_ARTIFACT_ALLOW_UNSIGNED=1`, but a production keeper should pin a
 key.
+
+## Remaining OTA work
+
+Keeper deploys host services from verified staged artifacts. Remote host
+rollout, firmware OTA delivery through Mesh, ESP32 A/B confirmation, and
+target-declared rollback remain outstanding; a target without a rollback-capable
+bootloader is not offered remote OTA.
