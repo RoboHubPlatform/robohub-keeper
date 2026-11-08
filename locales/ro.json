@@ -29,7 +29,7 @@
   "settings.tab.alerts": "Alerte",
   "settings.tab.auth": "Autentificare",
   "settings.tab.configuration": "Configurație",
-  "settings.orientation": "Aspectul filelor",
+  "settings.orientation": "Aspectul filelor modulelor",
   "settings.orientation.vertical": "Vertical",
   "settings.orientation.horizontal": "Orizontal",
   "settings.save": "Salvează",
@@ -50,5 +50,6 @@
   "app_modules.settings_new_key": "Cheie nouă",
   "app_modules.settings_new_value": "Valoare",
   "app_modules.settings_no_name": "Numiți un modul de editat.",
-  "app_modules.settings_missing": "Modul inexistent:"
+  "app_modules.settings_missing": "Modul inexistent:",
+  "settings.title": "Setări aplicație"
 }

@@ -44,6 +44,10 @@ targets:
         file: templates/layouts/layout.html
       - name: home
         file: templates/pages/home.html
+      - name: settings
+        file: templates/pages/settings.html
+      - name: module-settings
+        file: templates/pages/module-settings.html
       - name: modules
         file: templates/pages/modules.html
       - name: docs

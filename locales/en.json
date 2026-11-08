@@ -29,7 +29,7 @@
   "settings.tab.alerts": "Alerts",
   "settings.tab.auth": "Authentication",
   "settings.tab.configuration": "Configuration",
-  "settings.orientation": "Tab layout",
+  "settings.orientation": "Module tab layout",
   "settings.orientation.vertical": "Vertical",
   "settings.orientation.horizontal": "Horizontal",
   "settings.save": "Save",
@@ -50,5 +50,6 @@
   "app_modules.settings_new_key": "New key",
   "app_modules.settings_new_value": "Value",
   "app_modules.settings_no_name": "Name a module to edit.",
-  "app_modules.settings_missing": "No such module:"
+  "app_modules.settings_missing": "No such module:",
+  "settings.title": "Application settings"
 }
