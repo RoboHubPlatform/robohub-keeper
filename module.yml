@@ -21,6 +21,7 @@ deps:
   rho-log: ">=0.1.0"
   robohub:
     htmx: ">=0.1.0"
+    i18n: ">=0.1.0"
 
 # The keeper is the application a person is already looking at, and the one
 # that runs the others. The block is what makes it the first row of its own

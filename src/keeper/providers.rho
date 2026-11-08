@@ -188,7 +188,7 @@ fn provider_status(present: bool) string {
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
 
-fn providers_page_message(message: string) Response {
+fn providers_page_message(req: Request, message: string) Response {
     let notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
@@ -196,11 +196,11 @@ fn providers_page_message(message: string) Response {
     let body: string = template_fill(template_get("providers"),
         vars("notice", notice) + vars("rows", provider_rows_html()) +
         vars("root", provider_root()))
-    return page("Providers", body)
+    return page(req, i18n_t(req, "page.providers"), body)
 }
 
 fn providers_page(req: Request) Response {
-    return providers_page_message("")
+    return providers_page_message(req, "")
 }
 
 fn providers_install(req: Request) Response {
@@ -208,17 +208,17 @@ fn providers_install(req: Request) Response {
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
-        return providers_page_message("Name a provider to install.")
+        return providers_page_message(req, "Name a provider to install.")
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return providers_page_message("The provider name can use letters, digits, '-', '_' and '.' only.")
+        return providers_page_message(req, "The provider name can use letters, digits, '-', '_' and '.' only.")
     }
     let target: string = provider_root() + "/" + name
     if rho_path_exists(target) {
-        return providers_page_message(name + " is already installed.")
+        return providers_page_message(req, name + " is already installed.")
     }
     ignore_u32(rho_exec("mkdir", "-p " + provider_root(), apps_report("mkdir-providers")))
     var code: u32 = 0
@@ -228,28 +228,28 @@ fn providers_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return providers_page_message("No provider module.yml at " + path + ".")
+            return providers_page_message(req, "No provider module.yml at " + path + ".")
         }
         code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
             apps_report("install-provider-" + name))
     }
     if code != 0 {
-        return providers_page_message("Could not install " + source + ".")
+        return providers_page_message(req, "Could not install " + source + ".")
     }
     if yaml.value(target + "/module.yml", "provider.contract") == "" {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-provider")))
-        return providers_page_message(source + " is not a provider module.")
+        return providers_page_message(req, source + " is not a provider module.")
     }
     ignore_bool(provider_db_add(provider_root(), name))
     info("keeper", "installed provider " + name)
-    return providers_page_message(name + " was installed.")
+    return providers_page_message(req, name + " was installed.")
 }
 
 fn providers_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) || plugin_manifest(provider_root(), name) == "" {
-        return providers_page_message("No such provider: " + name)
+        return providers_page_message(req, "No such provider: " + name)
     }
     let target: string = provider_root() + "/" + name
     ignore_bool(plugin_db_remove(provider_root(), name))
@@ -258,5 +258,5 @@ fn providers_uninstall(req: Request) Response {
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return providers_page_message(name + " was uninstalled.")
+    return providers_page_message(req, name + " was uninstalled.")
 }

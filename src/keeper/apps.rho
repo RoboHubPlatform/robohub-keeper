@@ -337,34 +337,34 @@ fn unregister_external(name: string) void {
 /*  Pages                                                                     */
 /* -------------------------------------------------------------------------- */
 
-fn page(title: string, content: string) Response {
-    return page_status(status_ok(), title, content)
+fn page(req: Request, title: string, content: string) Response {
+    return page_status(req, status_ok(), title, content)
 }
 
-fn page_status(status: u32, title: string, content: string) Response {
+fn page_status(req: Request, status: u32, title: string, content: string) Response {
     let document: string = template_fill(template_get("layout"),
-        vars("title", title) + vars("htmx", htmx_head()) + vars("nav", keeper_nav()) + vars("body", content))
+        vars("title", title) + vars("htmx", htmx_head()) + i18n_vars(req) + vars("nav", keeper_nav(req)) + vars("body", content))
     return html(status, document)
 }
 
-fn keeper_nav() string {
+fn keeper_nav(req: Request) string {
     var out: string = ""
-    out = out + "<li><a href=\"/\" data-nav=\"home\"><span class=\"ico\">◱</span>Home</a></li>"
-    out = out + "<li><a href=\"/modules\" data-nav=\"registry\"><span class=\"ico\">▤</span>Registry</a></li>"
+    out = out + "<li><a href=\"/\" data-nav=\"home\"><span class=\"ico\">◱</span>" + i18n_t(req, "nav.home") + "</a></li>"
+    out = out + "<li><a href=\"/modules\" data-nav=\"registry\"><span class=\"ico\">▤</span>" + i18n_t(req, "nav.registry") + "</a></li>"
     // Applications is the one place an application, its modules and its
     // plugins are found. The current application is the first sub-item; the
     // pinned applications follow it.
     out = out + "<li class=\"nav-group\"><a href=\"/applications\" data-nav=\"applications\">" +
-        "<span class=\"ico\">▩</span>Applications</a><ul class=\"subnav\">" +
-        "<li><a href=\"/\"><span class=\"ico\">▩</span>RoboHub Application</a></li>" +
+        "<span class=\"ico\">▩</span>" + i18n_t(req, "nav.applications") + "</a><ul class=\"subnav\">" +
+        "<li><a href=\"/\"><span class=\"ico\">▩</span>" + i18n_t(req, "nav.application") + "</a></li>" +
         pinned_nav() +
-        "<li><a href=\"/app-modules\"><span class=\"ico\">▧</span>App modules</a></li>" +
-        "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>Plugins</a></li>" +
-        "<li><a href=\"/providers\"><span class=\"ico\">◇</span>Providers</a></li>" +
+        "<li><a href=\"/app-modules\"><span class=\"ico\">▧</span>" + i18n_t(req, "nav.app_modules") + "</a></li>" +
+        "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>" + i18n_t(req, "nav.plugins") + "</a></li>" +
+        "<li><a href=\"/providers\"><span class=\"ico\">◇</span>" + i18n_t(req, "nav.providers") + "</a></li>" +
         "</ul></li>"
-    out = out + "<li><a href=\"/auth/token\" data-nav=\"auth\"><span class=\"ico\">⚿</span>Access token</a></li>"
-    out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>Docs</a></li>"
-    out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>System</a></li>"
+    out = out + "<li><a href=\"/auth/token\" data-nav=\"auth\"><span class=\"ico\">⚿</span>" + i18n_t(req, "nav.access_token") + "</a></li>"
+    out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>" + i18n_t(req, "nav.docs") + "</a></li>"
+    out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>" + i18n_t(req, "nav.system") + "</a></li>"
     return out
 }
 
@@ -510,18 +510,18 @@ fn applications_rows_endpoint(req: Request) Response {
     return html(status_ok(), applications_rows())
 }
 
-fn applications_page_message(message: string) Response {
+fn applications_page_message(req: Request, message: string) Response {
     let notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("applications"),
         vars("notice", notice) + vars("rows", applications_rows()))
-    return page("Applications", body)
+    return page(req, i18n_t(req, "page.applications"), body)
 }
 
 fn applications_page(req: Request) Response {
-    return applications_page_message("")
+    return applications_page_message(req, "")
 }
 
 /* -------------------------------------------------------------------------- */
@@ -536,7 +536,7 @@ fn applications_menu(req: Request) Response {
     let name: string = trim(form_value(body, "name"))
     let wanted: string = form_value(body, "pinned")
     if name == "" || app_path(name) == "" {
-        return applications_page_message("No such application: " + name)
+        return applications_page_message(req, "No such application: " + name)
     }
     if wanted == "0" {
         unpin(name)
@@ -544,14 +544,14 @@ fn applications_menu(req: Request) Response {
         if htmx_is_request(req) {
             return application_row_response(name)
         }
-        return applications_page_message(name + " is no longer in the keeper menu.")
+        return applications_page_message(req, name + " is no longer in the keeper menu.")
     }
     pin(name)
     info("keeper", "added " + name + " to the keeper menu")
     if htmx_is_request(req) {
         return application_row_response(name)
     }
-    return applications_page_message(name + " was added to the keeper menu.")
+    return applications_page_message(req, name + " was added to the keeper menu.")
 }
 
 // The port this keeper listens on, said to a hosted application so it can
@@ -709,7 +709,7 @@ fn applications_start(req: Request) Response {
     if htmx_is_request(req) {
         return application_row_response(name)
     }
-    return applications_page_message(message)
+    return applications_page_message(req, message)
 }
 
 fn applications_stop(req: Request) Response {
@@ -719,36 +719,36 @@ fn applications_stop(req: Request) Response {
     if htmx_is_request(req) {
         return application_row_response(name)
     }
-    return applications_page_message(message)
+    return applications_page_message(req, message)
 }
 
 fn applications_update(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    if name == "" { return applications_page_message("No name given") }
+    if name == "" { return applications_page_message(req, "No name given") }
     let path: string = app_path(name)
-    if path == "" { return applications_page_message("Unknown application") }
+    if path == "" { return applications_page_message(req, "Unknown application") }
     let result: string = app_update(name, path)
     if htmx_is_request(req) {
         return application_row_response(name)
     }
     if rho_str_index_of(result, "build failed:") >= 0 {
-        return applications_page_message(escape_html(result))
+        return applications_page_message(req, escape_html(result))
     }
-    return applications_page_message("Updated " + escape_html(name))
+    return applications_page_message(req, "Updated " + escape_html(name))
 }
 
 fn applications_restart(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    if name == "" { return applications_page_message("No name given") }
+    if name == "" { return applications_page_message(req, "No name given") }
     let path: string = app_path(name)
-    if path == "" { return applications_page_message("Unknown application") }
+    if path == "" { return applications_page_message(req, "Unknown application") }
     let result: string = app_restart(name, path)
     if htmx_is_request(req) {
         return application_row_response(name)
     }
-    return applications_page_message("Restarted " + escape_html(name))
+    return applications_page_message(req, "Restarted " + escape_html(name))
 }
 
 fn applications_uninstall(req: Request) Response {
@@ -756,10 +756,10 @@ fn applications_uninstall(req: Request) Response {
     let name: string = trim(form_value(body, "name"))
     let path: string = app_path(name)
     if path == "" {
-        return applications_page_message("No such application: " + name)
+        return applications_page_message(req, "No such application: " + name)
     }
     if app_kind(path) == "keeper" {
-        return applications_page_message("The keeper cannot uninstall itself.")
+        return applications_page_message(req, "The keeper cannot uninstall itself.")
     }
     let origin: string = record_origin(application_records(), name)
     ignore_string(app_stop(name))
@@ -770,7 +770,7 @@ fn applications_uninstall(req: Request) Response {
         if htmx_is_request(req) {
             return html(status_ok(), "")
         }
-        return applications_page_message(name + " was removed from the registry.")
+        return applications_page_message(req, name + " was removed from the registry.")
     }
     let dir: string = applications_dir()
     if rho_str_index_of(path, dir + "/") != 0 {
@@ -778,14 +778,14 @@ fn applications_uninstall(req: Request) Response {
         if htmx_is_request(req) {
             return html(status_ok(), "")
         }
-        return applications_page_message(name + " was removed from the registry.")
+        return applications_page_message(req, name + " was removed from the registry.")
     }
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(path), apps_report("uninstall-" + name)))
     info("keeper", "uninstalled application " + name)
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return applications_page_message(name + " was uninstalled.")
+    return applications_page_message(req, name + " was uninstalled.")
 }
 
 fn applications_install(req: Request) Response {
@@ -794,7 +794,7 @@ fn applications_install(req: Request) Response {
     let source: string = trim(form_value(body, "source"))
     let add_to_menu: string = form_value(body, "menu")
     if source == "" {
-        return applications_page_message("Name a location to install from.")
+        return applications_page_message(req, "Name a location to install from.")
     }
     let is_git: bool = source_is_git(source)
     var path: string = ""
@@ -803,11 +803,11 @@ fn applications_install(req: Request) Response {
             name = source_name(source)
         }
         if !valid_name(name) {
-            return applications_page_message("The application name can use letters, digits, '-', '_' and '.' only.")
+            return applications_page_message(req, "The application name can use letters, digits, '-', '_' and '.' only.")
         }
         path = applications_dir() + "/" + name
         if rho_path_exists(path) || app_path(name) != "" {
-            return applications_page_message(name + " is already installed at " + path + ".")
+            return applications_page_message(req, name + " is already installed at " + path + ".")
         }
         ignore_u32(rho_exec("mkdir", "-p " + applications_dir(), apps_report("mkdir-apps")))
         let log: string = apps_report("install-" + name)
@@ -815,22 +815,22 @@ fn applications_install(req: Request) Response {
         if code != 0 {
             ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be installed",
                 "app=" + name))
-            return applications_page_message("Could not clone " + source + ". See " + log + ".")
+            return applications_page_message(req, "Could not clone " + source + ". See " + log + ".")
         }
     } else {
         path = resolve_path(source)
         if !rho_path_exists(manifest_of(path)) {
-            return applications_page_message("No module.yml at " + path + ".")
+            return applications_page_message(req, "No module.yml at " + path + ".")
         }
         if name == "" {
             name = yaml.value(manifest_of(path), "module.name")
         }
         if !valid_name(name) {
-            return applications_page_message("The application name can use letters, digits, '-', '_' and '.' only.")
+            return applications_page_message(req, "The application name can use letters, digits, '-', '_' and '.' only.")
         }
         let existing: string = app_path(name)
         if existing != "" && existing != path {
-            return applications_page_message(name + " is already registered at " + existing + ".")
+            return applications_page_message(req, name + " is already registered at " + existing + ".")
         }
         register_external(name, path)
     }
@@ -841,11 +841,11 @@ fn applications_install(req: Request) Response {
         } else {
             unregister_external(name)
         }
-        return applications_page_message(path + " is not a keeper-hosted application.")
+        return applications_page_message(req, path + " is not a keeper-hosted application.")
     }
     if add_to_menu == "1" {
         pin(name)
     }
     info("keeper", "installed application " + name + " from " + source)
-    return applications_page_message(name + " was installed. Build it with: rho build " + path)
+    return applications_page_message(req, name + " was installed. Build it with: rho build " + path)
 }

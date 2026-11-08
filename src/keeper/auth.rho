@@ -178,7 +178,7 @@ fn auth_login_post(req: Request) Response {
 
 // The access-token settings page. The current token is never shown; a new one
 // is written owner-only, and the session that changed it stays valid.
-fn auth_token_render(message: string, token: string) Response {
+fn auth_token_render(req: Request, message: string, token: string) Response {
     let notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
@@ -189,16 +189,16 @@ fn auth_token_render(message: string, token: string) Response {
     }
     let body: string = template_fill(template_get("auth-token"),
         vars("notice", notice) + vars("token_block", token_block))
-    return page("Access token", body)
+    return page(req, i18n_t(req, "page.access_token"), body)
 }
 
-fn auth_token_page_message(message: string) Response {
-    return auth_token_render(message, "")
+fn auth_token_page_message(req: Request, message: string) Response {
+    return auth_token_render(req, message, "")
 }
 
 fn auth_token_page(req: Request) Response {
     auth_ensure_master()
-    return auth_token_page_message("")
+    return auth_token_page_message(req, "")
 }
 
 fn auth_token_post(req: Request) Response {
@@ -206,14 +206,14 @@ fn auth_token_post(req: Request) Response {
     let token: string = auth_clean(form_value(body, "token"))
     let confirm: string = auth_clean(form_value(body, "confirm"))
     if rho_strlen(token) < 16 {
-        return auth_token_page_message("Use an access token of at least 16 characters.")
+        return auth_token_page_message(req, "Use an access token of at least 16 characters.")
     }
     if !rho_str_eq(token, confirm) {
-        return auth_token_page_message("The two tokens do not match.")
+        return auth_token_page_message(req, "The two tokens do not match.")
     }
     ignore_u32(rho_exec("mkdir", "-p " + auth_dir(), auth_report("auth-mkdir")))
     ignore_bool(rho_write_text(auth_master_file(), token + "\n"))
     ignore_u32(rho_exec("chmod", "600 " + auth_master_file(), auth_report("auth-chmod")))
     info("keeper", "access token updated")
-    return auth_token_render("Access token updated. New sign-ins use the new token; this session stays valid.", token)
+    return auth_token_render(req, "Access token updated. New sign-ins use the new token; this session stays valid.", token)
 }

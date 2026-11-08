@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ locale }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -216,8 +216,9 @@
       {{{ nav }}}
     </ul>
     <div class="side-foot">
+      {{{ locale_switch }}}
       <span class="k">RoboHub</span>
-      <code>ecosystem dashboard</code>
+      <code>{{t "nav.footer"}}</code>
     </div>
   </nav>
   <div class="main">

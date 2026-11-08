@@ -206,18 +206,18 @@ fn app_module_status(present: bool) string {
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
 
-fn app_modules_page_message(message: string) Response {
+fn app_modules_page_message(req: Request, message: string) Response {
     let notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("app-modules"),
         vars("notice", notice) + vars("rows", app_module_rows()))
-    return page("Modules", body)
+    return page(req, i18n_t(req, "page.modules"), body)
 }
 
 fn app_modules_page(req: Request) Response {
-    return app_modules_page_message("")
+    return app_modules_page_message(req, "")
 }
 
 fn app_modules_install(req: Request) Response {
@@ -225,17 +225,17 @@ fn app_modules_install(req: Request) Response {
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
-        return app_modules_page_message("Name a module to install.")
+        return app_modules_page_message(req, "Name a module to install.")
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return app_modules_page_message("The module name can use letters, digits, '-', '_' and '.' only.")
+        return app_modules_page_message(req, "The module name can use letters, digits, '-', '_' and '.' only.")
     }
     let target: string = app_modules_root() + "/" + name
     if rho_path_exists(target) {
-        return app_modules_page_message(name + " is already installed.")
+        return app_modules_page_message(req, name + " is already installed.")
     }
     ignore_u32(rho_exec("mkdir", "-p " + app_modules_root(), apps_report("mkdir-micro-apps")))
     var code: u32 = 0
@@ -245,29 +245,29 @@ fn app_modules_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return app_modules_page_message("No module.yml at " + path + ".")
+            return app_modules_page_message(req, "No module.yml at " + path + ".")
         }
         code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
             apps_report("install-module-" + name))
     }
     if code != 0 {
-        return app_modules_page_message("Could not install " + source + ".")
+        return app_modules_page_message(req, "Could not install " + source + ".")
     }
     if yaml.value(target + "/module.yml", "module_app.title") == "" {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
             apps_report("remove-not-module")))
-        return app_modules_page_message(source + " is not a module.")
+        return app_modules_page_message(req, source + " is not a module.")
     }
     ignore_bool(app_module_add(name))
     info("keeper", "installed module " + name)
-    return app_modules_page_message(name + " was installed.")
+    return app_modules_page_message(req, name + " was installed.")
 }
 
 fn app_modules_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) {
-        return app_modules_page_message("No such module: " + name)
+        return app_modules_page_message(req, "No such module: " + name)
     }
     let location: string = name
     var rest: string = app_module_entries()
@@ -293,5 +293,5 @@ fn app_modules_uninstall(req: Request) Response {
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return app_modules_page_message(name + " was uninstalled.")
+    return app_modules_page_message(req, name + " was uninstalled.")
 }

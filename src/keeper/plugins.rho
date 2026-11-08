@@ -114,7 +114,7 @@ fn plugin_status(tone: string, label: string) string {
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
 
-fn plugins_page_message(message: string) Response {
+fn plugins_page_message(req: Request, message: string) Response {
     let notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
@@ -122,11 +122,11 @@ fn plugins_page_message(message: string) Response {
     let body: string = template_fill(template_get("plugins"),
         vars("notice", notice) + vars("rows", plugin_rows_html()) +
         vars("root", plugin_root()))
-    return page("Plugins", body)
+    return page(req, i18n_t(req, "page.plugins"), body)
 }
 
 fn plugins_page(req: Request) Response {
-    return plugins_page_message("")
+    return plugins_page_message(req, "")
 }
 
 fn plugins_toggle(req: Request) Response {
@@ -134,7 +134,7 @@ fn plugins_toggle(req: Request) Response {
     let name: string = trim(form_value(body, "name"))
     let enabled: string = form_value(body, "enabled")
     if !valid_name(name) || plugin_manifest(plugin_root(), name) == "" {
-        return plugins_page_message("No such plugin: " + name)
+        return plugins_page_message(req, "No such plugin: " + name)
     }
     plugin_state_set(name, enabled)
     if enabled == "0" {
@@ -142,32 +142,32 @@ fn plugins_toggle(req: Request) Response {
         if htmx_is_request(req) {
             return html(status_ok(), plugin_row_html(name))
         }
-        return plugins_page_message(name + " is disabled for the keeper.")
+        return plugins_page_message(req, name + " is disabled for the keeper.")
     }
     info("keeper", "enabled plugin " + name)
     if htmx_is_request(req) {
         return html(status_ok(), plugin_row_html(name))
     }
-    return plugins_page_message(name + " is enabled for the keeper.")
+    return plugins_page_message(req, name + " is enabled for the keeper.")
 }
 
 fn plugins_test(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if plugin_manifest(plugin_root(), name) == "" {
-        return plugins_page_message("No such plugin: " + name)
+        return plugins_page_message(req, "No such plugin: " + name)
     }
     let sent: u32 = registry_alert_one(plugin_root(), keeper_registry(), name, "INFO",
         "Test alert from the RoboHub keeper", "app=keeper")
     if sent == 0 {
-        return plugins_page_message("The test alert from " + name +
+        return plugins_page_message(req, "The test alert from " + name +
             " was not delivered. Its settings or its provider are incomplete.")
     }
     info("keeper", "sent a test alert through " + name)
     if htmx_is_request(req) {
         return html(status_ok(), plugin_row_html(name))
     }
-    return plugins_page_message("The test alert was handed to " + name + ".")
+    return plugins_page_message(req, "The test alert was handed to " + name + ".")
 }
 
 fn plugin_source_name(source: string) string {
@@ -201,17 +201,17 @@ fn plugins_install(req: Request) Response {
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
-        return plugins_page_message("Name a plugin to install.")
+        return plugins_page_message(req, "Name a plugin to install.")
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return plugins_page_message("The plugin name can use letters, digits, '-', '_' and '.' only.")
+        return plugins_page_message(req, "The plugin name can use letters, digits, '-', '_' and '.' only.")
     }
     let target: string = plugin_root() + "/" + name
     if rho_path_exists(target) {
-        return plugins_page_message(name + " is already installed.")
+        return plugins_page_message(req, name + " is already installed.")
     }
     ignore_u32(rho_exec("mkdir", "-p " + plugin_root(), apps_report("mkdir-plugins")))
     var code: u32 = 0
@@ -221,28 +221,28 @@ fn plugins_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return plugins_page_message("No plugin module.yml at " + path + ".")
+            return plugins_page_message(req, "No plugin module.yml at " + path + ".")
         }
         code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
             apps_report("install-plugin-" + name))
     }
     if code != 0 {
-        return plugins_page_message("Could not install " + source + ".")
+        return plugins_page_message(req, "Could not install " + source + ".")
     }
     if (yaml.value(target + "/module.yml", "module.kind") == "" && yaml.value(target + "/module.yml", "plugin.kind") == "") {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-plugin")))
-        return plugins_page_message(source + " is not a plugin module.")
+        return plugins_page_message(req, source + " is not a plugin module.")
     }
     ignore_bool(plugin_db_add(plugin_root(), name))
     info("keeper", "installed plugin " + name)
-    return plugins_page_message(name + " was installed. It is disabled until enabled.")
+    return plugins_page_message(req, name + " was installed. It is disabled until enabled.")
 }
 
 fn plugins_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) || plugin_manifest(plugin_root(), name) == "" {
-        return plugins_page_message("No such plugin: " + name)
+        return plugins_page_message(req, "No such plugin: " + name)
     }
     let target: string = plugin_root() + "/" + name
     ignore_bool(plugin_db_remove(plugin_root(), name))
@@ -251,5 +251,5 @@ fn plugins_uninstall(req: Request) Response {
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return plugins_page_message(name + " was uninstalled.")
+    return plugins_page_message(req, name + " was uninstalled.")
 }
