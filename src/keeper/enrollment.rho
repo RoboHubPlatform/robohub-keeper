@@ -1,0 +1,97 @@
+module keeper.enrollment
+
+// One-time enrollment: a token is placed on the keeper host before a node
+// boots; the node exchanges it, with its locally generated public key, for a
+// credential. The token is used once and the node record is kept for revoke.
+
+fn enrollment_tokens_file() string {
+    return keeper_state_dir() + "/enrollment.tokens"
+}
+
+fn enrollment_nodes_dir() string {
+    return keeper_state_dir() + "/nodes"
+}
+
+fn enrollment_now() u32 {
+    let report: string = apps_report("enrollment-now")
+    ignore_u32(rho_exec("date", "+%s", report))
+    return u32(rho_int_from_str(first_line(rho_read_text(report))))
+}
+
+fn enrollment_find_token(token: string) string {
+    var rest: string = rho_read_text(enrollment_tokens_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if field(line, 0) == token {
+            return line
+        }
+    }
+    return ""
+}
+
+fn enrollment_mark_used(token: string) void {
+    var out: string = ""
+    var rest: string = rho_read_text(enrollment_tokens_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line == "" { continue }
+        if field(line, 0) == token {
+            line = line + "|used"
+        }
+        out = out + line + "\n"
+    }
+    ignore_bool(rho_write_text(enrollment_tokens_file(), out))
+}
+
+fn keeper_enroll(req: Request) Response {
+    let body: string = request_body(req)
+    let token: string = trim(form_value(body, "token"))
+    let device: string = trim(form_value(body, "device_id"))
+    let public: string = trim(form_value(body, "public_key"))
+    let project: string = trim(form_value(body, "project"))
+    let area: string = trim(form_value(body, "area"))
+    let node: string = trim(form_value(body, "node"))
+    if token == "" || device == "" || public == "" {
+        return Response{ 400, "{\"ok\":false,\"error\":\"missing enrollment fields\"}", "application/json", "" }
+    }
+    let line: string = enrollment_find_token(token)
+    if line == "" {
+        return Response{ 403, "{\"ok\":false,\"error\":\"unknown enrollment token\"}", "application/json", "" }
+    }
+    if field(line, 7) == "used" {
+        return Response{ 409, "{\"ok\":false,\"error\":\"enrollment token already used\"}", "application/json", "" }
+    }
+    let expires: u32 = u32(rho_int_from_str(field(line, 5)))
+    if expires != 0 && enrollment_now() > expires {
+        return Response{ 403, "{\"ok\":false,\"error\":\"enrollment token expired\"}", "application/json", "" }
+    }
+    let expected_device: string = field(line, 1)
+    if expected_device != "" && !rho_str_eq(expected_device, device) {
+        return Response{ 403, "{\"ok\":false,\"error\":\"enrollment token is for another device\"}", "application/json", "" }
+    }
+    let credentialReport: string = apps_report("enrollment-credential")
+    if rho_exec("openssl", "rand -hex 32", credentialReport) != 0 {
+        return Response{ 500, "{\"ok\":false,\"error\":\"credential generation failed\"}", "application/json", "" }
+    }
+    let credential: string = first_line(rho_read_text(credentialReport))
+    let path: string = enrollment_nodes_dir() + "/" + device + ".txt"
+    let record: string = device + "|" + public + "|" + project + "|" + area + "|" + node +
+        "|" + credential + "|" + rho_int_to_str(enrollment_now()) + "\n"
+    ignore_u32(rho_exec("mkdir", "-p " + enrollment_nodes_dir(), apps_report("enrollment-mkdir")))
+    ignore_bool(rho_write_text(path, record))
+    ignore_u32(rho_exec("chmod", "600 " + path, apps_report("enrollment-chmod")))
+    enrollment_mark_used(token)
+    info("keeper", "enrolled node " + device)
+    return Response{ 200, "{\"ok\":true,\"credential\":" + json_string(credential) + "}",
+        "application/json", "" }
+}

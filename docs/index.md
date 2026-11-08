@@ -154,3 +154,22 @@ Keeper deploys host services from verified staged artifacts. Remote host
 rollout, firmware OTA delivery through Mesh, ESP32 A/B confirmation, and
 target-declared rollback remain outstanding; a target without a rollback-capable
 bootloader is not offered remote OTA.
+
+## Node enrollment
+
+Create a one-time token on the keeper host:
+
+```sh
+rho bootstrap token -device garden-01 -project default -area 1 -node 7
+```
+
+The token lands in `~/.rho/keeper/enrollment.tokens`. A node runs:
+
+```sh
+rho bootstrap init -config /etc/robohub/provisioning.json -token <token>
+```
+
+The node generates its instance UUID and Ed25519 key locally, posts the public
+key and token to `POST /api/enroll`, and stores the issued credential as a
+`0600` file. Keeper keeps the node record under `~/.rho/keeper/nodes/` and marks
+the token used. A reused or expired token is refused.
