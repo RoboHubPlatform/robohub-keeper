@@ -730,6 +730,7 @@ fn app_stop(name: string) string {
 // build log so the Update handler can check whether it succeeded.
 fn app_build(name: string, path: string) string {
     let report: string = apps_report("build-" + name)
+    ignore_u32(rho_exec("rm", "-rf " + arg_quote(path + "/build/generated"), report))
     ignore_u32(rho_exec("rho", "build " + path, report))
     return rho_read_text(report)
 }
