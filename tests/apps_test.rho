@@ -102,3 +102,13 @@ fn main() void {
     whitespace_and_hex_are_values()
     print("keeper apps text tests ok\n")
 }
+
+test fn artifact_report_fields_are_read_and_suffixes_match() void {
+    let report: string = "name=aquarium\nversion=0.4.0\nentrypoint=aquarium\nservice=aquarium\n"
+    check(rho_str_eq(app_artifact_value(report, "version"), "0.4.0"), "a version field")
+    check(rho_str_eq(app_artifact_value(report, "service"), "aquarium"), "a service field")
+    check(rho_str_eq(app_artifact_value(report, "missing"), ""), "a missing field")
+    check(app_artifact_ends_with("app.pre-artifact", ".pre-artifact"), "a matching suffix")
+    check(!app_artifact_ends_with("app", ".next"), "a missing suffix")
+    print("[PASS] artifact_report_fields_are_read_and_suffixes_match\n")
+}

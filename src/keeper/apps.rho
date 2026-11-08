@@ -736,12 +736,7 @@ fn app_build(name: string, path: string) string {
     return rho_read_text(report)
 }
 
-fn app_artifact_ends_with(value: string, suffix: string) bool {
-    let length: u32 = u32(rho_strlen(suffix))
-    if length == 0 { return true }
-    if u32(rho_strlen(value)) < length { return false }
-    return rho_str_eq(rho_str_slice(value, u32(rho_strlen(value)) - length, length), suffix)
-}
+
 
 fn app_artifact_dir(name: string) string {
     return keeper_state_dir() + "/artifacts/" + name
@@ -751,23 +746,7 @@ fn app_artifact_incoming_dir() string {
     return keeper_state_dir() + "/incoming"
 }
 
-fn app_artifact_value(text: string, key: string) string {
-    let prefix: string = key + "="
-    var rest: string = text
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        var line: string = rest
-        if at < 0 { rest = "" } else {
-            line = rho_str_slice(rest, 0, u32(at))
-            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        }
-        if rho_str_index_of(line, prefix) == 0 {
-            return rho_str_slice(line, u32(rho_strlen(prefix)),
-                u32(rho_strlen(line)) - u32(rho_strlen(prefix)))
-        }
-    }
-    return ""
-}
+
 
 // app_artifact_incoming finds the newest staged archive for an application.
 fn app_artifact_incoming(name: string) string {
