@@ -12,6 +12,7 @@ include "keeper/apps.rho"
 include "keeper/plugins.rho"
 include "keeper/providers.rho"
 include "keeper/app_modules.rho"
+include "keeper/module_settings.rho"
 include "keeper/auth.rho"
 include "keeper/settings.rho"
 include "htmx"
@@ -60,6 +61,8 @@ route GET "/providers" => providers_page
 route POST "/providers/install" => providers_install
 route POST "/providers/uninstall" => providers_uninstall
 route GET "/app-modules" => app_modules_page
+route GET "/app-modules/settings" => app_module_settings_page
+route POST "/app-modules/settings" => app_module_settings_save
 route POST "/app-modules/install" => app_modules_install
 route POST "/app-modules/uninstall" => app_modules_uninstall
 

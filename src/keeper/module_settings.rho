@@ -1,0 +1,96 @@
+module keeper.module_settings
+
+// A standalone module has no parent application settings page. The keeper can
+// still edit the namespaced values its host store holds, which is enough for a
+// module checked out on its own.
+fn app_module_settings_prefix(name: string) string {
+    return name + "."
+}
+
+fn app_module_settings_page_message(req: Request, message: string) Response {
+    let name: string = trim(request_query_param(req, "name"))
+    if name == "" {
+        return app_modules_page_message(req, i18n_t(req, "app_modules.settings_no_name"))
+    }
+    let root: string = app_modules_root() + "/" + name
+    if !rho_path_exists(root) {
+        return app_modules_page_message(req, i18n_t(req, "app_modules.settings_missing") + " " + name)
+    }
+    let prefix: string = app_module_settings_prefix(name)
+    var fields: FormField[34]
+    var count: u32 = 0
+    var rest: string = settings_list(prefix)
+    var index: u32 = 0
+    while rest != "" && index < 16 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let equals: i32 = rho_str_index_of(line, "=")
+        if equals <= 0 {
+            continue
+        }
+        let key: string = rho_str_slice(line, 0, u32(equals))
+        let value: string = rho_str_slice(line, u32(equals) + 1,
+            u32(rho_strlen(line)) - u32(equals) - 1)
+        fields[count] = FormField{ "key" + rho_int_to_str(index), "hidden", "", "",
+            "", false, "", "", key, "", "" }
+        count = count + 1
+        fields[count] = FormField{ "value" + rho_int_to_str(index), "text", key, "",
+            "", false, "", "", value, "", "" }
+        count = count + 1
+        index = index + 1
+    }
+    fields[count] = FormField{ "new_key", "text", i18n_t(req, "app_modules.settings_new_key"), "",
+        prefix + "key", false, "", "", "", "", "" }
+    count = count + 1
+    fields[count] = FormField{ "new_value", "text", i18n_t(req, "app_modules.settings_new_value"), "",
+        "", false, "", "", "", "", "" }
+    count = count + 1
+    let form: string = forms_open(fields, count,
+        "/app-modules/settings?name=" + name,
+        i18n_t(req, "settings.save"), i18n_locale(req))
+    let notice: string = ""
+    var body: string = template_fill(template_get("module-settings"),
+        i18n_vars(req) +
+        vars("name", name) +
+        vars("form", form) +
+        vars("notice", notice))
+    return page(req, i18n_t(req, "app_modules.settings_title") + " " + name, body)
+}
+
+fn app_module_settings_page(req: Request) Response {
+    return app_module_settings_page_message(req, "")
+}
+
+fn app_module_settings_save(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(request_query_param(req, "name"))
+    if !forms_csrf_ok(body) {
+        return app_module_settings_page_message(req, i18n_t(req, "settings.csrf_refused"))
+    }
+    var rest: string = settings_list(app_module_settings_prefix(name))
+    var index: u32 = 0
+    while rest != "" && index < 16 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let equals: i32 = rho_str_index_of(line, "=")
+        if equals > 0 {
+            let key: string = rho_str_slice(line, 0, u32(equals))
+            let value: string = trim(form_value(body, "value" + rho_int_to_str(index)))
+            settings_set(key, value)
+        }
+        index = index + 1
+    }
+    let new_key: string = trim(form_value(body, "new_key"))
+    if new_key != "" {
+        settings_set(new_key, trim(form_value(body, "new_value")))
+    }
+    return redirect("/app-modules/settings?name=" + name)
+}

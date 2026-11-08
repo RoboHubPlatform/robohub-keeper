@@ -43,5 +43,12 @@
   "settings.alerts.telegram_token": "Token bot Telegram",
   "settings.auth.heading": "Autentificare",
   "settings.auth.body": "Keeperul se autentifică cu tokenul master și semnează tokenuri de scurtă durată pentru celelalte aplicații.",
-  "settings.auth.token_link": "Gestionează tokenul de acces"
+  "settings.auth.token_link": "Gestionează tokenul de acces",
+  "app_modules.settings": "Setări",
+  "app_modules.settings_title": "Setări modul",
+  "app_modules.settings_intro": "Valorile sunt păstrate de keeper pentru acest modul.",
+  "app_modules.settings_new_key": "Cheie nouă",
+  "app_modules.settings_new_value": "Valoare",
+  "app_modules.settings_no_name": "Numiți un modul de editat.",
+  "app_modules.settings_missing": "Modul inexistent:"
 }

@@ -43,5 +43,12 @@
   "settings.alerts.telegram_token": "Telegram bot token",
   "settings.auth.heading": "Authentication",
   "settings.auth.body": "The keeper authenticates with its master access token and signs short-lived tokens for the other applications.",
-  "settings.auth.token_link": "Manage the access token"
+  "settings.auth.token_link": "Manage the access token",
+  "app_modules.settings": "Settings",
+  "app_modules.settings_title": "Module settings",
+  "app_modules.settings_intro": "Values are stored by the keeper for this module.",
+  "app_modules.settings_new_key": "New key",
+  "app_modules.settings_new_value": "Value",
+  "app_modules.settings_no_name": "Name a module to edit.",
+  "app_modules.settings_missing": "No such module:"
 }
