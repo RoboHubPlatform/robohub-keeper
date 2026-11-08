@@ -130,10 +130,13 @@ def main() -> int:
         # smoke run one valid local session instead of disabling auth.
         state_dir = Path(env["RHO_KEEPER_STATE_DIR"])
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "auth-sessions.txt").write_text(
-            f"{SESSION}|{int(time.time()) + 3600}|smoke\n",
-            encoding="utf-8",
-        )
+        session_line = f"{SESSION}|{int(time.time()) + 3600}|smoke\n"
+        (state_dir / "auth-sessions.txt").write_text(session_line, encoding="utf-8")
+        # The generated middleware is configured with the home-relative
+        # session_file, which a state-dir override does not move.
+        home_sessions = Path(env["HOME"]) / ".rho" / "keeper"
+        home_sessions.mkdir(parents=True, exist_ok=True)
+        (home_sessions / "auth-sessions.txt").write_text(session_line, encoding="utf-8")
         process = subprocess.Popen(
             [str(binary)],
             cwd=ROBOHUB,
@@ -148,14 +151,15 @@ def main() -> int:
             page = get(base, "/applications")
             assert_contains(
                 page,
-                [
-                    "Applications",
-                    "RoboHub Keeper",
-                    "RoboHub Mesh",
-                    "keeper-hosted",
-                    "Install an application",
-                ],
+                ["Applications", "Install an application"],
                 "applications page",
+            )
+            # Rows are fetched into the table by HTMX, not baked into the page.
+            rows = get(base, "/api/applications/rows")
+            assert_contains(
+                rows,
+                ["RoboHub Keeper", "RoboHub Mesh", "keeper-hosted"],
+                "application rows",
             )
 
             plugins = get(base, "/plugins")
@@ -195,7 +199,8 @@ def main() -> int:
                 {"name": "demo", "source": str(demo), "menu": "1"},
             )
             assert_contains(installed, ["demo was installed"], "install")
-            assert_contains(get(base, "/applications"), ["Demo App", "not built"], "installed row")
+            assert_contains(get(base, "/api/applications/rows"),
+                            ["Demo App", "not built"], "installed row")
             assert_contains(get(base, "/"), ["Demo App", "app-open"], "pinned menu entry")
 
             unpinned = post(base, "/applications/menu", {"name": "demo", "pinned": "0"})

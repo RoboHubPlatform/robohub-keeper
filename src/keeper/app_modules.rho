@@ -104,6 +104,9 @@ fn app_module_title(manifest: string, name: string) string {
         title = yaml.value(manifest, "application.title")
     }
     if title == "" {
+        title = yaml.value(manifest, "module.title")
+    }
+    if title == "" {
         title = name
     }
     return title

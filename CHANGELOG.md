@@ -2,6 +2,20 @@
 
 All notable changes to this module are recorded here, one section per release.
 
+## [0.5.6] - 2026-11-08
+
+Reactive application rows, plugin/provider/app-module actions, and the module
+tree use HTMX fragments. English/Romanian UI, parent settings with alert
+overrides, systemd-backed application services, signed host artifact rollout
+with health-check rollback, and one-time node enrollment with a registry,
+credential verification, rotation and revocation.
+
+## [0.5.5] - 2026-11-06
+
+Deploy system: bootstrap script, per-app deploy script, deploy.port/depends
+metadata in module.yml, Update/Restart buttons in web UI, dependency enforcement.
+Fixed keeper session expiry (absolute epoch). Fixed app_start pid recording.
+
 ## [0.5.4] - 2026-11-05
 
 A keeper session now stores an absolute expiry, which is what the generated auth
@@ -82,9 +96,3 @@ configured, and the transport is chosen from what the two boards and
 programming shows the boot-mode instruction and waits for the acknowledgement.
 Long actions stream their output over Server-Sent Events with timestamps and a
 clearable console. Board and driver discovery is entirely runtime.
-
-## [0.5.5] - 2026-11-06
-
-Deploy system: bootstrap script, per-app deploy script, deploy.port/depends
-metadata in module.yml, Update/Restart buttons in web UI, dependency enforcement.
-Fixed keeper session expiry (absolute epoch). Fixed app_start pid recording.

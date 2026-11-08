@@ -6,7 +6,7 @@ module:
   route: /
   port: "8080"
   command: keeper
-  version: 0.5.5
+  version: 0.5.6
   author: Aurel Miron
   maintainer: Aurel Miron
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
