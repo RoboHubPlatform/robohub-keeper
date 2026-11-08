@@ -22,9 +22,9 @@
     <p>Sign in to your RoboHub ecosystem.</p>
     {{{ notice }}}
     <form method="post" action="/auth/login">
-      <input type="hidden" name="return_to" value="{{{ return_to }}}">
-      <input type="hidden" name="audience" value="{{{ audience }}}">
-      <input type="hidden" name="next" value="{{{ next }}}">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <input type="hidden" name="audience" value="{{ audience }}">
+      <input type="hidden" name="next" value="{{ next }}">
       <label class="auth-field">Access token
         <div class="auth-row">
           <input id="auth-token" name="token" type="password" autofocus autocomplete="current-password">

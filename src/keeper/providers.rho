@@ -140,21 +140,17 @@ fn provider_rows_html() string {
             continue
         }
         let name: string = field(line, 0)
-        var status: string = "<span class=\"app-status status-running\">installed</span>"
-        if field(line, 5) == "false" {
-            status = "<span class=\"app-status status-not-built\">missing</span>"
+        var status: string = provider_status(false)
+        if field(line, 5) != "false" {
+            status = provider_status(true)
         }
-        let actions: string = "<form method=\"post\" action=\"/providers/uninstall\" " +
-            "onsubmit=\"return confirm('Remove this provider from the tree?');\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
         out = out + template_fill(template_get("provider-row"),
-            vars("name", escape_html(name)) +
-            vars("contract", escape_html(field(line, 1))) +
-            vars("transport", escape_html(field(line, 2))) +
-            vars("summary", escape_html(field(line, 3))) +
+            vars("name", name) +
+            vars("contract", field(line, 1)) +
+            vars("transport", field(line, 2)) +
+            vars("summary", field(line, 3)) +
             vars("status", status) +
-            vars("actions", actions))
+            vars("actions", template_fill(template_get("provider-actions"), vars("name", name))))
     }
     if out == "" {
         out = "<tr><td colspan=\"6\">No providers were found under providers/.</td></tr>"
@@ -162,14 +158,24 @@ fn provider_rows_html() string {
     return out
 }
 
+fn provider_status(present: bool) string {
+    var tone: string = "not-built"
+    var label: string = "missing"
+    if present {
+        tone = "running"
+        label = "installed"
+    }
+    return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
+}
+
 fn providers_page_message(message: string) Response {
     let notice: string = ""
     if message != "" {
-        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+        notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("providers"),
         vars("notice", notice) + vars("rows", provider_rows_html()) +
-        vars("root", escape_html(provider_root())))
+        vars("root", provider_root()))
     return page("Providers", body)
 }
 

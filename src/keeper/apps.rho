@@ -413,63 +413,49 @@ fn open_link(path: string) string {
 }
 
 fn app_actions(name: string, path: string, origin: string) string {
-    var out: string = open_link(path)
-    if app_kind(path) != "keeper" {
-        if app_running(name, path) {
-            out = out + " <form method=\"post\" action=\"/applications/stop\">" +
-                "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-                "<button type=\"submit\" class=\"quiet\">Stop</button></form>"
-            out = out + " <form method=\"post\" action=\"/applications/restart\">" +
-                "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-                "<button type=\"submit\" class=\"quiet\">Restart</button></form>"
-        } else {
-            out = out + " <form method=\"post\" action=\"/applications/start\">" +
-                "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-                "<button type=\"submit\">Start</button></form>"
-        }
-        out = out + " <form method=\"post\" action=\"/applications/update\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<button type=\"submit\" class=\"quiet\" onclick=\"return confirm('Rebuild and restart " +
-            escape_html(name) + "?');\">Update</button></form>"
+    let hint: string = ""
+    if origin == "bundled" {
+        hint = "Delete this application's folder; a module you clone again is installed again."
+    } else if origin == "external" {
+        hint = "Remove it from the registry; the folder it lives in is left alone."
     }
+    let running: string = ""
+    if app_running(name, path) {
+        running = "true"
+    }
+    let pinned_flag: string = ""
     if pinned(name) {
-        out = out + " <form method=\"post\" action=\"/applications/menu\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<input type=\"hidden\" name=\"pinned\" value=\"0\">" +
-            "<button type=\"submit\" class=\"quiet\">Remove from menu</button></form>"
-    } else {
-        out = out + " <form method=\"post\" action=\"/applications/menu\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<input type=\"hidden\" name=\"pinned\" value=\"1\">" +
-            "<button type=\"submit\" class=\"quiet\">Add to menu</button></form>"
+        pinned_flag = "true"
     }
-    if app_kind(path) != "keeper" {
-        let hint: string = ""
-        if origin == "bundled" {
-            hint = "Delete this application's folder; a module you clone again is installed again."
-        } else if origin == "external" {
-            hint = "Remove it from the registry; the folder it lives in is left alone."
-        }
-        out = out + " <form method=\"post\" action=\"/applications/uninstall\" " +
-            "onsubmit=\"return confirm('Remove this application from the keeper?');\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<input type=\"hidden\" name=\"origin\" value=\"" + escape_html(origin) + "\">" +
-            "<button type=\"submit\" class=\"danger\" title=\"" + escape_html(hint) + "\">Uninstall</button></form>"
+    let is_keeper: string = ""
+    if app_kind(path) == "keeper" {
+        is_keeper = "true"
     }
-    return out
+    return template_fill(template_get("app-actions"),
+        vars("open", open_link(path)) +
+        vars("name", name) +
+        vars("origin", origin) +
+        vars("hint", hint) +
+        vars("running", running) +
+        vars("pinned", pinned_flag) +
+        vars("is_keeper", is_keeper))
+}
+
+fn app_status(tone: string, label: string) string {
+    return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
 
 fn application_status(name: string, path: string) string {
     if app_kind(path) == "keeper" {
-        return "<span class=\"app-status status-running\">this keeper</span>"
+        return app_status("running", "this keeper")
     }
     if !rho_path_exists(app_binary(name, path)) {
-        return "<span class=\"app-status status-not-built\">not built</span>"
+        return app_status("not-built", "not built")
     }
     if app_running(name, path) {
-        return "<span class=\"app-status status-running\">running</span>"
+        return app_status("running", "running")
     }
-    return "<span class=\"app-status status-stopped\">stopped</span>"
+    return app_status("stopped", "stopped")
 }
 
 fn applications_rows() string {
@@ -502,11 +488,11 @@ fn applications_rows() string {
         let path: string = rho_str_slice(tail, 0, u32(tab2))
         let origin: string = rho_str_slice(tail, u32(tab2) + 1, u32(rho_strlen(tail)) - u32(tab2) - 1)
         let row: string = template_fill(template_get("application-row"),
-            vars("name", escape_html(name)) +
-            vars("title", escape_html(app_title(name, path))) +
-            vars("kind", escape_html(app_kind(path))) +
-            vars("version", escape_html(app_version(path))) +
-            vars("path", escape_html(path)) +
+            vars("name", name) +
+            vars("title", app_title(name, path)) +
+            vars("kind", app_kind(path)) +
+            vars("version", app_version(path)) +
+            vars("path", path) +
             vars("status", application_status(name, path)) +
             vars("actions", app_actions(name, path, origin)))
         out = out + row + "\n"
@@ -524,7 +510,7 @@ fn applications_rows_endpoint(req: Request) Response {
 fn applications_page_message(message: string) Response {
     let notice: string = ""
     if message != "" {
-        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+        notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("applications"),
         vars("notice", notice) + vars("rows", applications_rows()))

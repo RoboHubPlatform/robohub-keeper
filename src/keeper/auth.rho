@@ -121,9 +121,9 @@ fn auth_session_valid(req: Request) bool {
 fn auth_login_form(return_to: string, audience: string, next: string, notice: string) Response {
     let body: string = template_fill(template_get("auth-login"),
         vars("notice", notice) +
-        vars("return_to", escape_html(return_to)) +
-        vars("audience", escape_html(audience)) +
-        vars("next", escape_html(next)))
+        vars("return_to", return_to) +
+        vars("audience", audience) +
+        vars("next", next))
     return html(status_ok(), body)
 }
 
@@ -162,7 +162,8 @@ fn auth_login_post(req: Request) Response {
     let supplied: string = auth_clean(form_value(request_body(req), "token"))
     let expected: string = auth_clean(rho_read_text(auth_master_file()))
     if supplied == "" || !rho_str_eq(supplied, expected) {
-        return auth_login_form(return_to, audience, next, "<p class=\"notice\">That token is not the master token.</p>")
+        return auth_login_form(return_to, audience, next,
+            template_fill(template_get("notice"), vars("message", "That token is not the master token.")))
     }
     let sid: string = auth_random()
     let sessions: string = rho_read_text(auth_sessions_file()) + sid + "|" +
@@ -180,15 +181,11 @@ fn auth_login_post(req: Request) Response {
 fn auth_token_render(message: string, token: string) Response {
     let notice: string = ""
     if message != "" {
-        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+        notice = template_fill(template_get("notice"), vars("message", message))
     }
     var token_block: string = ""
     if token != "" {
-        token_block = "<div class=\"notice\"><strong>New access token</strong>" +
-            "<div class=\"auth-token-row\"><input readonly value=\"" +
-            escape_html(token) + "\" id=\"new-access-token\">" +
-            "<button type=\"button\" class=\"quiet\" onclick=\"navigator.clipboard.writeText(document.getElementById('new-access-token').value)\">Copy</button></div>" +
-            "<small>This is shown only now. Store it before leaving the page.</small></div>"
+        token_block = template_fill(template_get("auth-token-block"), vars("token", token))
     }
     let body: string = template_fill(template_get("auth-token"),
         vars("notice", notice) + vars("token_block", token_block))

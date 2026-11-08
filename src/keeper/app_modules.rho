@@ -124,10 +124,7 @@ fn app_module_actions(name: string, location: string, enabled: bool) string {
     // A module can be included by more than one application, so there is no
     // single host to open from here. The registry lists the installed module;
     // the application that uses it serves its routes.
-    return "<form method=\"post\" action=\"/app-modules/uninstall\" " +
-        "onsubmit=\"return confirm('Remove this module and its folder?');\">" +
-        "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-        "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
+    return template_fill(template_get("app-module-actions"), vars("name", name))
 }
 
 fn app_module_rows() string {
@@ -151,10 +148,7 @@ fn app_module_rows() string {
         let enabled: bool = rho_str_eq(field(line, 2), "true")
         let manifest: string = app_module_manifest(name, location)
         var present: bool = rho_path_exists(manifest)
-        var status: string = "<span class=\"app-status status-running\">installed</span>"
-        if !present {
-            status = "<span class=\"app-status status-not-built\">missing</span>"
-        }
+        var status: string = app_module_status(present)
         var title: string = name
         var description: string = "not found on disk"
         var category: string = ""
@@ -169,11 +163,11 @@ fn app_module_rows() string {
             version = yaml.value(manifest, "module.version")
         }
         out = out + template_fill(template_get("app-module-row"),
-            vars("name", escape_html(name)) +
-            vars("title", escape_html(title)) +
-            vars("category", escape_html(category)) +
-            vars("description", escape_html(description)) +
-            vars("version", escape_html(version)) +
+            vars("name", name) +
+            vars("title", title) +
+            vars("category", category) +
+            vars("description", description) +
+            vars("version", version) +
             vars("status", status) +
             vars("actions", app_module_actions(name, location, enabled)))
     }
@@ -183,10 +177,20 @@ fn app_module_rows() string {
     return out
 }
 
+fn app_module_status(present: bool) string {
+    var tone: string = "not-built"
+    var label: string = "missing"
+    if present {
+        tone = "running"
+        label = "installed"
+    }
+    return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
+}
+
 fn app_modules_page_message(message: string) Response {
     let notice: string = ""
     if message != "" {
-        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+        notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("app-modules"),
         vars("notice", notice) + vars("rows", app_module_rows()))

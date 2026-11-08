@@ -46,22 +46,36 @@ targets:
         file: templates/applications.html
       - name: application-row
         file: templates/application-row.html
+      - name: app-actions
+        file: templates/app-actions.html
+      - name: notice
+        file: templates/notice.html
+      - name: status
+        file: templates/status.html
       - name: plugins
         file: templates/plugins.html
       - name: plugin-row
         file: templates/plugin-row.html
+      - name: plugin-actions
+        file: templates/plugin-actions.html
       - name: providers
         file: templates/providers.html
       - name: provider-row
         file: templates/provider-row.html
+      - name: provider-actions
+        file: templates/provider-actions.html
       - name: app-modules
         file: templates/app-modules.html
       - name: app-module-row
         file: templates/app-module-row.html
+      - name: app-module-actions
+        file: templates/app-module-actions.html
       - name: auth-login
         file: templates/auth-login.html
       - name: auth-token
         file: templates/auth-token.html
+      - name: auth-token-block
+        file: templates/auth-token-block.html
     files:
       - path: app.go
         role: implementation

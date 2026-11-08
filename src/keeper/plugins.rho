@@ -42,26 +42,13 @@ fn plugin_state_set(name: string, enabled: string) void {
 }
 
 fn plugin_action_forms(name: string, enabled: bool) string {
-    var out: string = ""
+    var enabled_flag: string = ""
     if enabled {
-        out = out + "<form method=\"post\" action=\"/plugins/toggle\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<input type=\"hidden\" name=\"enabled\" value=\"0\">" +
-            "<button type=\"submit\" class=\"quiet\">Disable</button></form>"
-    } else {
-        out = out + "<form method=\"post\" action=\"/plugins/toggle\">" +
-            "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-            "<input type=\"hidden\" name=\"enabled\" value=\"1\">" +
-            "<button type=\"submit\">Enable</button></form>"
+        enabled_flag = "true"
     }
-    out = out + " <form method=\"post\" action=\"/plugins/test\">" +
-        "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-        "<button type=\"submit\" class=\"quiet\">Send test</button></form>"
-    out = out + " <form method=\"post\" action=\"/plugins/uninstall\" " +
-        "onsubmit=\"return confirm('Remove this plugin from the tree?');\">" +
-        "<input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">" +
-        "<button type=\"submit\" class=\"danger\">Uninstall</button></form>"
-    return out
+    return template_fill(template_get("plugin-actions"),
+        vars("name", name) +
+        vars("enabled", enabled_flag))
 }
 
 fn plugin_rows_html() string {
@@ -83,18 +70,18 @@ fn plugin_rows_html() string {
         }
         let name: string = field(line, 0)
         let enabled: bool = registry_enabled(registry, name)
-        var status: string = "<span class=\"app-status status-stopped\">disabled</span>"
+        var status: string = plugin_status("stopped", "disabled")
         if enabled {
-            status = "<span class=\"app-status status-running\">enabled</span>"
+            status = plugin_status("running", "enabled")
         }
         if field(line, 5) == "false" {
-            status = "<span class=\"app-status status-not-built\">missing</span>"
+            status = plugin_status("not-built", "missing")
         }
         out = out + template_fill(template_get("plugin-row"),
-            vars("name", escape_html(name)) +
-            vars("kind", escape_html(field(line, 1))) +
-            vars("transport", escape_html(field(line, 2))) +
-            vars("summary", escape_html(field(line, 3))) +
+            vars("name", name) +
+            vars("kind", field(line, 1)) +
+            vars("transport", field(line, 2)) +
+            vars("summary", field(line, 3)) +
             vars("status", status) +
             vars("actions", plugin_action_forms(name, enabled)))
     }
@@ -104,14 +91,18 @@ fn plugin_rows_html() string {
     return out
 }
 
+fn plugin_status(tone: string, label: string) string {
+    return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
+}
+
 fn plugins_page_message(message: string) Response {
     let notice: string = ""
     if message != "" {
-        notice = "<p class=\"notice\">" + escape_html(message) + "</p>"
+        notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("plugins"),
         vars("notice", notice) + vars("rows", plugin_rows_html()) +
-        vars("root", escape_html(plugin_root())))
+        vars("root", plugin_root()))
     return page("Plugins", body)
 }
 
