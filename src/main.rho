@@ -4,15 +4,18 @@ module keeper
 
 include "keeper/storage.rho"
 include "keeper/apps_text.rho"
-include "../../../contracts/alert/manager.rho"
+include "forms"
+include "settings"
+include "alert"
 include "keeper/alerts.rho"
 include "keeper/apps.rho"
 include "keeper/plugins.rho"
 include "keeper/providers.rho"
 include "keeper/app_modules.rho"
 include "keeper/auth.rho"
-include "../../../modules/htmx/src/main.rho"
-include "../../../modules/i18n/src/main.rho"
+include "keeper/settings.rho"
+include "htmx"
+include "i18n"
 
 import std.web.http
 import std.web.template
@@ -30,6 +33,8 @@ route GET "/modules" => modules_page
 route GET "/module/{name}" => module_page
 route GET "/install" => install_page
 route GET "/uninstall" => uninstall_page
+route GET "/settings" => keeper_settings_page
+route POST "/settings" => keeper_settings_save
 route GET "/system" => system_page
 route GET "/docs" => docs_page
 route GET "/docs/{path...}" => doc_page
