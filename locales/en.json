@@ -51,5 +51,14 @@
   "app_modules.settings_new_value": "Value",
   "app_modules.settings_no_name": "Name a module to edit.",
   "app_modules.settings_missing": "No such module:",
-  "settings.title": "Application settings"
+  "settings.title": "Application settings",
+  "page.nodes": "Enrolled nodes",
+  "nodes.intro": "Identities issued by Keeper through one-time enrollment.",
+  "nodes.device": "Device",
+  "nodes.project": "Project",
+  "nodes.area": "Area",
+  "nodes.node": "Node",
+  "nodes.created": "Created",
+  "nodes.rotate": "Rotate",
+  "nodes.revoke": "Revoke"
 }

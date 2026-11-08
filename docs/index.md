@@ -173,3 +173,24 @@ The node generates its instance UUID and Ed25519 key locally, posts the public
 key and token to `POST /api/enroll`, and stores the issued credential as a
 `0600` file. Keeper keeps the node record under `~/.rho/keeper/nodes/` and marks
 the token used. A reused or expired token is refused.
+
+## Enrolled node registry
+
+`/nodes` lists identities Keeper has issued. Each record can be rotated or
+revoked. A gateway or firmware calls:
+
+```text
+POST /api/nodes/verify
+device_id=<device>&credential=<credential>
+```
+
+and receives the registered project/area/node, or `403` for an unknown or
+revoked node. This endpoint is public because the credential authenticates it.
+
+Revocation removes the record, so the next verification fails. Rotation issues a
+new credential and the node must fetch or accept it; the firmware path that
+updates the local credential is still hardware-side work.
+
+The remaining firmware-level provisioning work is documented in the
+`rho-bootstrap` component: NVS identity, flash encryption, enrollment transport,
+factory reset, credential refresh, and secure-element limitations.

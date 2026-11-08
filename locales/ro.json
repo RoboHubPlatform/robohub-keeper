@@ -51,5 +51,14 @@
   "app_modules.settings_new_value": "Valoare",
   "app_modules.settings_no_name": "Numiți un modul de editat.",
   "app_modules.settings_missing": "Modul inexistent:",
-  "settings.title": "Setări aplicație"
+  "settings.title": "Setări aplicație",
+  "page.nodes": "Noduri înrolate",
+  "nodes.intro": "Identități emise de Keeper prin înrolare unică.",
+  "nodes.device": "Dispozitiv",
+  "nodes.project": "Proiect",
+  "nodes.area": "Zonă",
+  "nodes.node": "Nod",
+  "nodes.created": "Creat",
+  "nodes.rotate": "Rotește",
+  "nodes.revoke": "Revocă"
 }

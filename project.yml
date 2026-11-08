@@ -27,7 +27,7 @@ targets:
           mode: direct
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
-          skip_paths: /auth/login,/api/enroll,/i18n,/healthz,/assets,/assets/,/static
+          skip_paths: /auth/login,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
           scheme: auto
     default_locale: en
     locales:
@@ -48,6 +48,10 @@ targets:
         file: templates/pages/settings.html
       - name: module-settings
         file: templates/pages/module-settings.html
+      - name: nodes
+        file: templates/pages/nodes.html
+      - name: node-row
+        file: templates/rows/node-row.html
       - name: modules
         file: templates/pages/modules.html
       - name: docs

@@ -1,0 +1,128 @@
+module keeper.nodes
+
+// Enrolled node identities: the record Keeper issued, and the actions an
+// operator can take on it. A credential is checked by /api/nodes/verify; the
+// gateway/firmware side is what must call that for every node frame.
+
+fn node_dir() string {
+    return keeper_state_dir() + "/nodes"
+}
+
+fn node_path(device: string) string {
+    return node_dir() + "/" + device + ".txt"
+}
+
+fn node_record(device: string) string {
+    let path: string = node_path(device)
+    if !rho_path_exists(path) {
+        return ""
+    }
+    return rho_read_text(path)
+}
+
+fn node_status(device: string) string {
+    if rho_path_exists(node_path(device)) {
+        return template_fill(template_get("status"),
+            vars("__locale", "en") + vars("tone", "running") + vars("label", "enrolled"))
+    }
+    return template_fill(template_get("status"),
+        vars("__locale", "en") + vars("tone", "not-built") + vars("label", "revoked"))
+}
+
+fn node_rows() string {
+    let report: string = apps_report("node-list")
+    ignore_u32(rho_exec("ls", node_dir(), report))
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var file: string = rest
+        if at < 0 { rest = "" } else {
+            file = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if file == "" || rho_str_index_of(file, ".txt") < 0 {
+            continue
+        }
+        let device: string = rho_str_slice(file, 0, u32(rho_strlen(file)) - 4)
+        let record: string = node_record(device)
+        if record == "" {
+            continue
+        }
+        out = out + template_fill(template_get("node-row"),
+            vars("device", device) +
+            vars("project", field(record, 2)) +
+            vars("area", field(record, 3)) +
+            vars("node", field(record, 4)) +
+            vars("created", field(record, 6)) +
+            vars("status", node_status(device)))
+    }
+    if out == "" {
+        out = "<tr><td colspan=\"6\">No enrolled nodes.</td></tr>"
+    }
+    return out
+}
+
+fn keeper_nodes_page_message(req: Request, message: string) Response {
+    var notice: string = ""
+    if message != "" {
+        notice = template_fill(template_get("notice"),
+            vars("message", message))
+    }
+    let body: string = template_fill(template_get("nodes"),
+        i18n_vars(req) + vars("notice", notice) + vars("rows", node_rows()))
+    return page(req, i18n_t(req, "page.nodes"), body)
+}
+
+fn keeper_nodes_page(req: Request) Response {
+    return keeper_nodes_page_message(req, "")
+}
+
+fn keeper_nodes_revoke(req: Request) Response {
+    let body: string = request_body(req)
+    let device: string = trim(form_value(body, "device"))
+    if device != "" {
+        ignore_u32(rho_exec("rm", "-f " + node_path(device), apps_report("node-revoke")))
+        info("keeper", "revoked node " + device)
+    }
+    return keeper_nodes_page_message(req, "Node " + device + " was revoked.")
+}
+
+fn keeper_nodes_rotate(req: Request) Response {
+    let body: string = request_body(req)
+    let device: string = trim(form_value(body, "device"))
+    let record: string = node_record(device)
+    if record == "" {
+        return keeper_nodes_page_message(req, "Node " + device + " is not enrolled.")
+    }
+    let report: string = apps_report("node-rotate")
+    if rho_exec("openssl", "rand -hex 32", report) != 0 {
+        return keeper_nodes_page_message(req, "Could not generate a new credential.")
+    }
+    let credential: string = first_line(rho_read_text(report))
+    let updated: string = field(record, 0) + "|" + field(record, 1) + "|" + field(record, 2) +
+        "|" + field(record, 3) + "|" + field(record, 4) + "|" + credential +
+        "|" + field(record, 6) + "\n"
+    ignore_bool(rho_write_text(node_path(device), updated))
+    ignore_u32(rho_exec("chmod", "600 " + node_path(device), apps_report("node-chmod")))
+    info("keeper", "rotated credential for node " + device)
+    return keeper_nodes_page_message(req, "New credential for " + device + ": " + credential)
+}
+
+// keeper_node_verify is the contract a gateway or firmware calls before it
+// accepts a node frame. It is authenticated by the credential itself.
+fn keeper_node_verify(req: Request) Response {
+    let body: string = request_body(req)
+    let device: string = trim(form_value(body, "device_id"))
+    let credential: string = trim(form_value(body, "credential"))
+    let record: string = node_record(device)
+    if record == "" || field(record, 5) != credential {
+        return Response{ 403, "{\"ok\":false,\"error\":\"unknown node or credential\"}", "application/json", "" }
+    }
+    return Response{ 200,
+        "{\"ok\":true,\"device_id\":" + json_string(device) +
+        ",\"project\":" + json_string(field(record, 2)) +
+        ",\"area\":" + field(record, 3) +
+        ",\"node\":" + field(record, 4) + "}",
+        "application/json", "" }
+}

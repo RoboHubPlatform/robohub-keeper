@@ -401,6 +401,7 @@ fn keeper_nav(req: Request) string {
         "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>" + i18n_t(req, "nav.plugins") + "</a></li>" +
         "<li><a href=\"/providers\"><span class=\"ico\">◇</span>" + i18n_t(req, "nav.providers") + "</a></li>" +
         "</ul></li>"
+    out = out + "<li><a href=\"/nodes\" data-nav=\"nodes\"><span class=\"ico\">◉</span>" + i18n_t(req, "page.nodes") + "</a></li>"
     out = out + "<li><a href=\"/auth/token\" data-nav=\"auth\"><span class=\"ico\">⚿</span>" + i18n_t(req, "nav.access_token") + "</a></li>"
     out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>" + i18n_t(req, "nav.docs") + "</a></li>"
     out = out + "<li><a href=\"/settings\" data-nav=\"settings\"><span class=\"ico\">⚙</span>" + i18n_t(req, "nav.settings") + "</a></li>"

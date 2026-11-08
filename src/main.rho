@@ -16,6 +16,7 @@ include "keeper/module_settings.rho"
 include "keeper/auth.rho"
 include "keeper/settings.rho"
 include "keeper/enrollment.rho"
+include "keeper/nodes.rho"
 include "htmx"
 include "i18n"
 
@@ -36,6 +37,10 @@ route GET "/module/{name}" => module_page
 route GET "/install" => install_page
 route GET "/uninstall" => uninstall_page
 route POST "/api/enroll" => keeper_enroll
+route POST "/api/nodes/verify" => keeper_node_verify
+route GET "/nodes" => keeper_nodes_page
+route POST "/nodes/revoke" => keeper_nodes_revoke
+route POST "/nodes/rotate" => keeper_nodes_rotate
 route GET "/settings" => keeper_settings_page
 route POST "/settings" => keeper_settings_save
 route GET "/system" => system_page

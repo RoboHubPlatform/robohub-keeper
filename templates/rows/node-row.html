@@ -1,0 +1,8 @@
+<tr>
+  <td><strong>{{ device }}</strong></td>
+  <td>{{ project }}</td>
+  <td>{{ area }}</td>
+  <td>{{ node }}</td>
+  <td>{{ created }}</td>
+  <td><div class="app-actions">{{{ status }}}<form method="post" action="/nodes/rotate"><input type="hidden" name="device" value="{{ device }}"><button type="submit" class="quiet">{{t "nodes.rotate"}}</button></form><form method="post" action="/nodes/revoke" onsubmit="return confirm('Revoke {{ device }}?');"><input type="hidden" name="device" value="{{ device }}"><button type="submit" class="danger">{{t "nodes.revoke"}}</button></form></div></td>
+</tr>
