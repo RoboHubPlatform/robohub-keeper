@@ -123,34 +123,54 @@ fn provider_db_add(root: string, name: string) bool {
     return rho_write_text(path, out)
 }
 
-fn provider_rows_html() string {
-    var out: string = ""
+fn provider_row_line(line: string) string {
+    let name: string = field(line, 0)
+    var status: string = provider_status(false)
+    if field(line, 5) != "false" {
+        status = provider_status(true)
+    }
+    return template_fill(template_get("provider-row"),
+        vars("name", name) +
+        vars("contract", field(line, 1)) +
+        vars("transport", field(line, 2)) +
+        vars("summary", field(line, 3)) +
+        vars("status", status) +
+        vars("actions", template_fill(template_get("provider-actions"), vars("name", name))))
+}
+
+fn provider_row_html(name: string) string {
     var rest: string = provider_rows(provider_root())
     while rho_strlen(rest) > 0 {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = rest
         if at < 0 {
-            line = rest
             rest = ""
         } else {
             line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if line == "" {
-            continue
+        if field(line, 0) == name {
+            return provider_row_line(line)
         }
-        let name: string = field(line, 0)
-        var status: string = provider_status(false)
-        if field(line, 5) != "false" {
-            status = provider_status(true)
+    }
+    return ""
+}
+
+fn provider_rows_html() string {
+    var out: string = ""
+    var rest: string = provider_rows(provider_root())
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        out = out + template_fill(template_get("provider-row"),
-            vars("name", name) +
-            vars("contract", field(line, 1)) +
-            vars("transport", field(line, 2)) +
-            vars("summary", field(line, 3)) +
-            vars("status", status) +
-            vars("actions", template_fill(template_get("provider-actions"), vars("name", name))))
+        if line != "" {
+            out = out + provider_row_line(line)
+        }
     }
     if out == "" {
         out = "<tr><td colspan=\"6\">No providers were found under providers/.</td></tr>"
@@ -235,5 +255,8 @@ fn providers_uninstall(req: Request) Response {
     ignore_bool(plugin_db_remove(provider_root(), name))
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-provider-" + name)))
     info("keeper", "uninstalled provider " + name)
+    if htmx_is_request(req) {
+        return html(status_ok(), "")
+    }
     return providers_page_message(name + " was uninstalled.")
 }

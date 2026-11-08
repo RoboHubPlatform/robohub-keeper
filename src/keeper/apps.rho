@@ -458,6 +458,17 @@ fn application_status(name: string, path: string) string {
     return app_status("stopped", "stopped")
 }
 
+fn application_row_html(name: string, path: string, origin: string) string {
+    return template_fill(template_get("application-row"),
+        vars("name", name) +
+        vars("title", app_title(name, path)) +
+        vars("kind", app_kind(path)) +
+        vars("version", app_version(path)) +
+        vars("path", path) +
+        vars("status", application_status(name, path)) +
+        vars("actions", app_actions(name, path, origin)))
+}
+
 fn applications_rows() string {
     let records: string = application_records()
     var out: string = ""
@@ -487,15 +498,7 @@ fn applications_rows() string {
         }
         let path: string = rho_str_slice(tail, 0, u32(tab2))
         let origin: string = rho_str_slice(tail, u32(tab2) + 1, u32(rho_strlen(tail)) - u32(tab2) - 1)
-        let row: string = template_fill(template_get("application-row"),
-            vars("name", name) +
-            vars("title", app_title(name, path)) +
-            vars("kind", app_kind(path)) +
-            vars("version", app_version(path)) +
-            vars("path", path) +
-            vars("status", application_status(name, path)) +
-            vars("actions", app_actions(name, path, origin)))
-        out = out + row + "\n"
+        out = out + application_row_html(name, path, origin) + "\n"
     }
     if out == "" {
         out = "<tr><td colspan=\"6\">No applications declare an <code>application</code> block yet.</td></tr>"
@@ -538,10 +541,16 @@ fn applications_menu(req: Request) Response {
     if wanted == "0" {
         unpin(name)
         info("keeper", "removed " + name + " from the keeper menu")
+        if htmx_is_request(req) {
+            return application_row_response(name)
+        }
         return applications_page_message(name + " is no longer in the keeper menu.")
     }
     pin(name)
     info("keeper", "added " + name + " to the keeper menu")
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
     return applications_page_message(name + " was added to the keeper menu.")
 }
 
@@ -684,16 +693,33 @@ fn app_restart(name: string, path: string) string {
     return app_start(name)
 }
 
+fn application_row_response(name: string) Response {
+    let path: string = app_path(name)
+    if path == "" {
+        return html(status_ok(), "")
+    }
+    let origin: string = record_origin(application_records(), name)
+    return html(status_ok(), application_row_html(name, path, origin))
+}
+
 fn applications_start(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    return applications_page_message(app_start(name))
+    let message: string = app_start(name)
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
+    return applications_page_message(message)
 }
 
 fn applications_stop(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    return applications_page_message(app_stop(name))
+    let message: string = app_stop(name)
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
+    return applications_page_message(message)
 }
 
 fn applications_update(req: Request) Response {
@@ -703,6 +729,9 @@ fn applications_update(req: Request) Response {
     let path: string = app_path(name)
     if path == "" { return applications_page_message("Unknown application") }
     let result: string = app_update(name, path)
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
     if rho_str_index_of(result, "build failed:") >= 0 {
         return applications_page_message(escape_html(result))
     }
@@ -716,6 +745,9 @@ fn applications_restart(req: Request) Response {
     let path: string = app_path(name)
     if path == "" { return applications_page_message("Unknown application") }
     let result: string = app_restart(name, path)
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
     return applications_page_message("Restarted " + escape_html(name))
 }
 
@@ -735,15 +767,24 @@ fn applications_uninstall(req: Request) Response {
     if origin == "external" {
         unregister_external(name)
         info("keeper", "unregistered application " + name)
+        if htmx_is_request(req) {
+            return html(status_ok(), "")
+        }
         return applications_page_message(name + " was removed from the registry.")
     }
     let dir: string = applications_dir()
     if rho_str_index_of(path, dir + "/") != 0 {
         unregister_external(name)
+        if htmx_is_request(req) {
+            return html(status_ok(), "")
+        }
         return applications_page_message(name + " was removed from the registry.")
     }
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(path), apps_report("uninstall-" + name)))
     info("keeper", "uninstalled application " + name)
+    if htmx_is_request(req) {
+        return html(status_ok(), "")
+    }
     return applications_page_message(name + " was uninstalled.")
 }
 

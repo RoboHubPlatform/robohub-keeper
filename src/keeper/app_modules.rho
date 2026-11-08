@@ -127,49 +127,68 @@ fn app_module_actions(name: string, location: string, enabled: bool) string {
     return template_fill(template_get("app-module-actions"), vars("name", name))
 }
 
-fn app_module_rows() string {
-    var out: string = ""
+fn app_module_row_line(line: string) string {
+    let name: string = field(line, 0)
+    let location: string = field(line, 1)
+    let enabled: bool = rho_str_eq(field(line, 2), "true")
+    let manifest: string = app_module_manifest(name, location)
+    let present: bool = rho_path_exists(manifest)
+    var title: string = name
+    var description: string = "not found on disk"
+    var category: string = ""
+    var version: string = ""
+    if present {
+        title = app_module_title(manifest, name)
+        description = app_module_description(manifest)
+        category = yaml.value(manifest, "module.category")
+        if category == "" {
+            category = yaml.value(manifest, "module_app.category")
+        }
+        version = yaml.value(manifest, "module.version")
+    }
+    return template_fill(template_get("app-module-row"),
+        vars("name", name) +
+        vars("title", title) +
+        vars("category", category) +
+        vars("description", description) +
+        vars("version", version) +
+        vars("status", app_module_status(present)) +
+        vars("actions", app_module_actions(name, location, enabled)))
+}
+
+fn app_module_row_html(name: string) string {
     var rest: string = app_module_entries()
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = rest
         if at < 0 {
-            line = rest
             rest = ""
         } else {
             line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if line == "" {
-            continue
+        if field(line, 0) == name {
+            return app_module_row_line(line)
         }
-        let name: string = field(line, 0)
-        let location: string = field(line, 1)
-        let enabled: bool = rho_str_eq(field(line, 2), "true")
-        let manifest: string = app_module_manifest(name, location)
-        var present: bool = rho_path_exists(manifest)
-        var status: string = app_module_status(present)
-        var title: string = name
-        var description: string = "not found on disk"
-        var category: string = ""
-        var version: string = ""
-        if present {
-            title = app_module_title(manifest, name)
-            description = app_module_description(manifest)
-            category = yaml.value(manifest, "module.category")
-            if category == "" {
-                category = yaml.value(manifest, "module_app.category")
-            }
-            version = yaml.value(manifest, "module.version")
+    }
+    return ""
+}
+
+fn app_module_rows() string {
+    var out: string = ""
+    var rest: string = app_module_entries()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        out = out + template_fill(template_get("app-module-row"),
-            vars("name", name) +
-            vars("title", title) +
-            vars("category", category) +
-            vars("description", description) +
-            vars("version", version) +
-            vars("status", status) +
-            vars("actions", app_module_actions(name, location, enabled)))
+        if line != "" {
+            out = out + app_module_row_line(line)
+        }
     }
     if out == "" {
         out = "<tr><td colspan=\"7\">No modules were found under modules/.</td></tr>"
@@ -271,5 +290,8 @@ fn app_modules_uninstall(req: Request) Response {
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
         apps_report("uninstall-module-" + name)))
     info("keeper", "uninstalled module " + name)
+    if htmx_is_request(req) {
+        return html(status_ok(), "")
+    }
     return app_modules_page_message(name + " was uninstalled.")
 }

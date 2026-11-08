@@ -51,39 +51,58 @@ fn plugin_action_forms(name: string, enabled: bool) string {
         vars("enabled", enabled_flag))
 }
 
-fn plugin_rows_html() string {
-    let registry: string = keeper_registry()
-    var out: string = ""
+fn plugin_row_line(line: string) string {
+    let name: string = field(line, 0)
+    let enabled: bool = registry_enabled(keeper_registry(), name)
+    var status: string = plugin_status("stopped", "disabled")
+    if enabled {
+        status = plugin_status("running", "enabled")
+    }
+    if field(line, 5) == "false" {
+        status = plugin_status("not-built", "missing")
+    }
+    return template_fill(template_get("plugin-row"),
+        vars("name", name) +
+        vars("kind", field(line, 1)) +
+        vars("transport", field(line, 2)) +
+        vars("summary", field(line, 3)) +
+        vars("status", status) +
+        vars("actions", plugin_action_forms(name, enabled)))
+}
+
+fn plugin_row_html(name: string) string {
     var rest: string = plugin_rows(plugin_root())
     while rho_strlen(rest) > 0 {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = rest
         if at < 0 {
-            line = rest
             rest = ""
         } else {
             line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if line == "" {
-            continue
+        if field(line, 0) == name {
+            return plugin_row_line(line)
         }
-        let name: string = field(line, 0)
-        let enabled: bool = registry_enabled(registry, name)
-        var status: string = plugin_status("stopped", "disabled")
-        if enabled {
-            status = plugin_status("running", "enabled")
+    }
+    return ""
+}
+
+fn plugin_rows_html() string {
+    var out: string = ""
+    var rest: string = plugin_rows(plugin_root())
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if field(line, 5) == "false" {
-            status = plugin_status("not-built", "missing")
+        if line != "" {
+            out = out + plugin_row_line(line)
         }
-        out = out + template_fill(template_get("plugin-row"),
-            vars("name", name) +
-            vars("kind", field(line, 1)) +
-            vars("transport", field(line, 2)) +
-            vars("summary", field(line, 3)) +
-            vars("status", status) +
-            vars("actions", plugin_action_forms(name, enabled)))
     }
     if out == "" {
         out = "<tr><td colspan=\"6\">No plugins were found under plugins/.</td></tr>"
@@ -120,9 +139,15 @@ fn plugins_toggle(req: Request) Response {
     plugin_state_set(name, enabled)
     if enabled == "0" {
         info("keeper", "disabled plugin " + name)
+        if htmx_is_request(req) {
+            return html(status_ok(), plugin_row_html(name))
+        }
         return plugins_page_message(name + " is disabled for the keeper.")
     }
     info("keeper", "enabled plugin " + name)
+    if htmx_is_request(req) {
+        return html(status_ok(), plugin_row_html(name))
+    }
     return plugins_page_message(name + " is enabled for the keeper.")
 }
 
@@ -139,6 +164,9 @@ fn plugins_test(req: Request) Response {
             " was not delivered. Its settings or its provider are incomplete.")
     }
     info("keeper", "sent a test alert through " + name)
+    if htmx_is_request(req) {
+        return html(status_ok(), plugin_row_html(name))
+    }
     return plugins_page_message("The test alert was handed to " + name + ".")
 }
 
@@ -220,5 +248,8 @@ fn plugins_uninstall(req: Request) Response {
     ignore_bool(plugin_db_remove(plugin_root(), name))
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-plugin-" + name)))
     info("keeper", "uninstalled plugin " + name)
+    if htmx_is_request(req) {
+        return html(status_ok(), "")
+    }
     return plugins_page_message(name + " was uninstalled.")
 }

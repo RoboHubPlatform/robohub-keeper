@@ -1,20 +1,20 @@
 {{{ open }}}
 {{#unless is_keeper}}
   {{#if running}}
-  <form method="post" action="/applications/stop"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet">Stop</button></form>
-  <form method="post" action="/applications/restart"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet">Restart</button></form>
+  <form method="post" action="/applications/stop" hx-post="/applications/stop" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet">Stop</button></form>
+  <form method="post" action="/applications/restart" hx-post="/applications/restart" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet">Restart</button></form>
   {{/if}}
   {{#unless running}}
-  <form method="post" action="/applications/start"><input type="hidden" name="name" value="{{ name }}"><button type="submit">Start</button></form>
+  <form method="post" action="/applications/start" hx-post="/applications/start" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit">Start</button></form>
   {{/unless}}
-  <form method="post" action="/applications/update"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet" onclick="return confirm('Rebuild and restart {{ name }}?');">Update</button></form>
+  <form method="post" action="/applications/update" hx-post="/applications/update" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet" hx-confirm="Rebuild and restart {{ name }}?">Update</button></form>
 {{/unless}}
 {{#if pinned}}
-<form method="post" action="/applications/menu"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="pinned" value="0"><button type="submit" class="quiet">Remove from menu</button></form>
+<form method="post" action="/applications/menu" hx-post="/applications/menu" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="pinned" value="0"><button type="submit" class="quiet">Remove from menu</button></form>
 {{/if}}
 {{#unless pinned}}
-<form method="post" action="/applications/menu"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="pinned" value="1"><button type="submit" class="quiet">Add to menu</button></form>
+<form method="post" action="/applications/menu" hx-post="/applications/menu" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="pinned" value="1"><button type="submit" class="quiet">Add to menu</button></form>
 {{/unless}}
 {{#unless is_keeper}}
-<form method="post" action="/applications/uninstall" onsubmit="return confirm('Remove this application from the keeper?');"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="origin" value="{{ origin }}"><button type="submit" class="danger" title="{{ hint }}">Uninstall</button></form>
+<form method="post" action="/applications/uninstall" hx-post="/applications/uninstall" hx-target="closest tr" hx-swap="outerHTML" hx-confirm="Remove this application from the keeper?"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="origin" value="{{ origin }}"><button type="submit" class="danger" title="{{ hint }}">Uninstall</button></form>
 {{/unless}}
