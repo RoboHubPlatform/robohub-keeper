@@ -11,6 +11,7 @@ include "keeper/plugins.rho"
 include "keeper/providers.rho"
 include "keeper/app_modules.rho"
 include "keeper/auth.rho"
+include "../../../modules/htmx/src/main.rho"
 
 import std.web.http
 import std.web.template

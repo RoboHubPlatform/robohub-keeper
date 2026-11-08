@@ -27,7 +27,7 @@ targets:
           mode: direct
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
-          skip_paths: /auth/login,/healthz,/static
+          skip_paths: /auth/login,/healthz,/assets,/assets/,/static
           scheme: auto
     templates:
       - name: layout
