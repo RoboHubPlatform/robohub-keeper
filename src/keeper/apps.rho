@@ -291,6 +291,45 @@ fn app_running(name: string, path: string) bool {
     return port_answers(app_port(path), app_route(path))
 }
 
+fn app_unit_path(name: string) string {
+    let home: string = getenv("HOME")
+    return home + "/.config/systemd/user/" + name + ".service"
+}
+
+fn app_has_unit(name: string) bool {
+    return rho_path_exists(app_unit_path(name))
+}
+
+fn app_systemctl(verb: string, name: string) u32 {
+    return rho_exec("systemctl", "--user " + verb + " " + name,
+        apps_report("systemctl-" + verb + "-" + name))
+}
+
+fn app_remove_unit(name: string) void {
+    if !app_has_unit(name) {
+        return
+    }
+    ignore_u32(app_systemctl("disable", name))
+    ignore_u32(app_systemctl("stop", name))
+    ignore_u32(rho_exec("rm", "-f " + arg_quote(app_unit_path(name)),
+        apps_report("remove-unit-" + name)))
+    ignore_u32(rho_exec("systemctl", "--user daemon-reload",
+        apps_report("daemon-reload-" + name)))
+}
+
+fn app_deploy_service(name: string, path: string) string {
+    let script: string = robohub_root() + "/scripts/deploy-app.sh"
+    if !rho_path_exists(script) {
+        return "its deploy script is missing"
+    }
+    let log: string = apps_report("deploy-" + name)
+    let code: u32 = rho_exec("bash", script + " " + arg_quote(name) + " " + arg_quote(path), log)
+    if code != 0 {
+        return "its service did not start; see " + log
+    }
+    return ""
+}
+
 fn pinned(name: string) bool {
     return line_in_list(rho_read_text(menu_state_file()), name)
 }
@@ -618,6 +657,16 @@ fn app_start(name: string) string {
     if port_answers(port, app_route(path)) {
         return name + " is already running on port " + port + "."
     }
+    if app_has_unit(name) {
+        let code: u32 = app_systemctl("start", name)
+        if code != 0 {
+            ignore_u32(keeper_alert("ERROR", "Application " + name + " could not start",
+                "app=" + name))
+            return "Could not start " + name + ". See " + apps_report("systemctl-start-" + name) + "."
+        }
+        info("keeper", "started application " + name + " through systemd")
+        return name + " is starting on port " + port + "."
+    }
     ignore_u32(rho_exec("mkdir", "-p " + path + "/build", apps_report("mkdir-app")))
     // The paths after `cd` are relative to the application folder, not to the
     // keeper's own working directory. The workspace is captured before the
@@ -654,6 +703,14 @@ fn app_stop(name: string) string {
     if app_kind(path) == "keeper" {
         return "The keeper cannot stop itself."
     }
+    if app_has_unit(name) {
+        let code: u32 = app_systemctl("stop", name)
+        if code != 0 {
+            return "Could not stop " + name + ". See " + apps_report("systemctl-stop-" + name) + "."
+        }
+        info("keeper", "stopped application " + name + " through systemd")
+        return name + " was stopped."
+    }
     let pid: string = first_line(rho_read_text(path + "/build/app.pid"))
     if pid == "" {
         return name + " has no pid; start it from this page so the keeper can stop it."
@@ -689,6 +746,14 @@ fn app_update(name: string, path: string) string {
 
 // app_restart stops and starts the application without rebuilding.
 fn app_restart(name: string, path: string) string {
+    if app_has_unit(name) {
+        let code: u32 = app_systemctl("restart", name)
+        if code != 0 {
+            return "Could not restart " + name + ". See " + apps_report("systemctl-restart-" + name) + "."
+        }
+        info("keeper", "restarted application " + name + " through systemd")
+        return name + " was restarted."
+    }
     ignore_string(app_stop(name))
     return app_start(name)
 }
@@ -763,6 +828,7 @@ fn applications_uninstall(req: Request) Response {
     }
     let origin: string = record_origin(application_records(), name)
     ignore_string(app_stop(name))
+    app_remove_unit(name)
     unpin(name)
     if origin == "external" {
         unregister_external(name)
@@ -846,6 +912,10 @@ fn applications_install(req: Request) Response {
     if add_to_menu == "1" {
         pin(name)
     }
+    let deploy_error: string = app_deploy_service(name, path)
+    if deploy_error != "" {
+        return applications_page_message(req, name + " was installed, but " + deploy_error + ".")
+    }
     info("keeper", "installed application " + name + " from " + source)
-    return applications_page_message(req, name + " was installed. Build it with: rho build " + path)
+    return applications_page_message(req, name + " was installed and its service started.")
 }
