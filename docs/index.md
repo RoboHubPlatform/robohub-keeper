@@ -134,3 +134,16 @@ token, opens a keeper session, and mints a short-lived ES256 ticket for the
 requesting application. The admin UI is behind that session. Tickets are
 verified by the application with Keeper's public key; a ticket carries the
 application audience, redirect URI, one-use id and a 30-second lifetime.
+
+## Artifact updates
+
+A signed artifact placed in `~/.rho/keeper/incoming/` is used by **Update** when
+it is the newest file for that application. Keeper verifies it, extracts it to
+`~/.rho/keeper/artifacts/<name>/<version>/`, points `build/<command>` at the new
+entrypoint, restarts the service, and checks its health endpoint. A failed
+health check restores the previous target and restarts again.
+
+Set `ROBOHUB_ARTIFACT_PUBKEY` to the base64 Ed25519 public key that must sign
+artifacts. Checksum-only verification is available for a development machine by
+setting `ROBOHUB_ARTIFACT_ALLOW_UNSIGNED=1`, but a production keeper should pin a
+key.

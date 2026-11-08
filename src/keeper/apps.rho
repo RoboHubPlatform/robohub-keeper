@@ -736,8 +736,178 @@ fn app_build(name: string, path: string) string {
     return rho_read_text(report)
 }
 
+fn app_artifact_ends_with(value: string, suffix: string) bool {
+    let length: u32 = u32(rho_strlen(suffix))
+    if length == 0 { return true }
+    if u32(rho_strlen(value)) < length { return false }
+    return rho_str_eq(rho_str_slice(value, u32(rho_strlen(value)) - length, length), suffix)
+}
+
+fn app_artifact_dir(name: string) string {
+    return keeper_state_dir() + "/artifacts/" + name
+}
+
+fn app_artifact_incoming_dir() string {
+    return keeper_state_dir() + "/incoming"
+}
+
+fn app_artifact_value(text: string, key: string) string {
+    let prefix: string = key + "="
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_index_of(line, prefix) == 0 {
+            return rho_str_slice(line, u32(rho_strlen(prefix)),
+                u32(rho_strlen(line)) - u32(rho_strlen(prefix)))
+        }
+    }
+    return ""
+}
+
+// app_artifact_incoming finds the newest staged archive for an application.
+fn app_artifact_incoming(name: string) string {
+    let report: string = apps_report("incoming-" + name)
+    ignore_u32(rho_exec("ls", "-t " + app_artifact_incoming_dir(), report))
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_index_of(line, name + "-") == 0 || rho_str_eq(line, name + ".tar.gz") {
+            return app_artifact_incoming_dir() + "/" + line
+        }
+    }
+    return ""
+}
+
+fn app_artifact_verify(archive: string) u32 {
+    let report: string = apps_report("artifact-verify")
+    let key: string = getenv("ROBOHUB_ARTIFACT_PUBKEY")
+    if key != "" {
+        return rho_exec("rho", "artifact verify -pub " + arg_quote(key) + " " + arg_quote(archive), report)
+    }
+    // Checksum verification is always performed. Signature verification needs
+    // the build key a deployment trusts; without it an unsigned artifact is
+    // accepted only when the operator explicitly allows it.
+    if rho_str_eq(getenv("ROBOHUB_ARTIFACT_ALLOW_UNSIGNED"), "1") {
+        return rho_exec("rho", "artifact verify -allow-unsigned " + arg_quote(archive), report)
+    }
+    return rho_exec("rho", "artifact verify " + arg_quote(archive), report)
+}
+
+fn app_artifact_link(binary: string, target: string) void {
+    let next: string = binary + ".next"
+    ignore_u32(rho_exec("ln", "-sfn " + arg_quote(target) + " " + arg_quote(next),
+        apps_report("artifact-link")))
+    ignore_u32(rho_exec("mv", "-Tf " + arg_quote(next) + " " + arg_quote(binary),
+        apps_report("artifact-swap")))
+}
+
+// app_update_artifact stages and swaps a signed artifact. "ok" means installed,
+// "" means no artifact was staged, and anything else is the failure message.
+fn app_update_artifact(name: string, path: string) string {
+    let archive: string = app_artifact_incoming(name)
+    if archive == "" {
+        return ""
+    }
+    if app_artifact_verify(archive) != 0 {
+        return "artifact verification failed; see " + apps_report("artifact-verify")
+    }
+    let inspectReport: string = apps_report("artifact-inspect")
+    ignore_u32(rho_exec("rho", "artifact inspect " + arg_quote(archive), inspectReport))
+    let inspected: string = rho_read_text(inspectReport)
+    let version: string = app_artifact_value(inspected, "version")
+    let entrypoint: string = app_artifact_value(inspected, "entrypoint")
+    let service: string = app_artifact_value(inspected, "service")
+    let health: string = app_artifact_value(inspected, "health")
+    if version == "" || entrypoint == "" {
+        return "artifact has no version or entrypoint"
+    }
+    if service != "" && !rho_str_eq(service, name) {
+        return "artifact is for service " + service + ", not " + name
+    }
+    let destination: string = app_artifact_dir(name) + "/" + version
+    ignore_u32(rho_exec("mkdir", "-p " + arg_quote(destination), apps_report("artifact-mkdir")))
+    let extractReport: string = apps_report("artifact-extract")
+    let extractArgs: string = "artifact verify -extract " + arg_quote(destination) + " "
+    let pub: string = getenv("ROBOHUB_ARTIFACT_PUBKEY")
+    if pub != "" {
+        extractArgs = extractArgs + "-pub " + arg_quote(pub) + " "
+    } else if rho_str_eq(getenv("ROBOHUB_ARTIFACT_ALLOW_UNSIGNED"), "1") {
+        extractArgs = extractArgs + "-allow-unsigned "
+    }
+    if rho_exec("rho", extractArgs + arg_quote(archive), extractReport) != 0 {
+        return "artifact could not be extracted; see " + extractReport
+    }
+    let binary: string = app_binary(name, path)
+    var previous: string = ""
+    if rho_path_exists(binary) {
+        let linkReport: string = apps_report("artifact-readlink")
+        ignore_u32(rho_exec("readlink", "-f " + arg_quote(binary), linkReport))
+        previous = first_line(rho_read_text(linkReport))
+        if previous == "" {
+            previous = binary + ".pre-artifact"
+            ignore_u32(rho_exec("mv", "-f " + arg_quote(binary) + " " + arg_quote(previous),
+                apps_report("artifact-previous")))
+        }
+    }
+    let target: string = destination + "/" + entrypoint
+    if !rho_path_exists(target) {
+        return "artifact entrypoint " + entrypoint + " is missing"
+    }
+    app_artifact_link(binary, target)
+    if previous != "" {
+        ignore_bool(rho_write_text(app_artifact_dir(name) + "/previous", previous + "\n"))
+    }
+    ignore_string(app_restart(name, path))
+    let timeout: u32 = u32(rho_int_from_str(app_artifact_value(inspected, "health_timeout")))
+    if timeout == 0 { timeout = 20 }
+    let port: string = app_port(path)
+    if health != "" && port != "" {
+        var waited: u32 = 0
+        var healthy: bool = false
+        while waited < timeout {
+            if rho_exec("curl", "-fsS --max-time 2 http://127.0.0.1:" + port + health,
+                apps_report("artifact-health")) == 0 {
+                healthy = true
+                break
+            }
+            ignore_u32(rho_exec("sleep", "1", apps_report("artifact-wait")))
+            waited = waited + 1
+        }
+        if !healthy {
+            if previous != "" {
+                app_artifact_link(binary, previous)
+                ignore_string(app_restart(name, path))
+                return "health check failed; " + name + " was rolled back"
+            }
+            return "health check failed; no previous artifact to restore"
+        }
+    }
+    ignore_u32(rho_exec("mv", "-f " + arg_quote(archive) + " " +
+        arg_quote(app_artifact_dir(name) + "/" + version + ".tar.gz"),
+        apps_report("artifact-archive")))
+    info("keeper", "deployed artifact " + name + " " + version)
+    return "ok"
+}
+
 // app_update rebuilds, stops and restarts the application.
 fn app_update(name: string, path: string) string {
+    let artifact: string = app_update_artifact(name, path)
+    if rho_str_eq(artifact, "ok") {
+        return name + " was updated from a staged artifact."
+    }
+    if artifact != "" {
+        return "artifact update failed: " + artifact
+    }
     let build: string = app_build(name, path)
     if rho_str_index_of(build, "Generated project:") < 0 {
         return "build failed: " + build
