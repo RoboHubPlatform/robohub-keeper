@@ -19,6 +19,7 @@ include "keeper/enrollment.rho"
 include "keeper/nodes.rho"
 include "htmx"
 include "i18n"
+include "logging"
 
 import std.web.http
 import std.web.template
@@ -30,6 +31,11 @@ const DOCS_TREE: string = "build/doctree"
 /// Where the built site is, which is what a page is served from when the store
 /// has not built one of its own.
 const DOCS_SITE: string = "build/site"
+
+fn init() void {
+    log_config_apply("keeper")
+    info("keeper", "starting")
+}
 
 route GET "/" => home
 route GET "/modules" => modules_page
@@ -47,6 +53,7 @@ route GET "/system" => system_page
 route GET "/docs" => docs_page
 route GET "/docs/{path...}" => doc_page
 route GET "/applications" => applications_page
+route GET "/applications/log" => applications_log
 route GET "/api/applications/rows" => applications_rows_endpoint
 route POST "/applications/install" => applications_install
 route POST "/applications/uninstall" => applications_uninstall

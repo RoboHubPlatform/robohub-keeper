@@ -60,5 +60,6 @@
   "nodes.node": "Nod",
   "nodes.created": "Creat",
   "nodes.rotate": "Rotește",
-  "nodes.revoke": "Revocă"
+  "nodes.revoke": "Revocă",
+  "settings.tab.logging": "Jurnalizare"
 }

@@ -507,7 +507,8 @@ fn application_row_html(name: string, path: string, origin: string) string {
         vars("version", app_version(path)) +
         vars("path", path) +
         vars("status", application_status(name, path)) +
-        vars("actions", app_actions(name, path, origin)))
+        vars("actions", app_actions(name, path, origin)) +
+        vars("log_link", "/applications/log?name=" + escape_html(name)))
 }
 
 fn applications_rows() string {
@@ -549,6 +550,58 @@ fn applications_rows() string {
 
 fn applications_rows_endpoint(req: Request) Response {
     return html(status_ok(), applications_rows())
+}
+
+fn keeper_app_log_path(name: string) string {
+    return log_file_in_settings_file(keeper_state_dir() + "/workspaces/" + name +
+        "/data/settings.conf", name)
+}
+
+fn agent_log_tail(text: string, limit: u32) string {
+    var total: u32 = 0
+    var i: u32 = 0
+    while i < u32(rho_strlen(text)) {
+        if rho_str_eq(rho_str_slice(text, i, 1), "\n") {
+            total = total + 1
+        }
+        i = i + 1
+    }
+    if total <= limit {
+        return text
+    }
+    let skip: u32 = total - limit
+    var seen: u32 = 0
+    i = 0
+    while i < u32(rho_strlen(text)) {
+        if rho_str_eq(rho_str_slice(text, i, 1), "\n") {
+            seen = seen + 1
+            if seen > skip {
+                return rho_str_slice(text, i + 1,
+                    u32(rho_strlen(text)) - i - 1)
+            }
+        }
+        i = i + 1
+    }
+    return text
+}
+
+fn applications_log(req: Request) Response {
+    let name: string = trim(request_query_param(req, "name"))
+    let path: string = record_path(application_records(), name)
+    if name == "" || path == "" {
+        return page(req, "Log", "<h1>Log</h1><p>Unknown application.</p>")
+    }
+    let log_path: string = keeper_app_log_path(name)
+    let body: string = "<h1>Log · " + escape_html(app_title(name, path)) +
+        "</h1><p><code>" + escape_html(log_path) + "</code></p>"
+    if !rho_path_exists(log_path) {
+        return page(req, "Log · " + name, body +
+            "<p>No log file yet. Start the application and it writes to that path.</p>")
+    }
+    let text: string = agent_log_tail(rho_read_text(log_path), 500)
+    return page(req, "Log · " + name, body +
+        "<pre class=\"log-tail\" style=\"white-space:pre-wrap;word-break:break-word;\">" +
+        escape_html(text) + "</pre>")
 }
 
 fn applications_page_message(req: Request, message: string) Response {
@@ -658,6 +711,16 @@ fn app_start(name: string) string {
     }
     if port_answers(port, app_route(path)) {
         return name + " is already running on port " + port + "."
+    }
+    if !app_has_unit(name) {
+        // A bundled application is already on disk but may never have been
+        // deployed as a service. Starting it installs the unit first, so the
+        // keeper controls, the Log link and systemd all act on one service.
+        let deploy_error: string = app_deploy_service(name, path)
+        if deploy_error == "" {
+            info("keeper", "installed application " + name + " as a service")
+            return name + " is running as a service on port " + port + "."
+        }
     }
     if app_has_unit(name) {
         let code: u32 = app_systemctl("start", name)

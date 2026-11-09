@@ -60,5 +60,6 @@
   "nodes.node": "Node",
   "nodes.created": "Created",
   "nodes.rotate": "Rotate",
-  "nodes.revoke": "Revoke"
+  "nodes.revoke": "Revoke",
+  "settings.tab.logging": "Logging"
 }
