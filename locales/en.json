@@ -61,5 +61,6 @@
   "nodes.created": "Created",
   "nodes.rotate": "Rotate",
   "nodes.revoke": "Revoke",
-  "settings.tab.logging": "Logging"
+  "settings.tab.logging": "Logging",
+  "nav.logout": "Logout"
 }

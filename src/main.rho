@@ -42,6 +42,7 @@ route GET "/modules" => modules_page
 route GET "/module/{name}" => module_page
 route GET "/install" => install_page
 route GET "/uninstall" => uninstall_page
+route GET "/logout" => auth_logout
 route POST "/api/enroll" => keeper_enroll
 route POST "/api/nodes/verify" => keeper_node_verify
 route GET "/nodes" => keeper_nodes_page

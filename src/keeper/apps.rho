@@ -406,6 +406,7 @@ fn keeper_nav(req: Request) string {
     out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>" + i18n_t(req, "nav.docs") + "</a></li>"
     out = out + "<li><a href=\"/settings\" data-nav=\"settings\"><span class=\"ico\">⚙</span>" + i18n_t(req, "nav.settings") + "</a></li>"
     out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>" + i18n_t(req, "nav.system") + "</a></li>"
+    out = out + "<li><a href=\"/logout\" data-nav=\"logout\"><span class=\"ico\">⏻</span>" + i18n_t(req, "nav.logout") + "</a></li>"
     return out
 }
 

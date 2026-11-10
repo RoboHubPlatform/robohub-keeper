@@ -78,6 +78,25 @@ fn auth_sessions_file() string {
     return keeper_state_dir() + "/auth-sessions.txt"
 }
 
+fn auth_session_id(req: Request) string {
+    if !has_header(req, "Cookie") {
+        return ""
+    }
+    let cookie: string = header_str(req, "Cookie")
+    let needle: string = AUTH_COOKIE + "="
+    let at: i32 = rho_str_index_of(cookie, needle)
+    if at < 0 {
+        return ""
+    }
+    let rest: string = rho_str_slice(cookie, u32(at) + u32(rho_strlen(needle)),
+        u32(rho_strlen(cookie)) - u32(at) - u32(rho_strlen(needle)))
+    let end: i32 = rho_str_index_of(rest, ";")
+    if end < 0 {
+        return rest
+    }
+    return rho_str_slice(rest, 0, u32(end))
+}
+
 fn auth_session_valid(req: Request) bool {
     let cookie: string = header_str(req, "Cookie")
     let needle: string = AUTH_COOKIE + "="
@@ -145,6 +164,12 @@ fn auth_login(req: Request) Response {
     let audience: string = query_str(req, "audience")
     let next: string = query_str(req, "next")
     if auth_session_valid(req) {
+        // A direct keeper login has no application to return to. Sending it
+        // through the ticket flow would redirect to the login page again,
+        // because the ticket's return_to is empty.
+        if return_to == "" {
+            return redirect("/")
+        }
         let ticket: string = auth_ticket(return_to, audience)
         if ticket != "" {
             return redirect(return_to + "?ticket=" + ticket + "&next=" + next)
@@ -170,10 +195,52 @@ fn auth_login_post(req: Request) Response {
         rho_int_to_str(auth_now() + AUTH_TTL_SECONDS) + "|keeper\n"
     ignore_bool(rho_write_text(auth_sessions_file(), sessions))
     info("keeper", "master session opened")
-    let target: string = "/auth/login?return_to=" + return_to + "&audience=" + audience + "&next=" + next
+    // A direct keeper sign-in goes home. A sign-in started by an application
+    // returns to the login endpoint, which mints that application's ticket.
+    let target: string = "/"
+    if return_to != "" {
+        target = "/auth/login?return_to=" + return_to + "&audience=" + audience + "&next=" + next
+    }
     return Response{ status_found(), "", "text/plain; charset=utf-8",
         "Location: " + target + "\nSet-Cookie: " + AUTH_COOKIE + "=" + sid +
         "; Path=/; HttpOnly; SameSite=Lax" }
+}
+
+// auth_logout removes the current master session and clears its cookie. Every
+// application that accepts the keeper session checks the same file, so the
+// next request there is sent to the login page.
+fn auth_logout(req: Request) Response {
+    let sid: string = auth_session_id(req)
+    if sid != "" {
+        var out: string = ""
+        var rest: string = rho_read_text(auth_sessions_file())
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "\n")
+            var line: string = rest
+            if at < 0 {
+                rest = ""
+            } else {
+                line = rho_str_slice(rest, 0, u32(at))
+                rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            }
+            if line == "" {
+                continue
+            }
+            let first: i32 = rho_str_index_of(line, "|")
+            let id: string = line
+            if first >= 0 {
+                id = rho_str_slice(line, 0, u32(first))
+            }
+            if !rho_str_eq(id, sid) {
+                out = out + line + "\n"
+            }
+        }
+        ignore_bool(rho_write_text(auth_sessions_file(), out))
+    }
+    info("keeper", "master session closed")
+    return Response{ status_found(), "", "text/plain; charset=utf-8",
+        "Location: /auth/login?audience=keeper\nSet-Cookie: " + AUTH_COOKIE +
+        "=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" }
 }
 
 // The access-token settings page. The current token is never shown; a new one

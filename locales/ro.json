@@ -61,5 +61,6 @@
   "nodes.created": "Creat",
   "nodes.rotate": "Rotește",
   "nodes.revoke": "Revocă",
-  "settings.tab.logging": "Jurnalizare"
+  "settings.tab.logging": "Jurnalizare",
+  "nav.logout": "Deconectare"
 }
