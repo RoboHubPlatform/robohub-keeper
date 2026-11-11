@@ -57,13 +57,125 @@ fn auth_now() u32 {
     return 0
 }
 
+// auth_random is 128 random bits as hex, or "" when they cannot be had. A
+// session id or a token that falls back to something predictable is one anybody
+// can present, so a caller that gets "" refuses rather than continuing.
 fn auth_random() string {
     let report: string = auth_report("auth-random")
     ignore_u32(rho_exec("mkdir", "-p " + keeper_state_dir(), report))
     if rho_exec("openssl", "rand -hex 16", report) != 0 {
-        return rho_int_to_str(rho_int_from_str(rho_read_text(report)))
+        return ""
     }
-    return auth_clean(rho_read_text(report))
+    let value: string = auth_clean(rho_read_text(report))
+    if rho_strlen(value) != 32 {
+        return ""
+    }
+    return value
+}
+
+// auth_safe_name is whether a value can name an audience, a client or a scope:
+// lowercase letters, digits and `:_.-*`, at most 96 characters. Anything else
+// that reached a command, a header or a file line could change what it says.
+fn auth_safe_name(value: string) bool {
+    let length: u32 = u32(rho_strlen(value))
+    if length == 0 || length > 96 {
+        return false
+    }
+    let allowed: string = "abcdefghijklmnopqrstuvwxyz0123456789:_.-*,"
+    var i: u32 = 0
+    while i < length {
+        if rho_str_index_of(allowed, rho_str_slice(value, i, 1)) < 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// auth_plain is whether a value is safe to carry in a header or a URL keeper
+// writes: no control characters, spaces or quotes.
+fn auth_plain(value: string) bool {
+    let length: u32 = u32(rho_strlen(value))
+    if length > 2048 {
+        return false
+    }
+    let forbidden: string = " \"'<>\\\n\r\t"
+    var i: u32 = 0
+    while i < length {
+        if rho_str_index_of(forbidden, rho_str_slice(value, i, 1)) >= 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// auth_host is the host part of an authority (`host`, `host:port`, `[v6]:port`).
+fn auth_host(authority: string) string {
+    if rho_str_starts_with(authority, "[") {
+        let close: i32 = rho_str_index_of(authority, "]")
+        if close < 0 {
+            return ""
+        }
+        return rho_str_slice(authority, 0, u32(close) + 1)
+    }
+    let colon: i32 = rho_str_index_of(authority, ":")
+    if colon < 0 {
+        return authority
+    }
+    return rho_str_slice(authority, 0, u32(colon))
+}
+
+fn auth_loopback(host: string) bool {
+    return rho_str_eq(host, "127.0.0.1") || rho_str_eq(host, "localhost") || rho_str_eq(host, "[::1]")
+}
+
+// auth_target_ok is whether keeper may send a ticket for `audience` to
+// `return_to`. The audience must be an application keeper hosts, and the address
+// must be that application's callback: on the host keeper itself was reached on
+// (or this machine), on the application's port, under its route. A ticket is a
+// credential, and an address that is not the application's is somewhere a
+// credential would leak to.
+fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
+    if !auth_safe_name(audience) || !auth_plain(return_to) {
+        return false
+    }
+    let path: string = app_path(audience)
+    if path == "" {
+        return false
+    }
+    var rest: string = ""
+    if rho_str_starts_with(return_to, "https://") {
+        rest = rho_str_slice(return_to, 8, u32(rho_strlen(return_to)) - 8)
+    } else if rho_str_starts_with(return_to, "http://") {
+        rest = rho_str_slice(return_to, 7, u32(rho_strlen(return_to)) - 7)
+    } else {
+        return false
+    }
+    let slash: i32 = rho_str_index_of(rest, "/")
+    if slash < 0 {
+        return false
+    }
+    let authority: string = rho_str_slice(rest, 0, u32(slash))
+    let address: string = rho_str_slice(rest, u32(slash), u32(rho_strlen(rest)) - u32(slash))
+    if rho_str_index_of(authority, "@") >= 0 {
+        return false
+    }
+    let host: string = auth_host(authority)
+    let keeper_host: string = auth_host(header_str(req, "Host"))
+    if host == "" || (!auth_loopback(host) && !rho_str_eq(host, keeper_host)) {
+        return false
+    }
+    let expected: string = app_port(path)
+    let port: string = rho_str_slice(authority, u32(rho_strlen(host)), u32(rho_strlen(authority)) - u32(rho_strlen(host)))
+    if expected != "" && !rho_str_eq(port, ":" + expected) {
+        return false
+    }
+    var base: string = app_route(path)
+    if base == "/" {
+        base = ""
+    }
+    return rho_str_eq(address, base + "/auth/callback")
 }
 
 fn auth_ensure_master() void {
@@ -71,7 +183,12 @@ fn auth_ensure_master() void {
         return
     }
     ignore_u32(rho_exec("mkdir", "-p " + auth_dir(), auth_report("auth-mkdir")))
-    ignore_bool(rho_write_text(auth_master_file(), auth_random() + "\n"))
+    let token: string = auth_random()
+    if token == "" {
+        error("keeper", "no random source: the master token was not created")
+        return
+    }
+    ignore_bool(rho_write_secret(auth_master_file(), token + "\n"))
 }
 
 fn auth_sessions_file() string {
@@ -146,13 +263,20 @@ fn auth_login_form(return_to: string, audience: string, next: string, notice: st
     return html(status_ok(), body)
 }
 
-fn auth_ticket(return_to: string, audience: string) string {
+// auth_ticket mints the one-use ticket an application exchanges for its own
+// session. The person signed in with the master token is the operator, so the
+// ticket carries every scope; an application narrows what a page may do. The
+// arguments go one per line, so nothing in them is interpreted.
+fn auth_ticket(req: Request, return_to: string, audience: string) string {
+    if !auth_target_ok(req, return_to, audience) {
+        return ""
+    }
     let report: string = auth_report("auth-ticket")
     let private: string = auth_dir() + "/private.pem"
-    let command: string = "rho auth ticket --private " + arg_quote(private) +
-        " --issuer keeper --audience " + arg_quote(audience) +
-        " --subject keeper --ttl 30s --redirect-uri " + arg_quote(return_to)
-    if rho_exec("sh", "-c " + arg_quote(command), report) != 0 {
+    let args: string = "auth\nticket\n--private\n" + private +
+        "\n--issuer\nkeeper\n--audience\n" + audience +
+        "\n--subject\noperator\n--scopes\n*\n--ttl\n30s\n--redirect-uri\n" + return_to + "\n"
+    if rho_exec_args("rho", args, report) != 0 {
         return ""
     }
     return auth_clean(rho_read_text(report))
@@ -163,6 +287,12 @@ fn auth_login(req: Request) Response {
     let return_to: string = query_str(req, "return_to")
     let audience: string = query_str(req, "audience")
     let next: string = query_str(req, "next")
+    if return_to != "" && !auth_target_ok(req, return_to, audience) {
+        return html(status_bad_request(), "<p>That application is not one this keeper signs in to.</p>")
+    }
+    if !auth_plain(next) {
+        return html(status_bad_request(), "<p>The page to return to is not a plain address.</p>")
+    }
     if auth_session_valid(req) {
         // A direct keeper login has no application to return to. Sending it
         // through the ticket flow would redirect to the login page again,
@@ -170,7 +300,7 @@ fn auth_login(req: Request) Response {
         if return_to == "" {
             return redirect("/")
         }
-        let ticket: string = auth_ticket(return_to, audience)
+        let ticket: string = auth_ticket(req, return_to, audience)
         if ticket != "" {
             return redirect(return_to + "?ticket=" + ticket + "&next=" + next)
         }
@@ -184,6 +314,9 @@ fn auth_login_post(req: Request) Response {
     let return_to: string = form_value(request_body(req), "return_to")
     let audience: string = form_value(request_body(req), "audience")
     let next: string = form_value(request_body(req), "next")
+    if (return_to != "" && !auth_target_ok(req, return_to, audience)) || !auth_plain(next) || !auth_plain(audience) {
+        return html(status_bad_request(), "<p>That sign-in request is not one this keeper answers.</p>")
+    }
     let supplied: string = auth_clean(form_value(request_body(req), "token"))
     let expected: string = auth_clean(rho_read_text(auth_master_file()))
     if supplied == "" || !rho_str_eq(supplied, expected) {
@@ -191,9 +324,12 @@ fn auth_login_post(req: Request) Response {
             template_fill(template_get("notice"), vars("message", "That token is not the master token.")))
     }
     let sid: string = auth_random()
+    if sid == "" {
+        return html(status_internal(), "<p>No random source: a session could not be opened.</p>")
+    }
     let sessions: string = rho_read_text(auth_sessions_file()) + sid + "|" +
-        rho_int_to_str(auth_now() + AUTH_TTL_SECONDS) + "|keeper\n"
-    ignore_bool(rho_write_text(auth_sessions_file(), sessions))
+        rho_int_to_str(auth_now() + AUTH_TTL_SECONDS) + "|operator|*\n"
+    ignore_bool(rho_write_secret(auth_sessions_file(), sessions))
     info("keeper", "master session opened")
     // A direct keeper sign-in goes home. A sign-in started by an application
     // returns to the login endpoint, which mints that application's ticket.
@@ -235,7 +371,7 @@ fn auth_logout(req: Request) Response {
                 out = out + line + "\n"
             }
         }
-        ignore_bool(rho_write_text(auth_sessions_file(), out))
+        ignore_bool(rho_write_secret(auth_sessions_file(), out))
     }
     info("keeper", "master session closed")
     return Response{ status_found(), "", "text/plain; charset=utf-8",
@@ -279,8 +415,69 @@ fn auth_token_post(req: Request) Response {
         return auth_token_page_message(req, "The two tokens do not match.")
     }
     ignore_u32(rho_exec("mkdir", "-p " + auth_dir(), auth_report("auth-mkdir")))
-    ignore_bool(rho_write_text(auth_master_file(), token + "\n"))
-    ignore_u32(rho_exec("chmod", "600 " + auth_master_file(), auth_report("auth-chmod")))
+    ignore_bool(rho_write_secret(auth_master_file(), token + "\n"))
     info("keeper", "access token updated")
     return auth_token_render(req, "Access token updated. New sign-ins use the new token; this session stays valid.", token)
+}
+
+// auth_private_dir is a directory under keeper's state only its owner can enter,
+// for the moments a secret or a token has to be on disk.
+fn auth_private_dir() string {
+    let dir: string = keeper_state_dir() + "/private"
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "\n", auth_report("auth-mkdir")))
+    ignore_u32(rho_exec_args("chmod", "700\n" + keeper_state_dir() + "\n" + dir + "\n", auth_report("auth-chmod")))
+    return dir
+}
+
+fn auth_service_denied() Response {
+    return json(status_unauthorized(), "{\"error\":\"invalid client\"}")
+}
+
+// auth_service_token exchanges a registered service's client credential for a
+// short-lived token for one audience:
+//
+//   POST /auth/service-token   client_id, client_secret, audience, scopes
+//   → { "token": "...", "expires_in": 600 }
+//
+// rho-auth checks the secret against the hash keeper registered, grants only the
+// audiences and scopes registered for the client, and signs with keeper's key.
+// The secret reaches it through a file only keeper can read, and nothing a caller
+// sent is interpreted on the way: every argument goes one per line.
+fn auth_service_token(req: Request) Response {
+    let body: string = request_body(req)
+    let id: string = trim(form_value(body, "client_id"))
+    let secret: string = auth_clean(form_value(body, "client_secret"))
+    let audience: string = trim(form_value(body, "audience"))
+    let scopes: string = trim(form_value(body, "scopes"))
+    if !auth_safe_name(id) || !auth_safe_name(audience) || secret == "" ||
+        rho_strlen(secret) > 256 || !auth_plain(secret) {
+        return auth_service_denied()
+    }
+    if scopes != "" && !auth_safe_name(scopes) {
+        return auth_service_denied()
+    }
+    let nonce: string = auth_random()
+    if nonce == "" {
+        return json(status_internal(), "{\"error\":\"no random source\"}")
+    }
+    let dir: string = auth_private_dir()
+    let secret_file: string = dir + "/" + nonce + ".secret"
+    let report: string = dir + "/" + nonce + ".token"
+    if !rho_write_secret(secret_file, secret + "\n") {
+        return json(status_internal(), "{\"error\":\"could not hold the credential\"}")
+    }
+    var args: string = "auth\nservice-token\n--store\n" + auth_dir() + "/clients\n--id\n" + id +
+        "\n--secret-file\n" + secret_file + "\n--audience\n" + audience +
+        "\n--private\n" + auth_dir() + "/private.pem\n--issuer\nkeeper\n"
+    if scopes != "" {
+        args = args + "--scopes\n" + scopes + "\n"
+    }
+    let code: u32 = rho_exec_args("rho", args, report)
+    let answer: string = auth_clean(rho_read_text(report))
+    ignore_u32(rho_exec_args("rm", "-f\n" + secret_file + "\n" + report + "\n", auth_report("auth-rm")))
+    if code != 0 || !rho_str_starts_with(answer, "{\"token\":") {
+        info("keeper", "service token refused for client " + id)
+        return auth_service_denied()
+    }
+    return json(status_ok(), answer)
 }

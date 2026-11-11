@@ -70,6 +70,7 @@ route POST "/plugins/install" => plugins_install
 route POST "/plugins/uninstall" => plugins_uninstall
 route GET "/auth/login" => auth_login
 route POST "/auth/login" => auth_login_post
+route POST "/auth/service-token" => auth_service_token
 route GET "/auth/token" => auth_token_page
 route POST "/auth/token" => auth_token_post
 route GET "/providers" => providers_page
@@ -269,12 +270,18 @@ fn robohub_root() string {
     // The workspace is said by the environment, because a path into another
     // repository belongs to the machine, and a machine that says nothing has
     // the orchestrator where the keeper was started.
-    let root: string = getenv("ROBOHUB_WORKSPACE")
+    let root: string = getenv("ROBOHUB_ROOT")
     if root == "" {
+        // ROBOHUB_WORKSPACE is the directory that holds the ecosystem's
+        // repositories, the orchestrator among them.
+        let workspace: string = getenv("ROBOHUB_WORKSPACE")
+        if workspace != "" && rho_path_exists(workspace + "/robohub/registry/modules") {
+            return workspace + "/robohub"
+        }
         if rho_path_exists("registry/modules") {
             return "."
         }
-        warn("keeper", "set ROBOHUB_WORKSPACE to the directory holding the ecosystem")
+        warn("keeper", "set ROBOHUB_ROOT to the orchestrator directory")
         return "."
     }
     if rho_path_exists(root + "/robohub/registry/modules") {

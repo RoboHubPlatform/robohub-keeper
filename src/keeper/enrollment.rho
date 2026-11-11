@@ -50,7 +50,7 @@ fn enrollment_mark_used(token: string) void {
         }
         out = out + line + "\n"
     }
-    ignore_bool(rho_write_text(enrollment_tokens_file(), out))
+    ignore_bool(rho_write_secret(enrollment_tokens_file(), out))
 }
 
 fn keeper_enroll(req: Request) Response {
@@ -88,7 +88,7 @@ fn keeper_enroll(req: Request) Response {
     let record: string = device + "|" + public + "|" + project + "|" + area + "|" + node +
         "|" + credential + "|" + rho_int_to_str(enrollment_now()) + "\n"
     ignore_u32(rho_exec("mkdir", "-p " + enrollment_nodes_dir(), apps_report("enrollment-mkdir")))
-    ignore_bool(rho_write_text(path, record))
+    ignore_bool(rho_write_secret(path, record))
     ignore_u32(rho_exec("chmod", "600 " + path, apps_report("enrollment-chmod")))
     enrollment_mark_used(token)
     info("keeper", "enrolled node " + device)

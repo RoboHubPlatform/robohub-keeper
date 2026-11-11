@@ -210,7 +210,76 @@ fn app_title(name: string, path: string) string {
 // app_depends returns the list of applications this app requires to be running
 // before it can start, as declared in its module.yml deploy block.
 fn app_depends(name: string, path: string) string {
-    let raw: string = yaml.value(path + "/module.yml", "deploy.depends")
+    return app_manifest_list(path, "deploy.depends")
+}
+
+// app_calls is what an application calls on another service's behalf, one per
+// line: `deploy.calls` in its manifest, such as `mesh` or `gateway:*`. Keeper
+// registers the application as a client allowed those audiences and nothing else.
+fn app_calls(path: string) string {
+    return app_manifest_list(path, "deploy.calls")
+}
+
+// app_client_secret_file is where an application finds the secret it proves
+// itself with, in its own workspace, readable by its owner only.
+fn app_client_secret_file(name: string) string {
+    return keeper_state_dir() + "/workspaces/" + name + "/auth/client.secret"
+}
+
+// app_provision_client registers an application that calls other services as a
+// client of keeper, once, and returns the file its secret is in; "" when it calls
+// nothing or could not be registered. The scope an audience grants is the
+// audience's own namespace: `mesh` grants `mesh:*`, `gateway:*` grants
+// `gateway:*`.
+fn app_provision_client(name: string, path: string) string {
+    let calls: string = app_calls(path)
+    if calls == "" || !auth_safe_name(name) {
+        return ""
+    }
+    let secret_file: string = app_client_secret_file(name)
+    if rho_path_exists(secret_file) {
+        return secret_file
+    }
+    var audiences: string = ""
+    var scopes: string = ""
+    var rest: string = calls
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var call: string = rest
+        if at < 0 { rest = "" } else { call = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if call == "" || !auth_safe_name(call) { continue }
+        let colon: i32 = rho_str_index_of(call, ":")
+        var namespace: string = call
+        if colon >= 0 { namespace = rho_str_slice(call, 0, u32(colon)) }
+        if audiences != "" { audiences = audiences + ","; scopes = scopes + "," }
+        audiences = audiences + call
+        scopes = scopes + namespace + ":*"
+    }
+    if audiences == "" {
+        return ""
+    }
+    let args: string = "auth\nclient\nadd\n--store\n" + auth_dir() + "/clients\n--id\n" + name +
+        "\n--audiences\n" + audiences + "\n--scopes\n" + scopes + "\n--secret-out\n" + secret_file + "\n"
+    if rho_exec_args("rho", args, apps_report("client-" + name)) != 0 || !rho_path_exists(secret_file) {
+        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be registered as a client", "app=" + name))
+        return ""
+    }
+    info("keeper", "registered application " + name + " as a client for " + audiences)
+    return secret_file
+}
+
+// app_client_env is the environment an application reads its credential from.
+fn app_client_env(name: string, secret_file: string) string {
+    if secret_file == "" {
+        return ""
+    }
+    return " RHO_CLIENT_ID=" + name + " RHO_CLIENT_SECRET_FILE=" + shell_quote(secret_file) +
+        " RHO_KEEPER_URL=http://127.0.0.1:" + keeper_listen_port()
+}
+
+// app_manifest_list reads a list a manifest declares at `key`, one item per line.
+fn app_manifest_list(path: string, key: string) string {
+    let raw: string = yaml.value(path + "/module.yml", key)
     if raw == "" { return "" }
     var out: string = ""
     var rest: string = raw
@@ -323,7 +392,10 @@ fn app_deploy_service(name: string, path: string) string {
         return "its deploy script is missing"
     }
     let log: string = apps_report("deploy-" + name)
-    let code: u32 = rho_exec("bash", script + " " + arg_quote(name) + " " + arg_quote(path), log)
+    // The credential is registered before the unit is written, so the unit can
+    // name the file it is in.
+    ignore_string(app_provision_client(name, path))
+    let code: u32 = rho_exec_args("bash", script + "\n" + name + "\n" + path + "\n", log)
     if code != 0 {
         return "its service did not start; see " + log
     }
@@ -745,9 +817,10 @@ fn app_start(name: string) string {
     let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
     let app_manifest: string = path + "/module.yml"
     let script: string = "workspace=$(pwd); (cd " + shell_quote(path) +
-        " && ROBOHUB_WORKSPACE=$workspace ROBOHUB_APP_WORKSPACE=" +
+        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} ROBOHUB_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
         shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
+        app_client_env(name, app_provision_client(name, path)) +
         " RHO_HTTP_ADDR=:" + port +
         " exec nohup ./build/" + app_command(name, path) +
         " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)

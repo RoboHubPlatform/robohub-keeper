@@ -103,7 +103,7 @@ fn keeper_nodes_rotate(req: Request) Response {
     let updated: string = field(record, 0) + "|" + field(record, 1) + "|" + field(record, 2) +
         "|" + field(record, 3) + "|" + field(record, 4) + "|" + credential +
         "|" + field(record, 6) + "\n"
-    ignore_bool(rho_write_text(node_path(device), updated))
+    ignore_bool(rho_write_secret(node_path(device), updated))
     ignore_u32(rho_exec("chmod", "600 " + node_path(device), apps_report("node-chmod")))
     info("keeper", "rotated credential for node " + device)
     return keeper_nodes_page_message(req, "New credential for " + device + ": " + credential)

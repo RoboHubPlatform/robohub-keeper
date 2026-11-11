@@ -27,7 +27,7 @@ targets:
           mode: direct
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
-          skip_paths: /auth/login,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
+          skip_paths: /auth/login,/auth/service-token,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
           scheme: auto
     default_locale: en
     locales:
