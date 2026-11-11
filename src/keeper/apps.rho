@@ -268,13 +268,74 @@ fn app_provision_client(name: string, path: string) string {
     return secret_file
 }
 
-// app_client_env is the environment an application reads its credential from.
-fn app_client_env(name: string, secret_file: string) string {
+// app_env_name is a service name as part of an environment variable's name:
+// `mesh` becomes `MESH`, `my-app` becomes `MY_APP`.
+fn app_env_name(name: string) string {
+    let lower: string = "abcdefghijklmnopqrstuvwxyz-."
+    let upper: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ__"
+    var out: string = ""
+    var i: u32 = 0
+    while i < u32(rho_strlen(name)) {
+        let c: string = rho_str_slice(name, i, 1)
+        let at: i32 = rho_str_index_of(lower, c)
+        if at >= 0 {
+            out = out + rho_str_slice(upper, u32(at), 1)
+        } else {
+            out = out + c
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// app_client_env_file is the environment keeper hands an application that calls
+// other services: who it is (its client id and where its secret is), where the
+// issuer is, and where each application it calls listens. One file, read by both
+// ways an application is started, so the two cannot drift.
+fn app_client_env_file(name: string) string {
+    return keeper_state_dir() + "/workspaces/" + name + "/auth/client.env"
+}
+
+fn app_write_client_env(name: string, path: string, secret_file: string) string {
     if secret_file == "" {
         return ""
     }
-    return " RHO_CLIENT_ID=" + name + " RHO_CLIENT_SECRET_FILE=" + shell_quote(secret_file) +
-        " RHO_KEEPER_URL=http://127.0.0.1:" + keeper_listen_port()
+    var lines: string = "RHO_CLIENT_ID=" + name + "\nRHO_CLIENT_SECRET_FILE=" + secret_file +
+        "\nRHO_AUTH_URL=http://127.0.0.1:" + keeper_listen_port() + "\n"
+    var rest: string = app_calls(path)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var call: string = rest
+        if at < 0 { rest = "" } else { call = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let callee: string = app_path(call)
+        if call != "" && callee != "" && auth_safe_name(call) && app_port(callee) != "" {
+            lines = lines + "RHO_SERVICE_" + app_env_name(call) + "_URL=http://127.0.0.1:" + app_port(callee) + "\n"
+        }
+    }
+    let file: string = app_client_env_file(name)
+    ignore_bool(rho_write_secret(file, lines))
+    return file
+}
+
+// app_client_env is that file as assignments for a shell command line.
+fn app_client_env(name: string, path: string, secret_file: string) string {
+    let file: string = app_write_client_env(name, path, secret_file)
+    if file == "" {
+        return ""
+    }
+    var out: string = ""
+    var rest: string = rho_read_text(file)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let eq: i32 = rho_str_index_of(line, "=")
+        if eq > 0 {
+            out = out + " " + rho_str_slice(line, 0, u32(eq)) + "=" +
+                shell_quote(rho_str_slice(line, u32(eq) + 1, u32(rho_strlen(line)) - u32(eq) - 1))
+        }
+    }
+    return out
 }
 
 // app_manifest_list reads a list a manifest declares at `key`, one item per line.
@@ -392,9 +453,9 @@ fn app_deploy_service(name: string, path: string) string {
         return "its deploy script is missing"
     }
     let log: string = apps_report("deploy-" + name)
-    // The credential is registered before the unit is written, so the unit can
-    // name the file it is in.
-    ignore_string(app_provision_client(name, path))
+    // The credential is registered and the environment file written before the
+    // unit is, so the unit can name the file.
+    ignore_string(app_write_client_env(name, path, app_provision_client(name, path)))
     let code: u32 = rho_exec_args("bash", script + "\n" + name + "\n" + path + "\n", log)
     if code != 0 {
         return "its service did not start; see " + log
@@ -820,7 +881,7 @@ fn app_start(name: string) string {
         " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} ROBOHUB_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
         shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
-        app_client_env(name, app_provision_client(name, path)) +
+        app_client_env(name, path, app_provision_client(name, path)) +
         " RHO_HTTP_ADDR=:" + port +
         " exec nohup ./build/" + app_command(name, path) +
         " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)
