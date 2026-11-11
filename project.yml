@@ -23,7 +23,7 @@ targets:
           issuer: keeper
           audience: keeper
           cookie: keeper_session
-          public_key: ${RHO_HOME}/auth/public.pem
+          public_key: ~/.rho/auth/public.pem
           mode: direct
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
