@@ -1,6 +1,8 @@
 module:
   name: keeper
-  id: robohub.applications.keeper
+  id: robohub.app.keeper
+  previous_ids:
+    - robohub.applications.keeper
   type: rho
   kind: keeper
   title: RoboHub Keeper

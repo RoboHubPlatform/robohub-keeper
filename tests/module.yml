@@ -5,7 +5,9 @@
 # the C backend, and giving the test directory its own manifest is what says so.
 module:
   name: keeper-tests
-  id: robohub.applications.keeper.tests
+  id: robohub.app.keeper-tests
+  previous_ids:
+    - robohub.applications.keeper.tests
   type: rho
   version: 0.1.0
 
