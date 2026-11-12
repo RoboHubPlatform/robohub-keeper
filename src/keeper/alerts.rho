@@ -13,7 +13,8 @@ fn keeper_manifest_path() string {
         yaml.value("module.yml", "module.name") == "keeper" {
         return "module.yml"
     }
-    let path: string = robohub_root() + "/applications/keeper/module.yml"
+    // The manifest the application was built from travels with it.
+    let path: string = rho_asset_dir("keeper") + "/module.yml"
     if rho_path_exists(path) {
         return path
     }
