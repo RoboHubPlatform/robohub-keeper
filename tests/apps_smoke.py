@@ -169,7 +169,7 @@ def main() -> int:
                 plugins,
                 ["Alert channels", "robohub-provider-log", "robohub-provider-email",
                  "robohub-provider-telegram", "Installed plugins", "robohub-auth",
-                 "mesh-gateway", "Install a plugin"],
+                 "Install a plugin"],
                 "plugin registry",
             )
             tested = post(base, "/plugins/test", {"name": "robohub-provider-log"})
