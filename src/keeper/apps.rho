@@ -878,7 +878,8 @@ fn app_start(name: string) string {
     let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
     let app_manifest: string = path + "/module.yml"
     let script: string = "workspace=$(pwd); (cd " + shell_quote(path) +
-        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} ROBOHUB_APP_WORKSPACE=" +
+        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} RHO_APP_WORKSPACE=" +
+        shell_quote(app_workspace) + " ROBOHUB_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
         shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
         app_client_env(name, path, app_provision_client(name, path)) +
