@@ -133,7 +133,7 @@ fn plugins_toggle(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     let enabled: string = form_value(body, "enabled")
-    if !valid_name(name) || plugin_manifest(plugin_root(), name) == "" {
+    if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
         return plugins_page_message(req, "No such plugin: " + name)
     }
     plugin_state_set(name, enabled)
@@ -154,7 +154,7 @@ fn plugins_toggle(req: Request) Response {
 fn plugins_test(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    if plugin_manifest(plugin_root(), name) == "" {
+    if !rho_path_exists(plugin_manifest(plugin_root(), name)) {
         return plugins_page_message(req, "No such plugin: " + name)
     }
     let sent: u32 = registry_alert_one(plugin_root(), keeper_registry(), name, "INFO",
@@ -229,7 +229,9 @@ fn plugins_install(req: Request) Response {
     if code != 0 {
         return plugins_page_message(req, "Could not install " + source + ".")
     }
-    if (yaml.value(target + "/module.yml", "module.kind") == "" && yaml.value(target + "/module.yml", "plugin.kind") == "") {
+    // A plugin says what kind it is: `module.plugin_kind`, as every plugin here
+    // is written, or a `plugin:` block.
+    if plugin_field(target + "/module.yml", "kind") == "" {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-plugin")))
         return plugins_page_message(req, source + " is not a plugin module.")
     }
@@ -241,7 +243,7 @@ fn plugins_install(req: Request) Response {
 fn plugins_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    if !valid_name(name) || plugin_manifest(plugin_root(), name) == "" {
+    if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
         return plugins_page_message(req, "No such plugin: " + name)
     }
     let target: string = plugin_root() + "/" + name

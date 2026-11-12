@@ -99,7 +99,10 @@ fn app_module_remove_entry(name: string) bool {
 }
 
 fn app_module_title(manifest: string, name: string) string {
-    let title: string = yaml.value(manifest, "module_app.title")
+    var title: string = yaml.value(manifest, "module.title")
+    if title == "" {
+        title = yaml.value(manifest, "module_app.title")
+    }
     if title == "" {
         title = yaml.value(manifest, "application.title")
     }
@@ -256,7 +259,8 @@ fn app_modules_install(req: Request) Response {
     if code != 0 {
         return app_modules_page_message(req, "Could not install " + source + ".")
     }
-    if yaml.value(target + "/module.yml", "module_app.title") == "" {
+    // A module says it is one: `module.type: module`.
+    if yaml.value(target + "/module.yml", "module.type") != "module" {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
             apps_report("remove-not-module")))
         return app_modules_page_message(req, source + " is not a module.")

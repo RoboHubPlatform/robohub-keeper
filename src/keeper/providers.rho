@@ -248,10 +248,12 @@ fn providers_install(req: Request) Response {
 fn providers_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    if !valid_name(name) || plugin_manifest(provider_root(), name) == "" {
+    if !valid_name(name) || !rho_path_exists(plugin_manifest(provider_root(), name)) {
         return providers_page_message(req, "No such provider: " + name)
     }
-    let target: string = provider_root() + "/" + name
+    // The registry says which folder a provider is in: `robohub-provider-log`
+    // lives in `log`. Read before the entry is removed.
+    let target: string = provider_root() + "/" + plugin_location(provider_root(), name)
     ignore_bool(plugin_db_remove(provider_root(), name))
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-provider-" + name)))
     info("keeper", "uninstalled provider " + name)

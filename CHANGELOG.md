@@ -112,3 +112,13 @@ The keeper finds the applications the orchestrator's registry names with
 `role: application`, by the path each entry gives, after the published ones and
 before the folders beside it. That is how Mesh, which has its own repository
 now, is listed and started.
+
+## [0.5.9] - 2026-11-12
+
+The plugins page shows each plugin's real kind and transport, accepts a plugin
+that declares `module.plugin_kind` on install, and says "No such plugin" when
+there is none. Removing a provider removes the folder the registry names for
+it. Installing a module checks `module.type: module`, and module titles come
+from `module.title`. `deploy-keeper.sh` gives the keeper a workspace of its own
+(`~/.rho/keeper`), carrying over settings it had in the shared store, and
+rewrites a unit written before that.
