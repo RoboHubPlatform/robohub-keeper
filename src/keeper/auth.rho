@@ -37,6 +37,18 @@ fn auth_dir() string {
     return home + "/.rho/auth"
 }
 
+// auth_public_key publishes the key every session and ticket the keeper issues
+// is verified with. An application told where its issuer is (RHO_AUTH_URL)
+// fetches it from here, so no key is copied by hand. It is a public key: the
+// private one never leaves auth_dir().
+fn auth_public_key(req: Request) Response {
+    let path: string = auth_dir() + "/public.pem"
+    if !rho_path_exists(path) {
+        return text(status_not_found(), "the keeper has no signing key yet\n")
+    }
+    return text(status_ok(), rho_read_text(path))
+}
+
 fn auth_master_file() string {
     return auth_dir() + "/master.token"
 }

@@ -135,3 +135,11 @@ plugin is enabled, installed or removed as before. The Providers page shows
 which interface a provider implements, from its `implements` list. The plugin
 and provider registry files are the keeper's own code rather than the alert
 contract's.
+
+## [0.6.1] - 2026-11-12
+
+The keeper publishes the public key its sessions and tickets are verified with,
+at `/auth/public-key`, to anyone and without a session: it is a public key. An
+application the keeper starts fetches it from there, and one started elsewhere is
+pointed at it with RHO_AUTH_URL, so no key is copied by hand. The smoke test
+checks that the published key is the keeper's.

@@ -141,6 +141,12 @@ def main() -> int:
         home_sessions = Path(env["HOME"]) / ".rho" / "keeper"
         home_sessions.mkdir(parents=True, exist_ok=True)
         (home_sessions / "auth-sessions.txt").write_text(session_line, encoding="utf-8")
+        # The keeper's signing key, which it publishes for the applications
+        # that trust it.
+        keys = Path(env["HOME"]) / ".rho" / "auth"
+        keys.mkdir(parents=True, exist_ok=True)
+        subprocess.run([str(RHO) if RHO.exists() else "rho", "auth", "keygen", "--dir", str(keys), "--force"],
+                       check=True, capture_output=True, text=True)
         process = subprocess.Popen(
             [str(binary)],
             cwd=ROBOHUB,
@@ -151,6 +157,12 @@ def main() -> int:
         )
         try:
             wait_for(base)
+
+            # The public key is published to anyone, with no session.
+            with urllib.request.urlopen(base + "/auth/public-key", timeout=10) as response:
+                published = response.read().decode()
+            if "BEGIN PUBLIC KEY" not in published or published != (keys / "public.pem").read_text():
+                raise AssertionError("the keeper does not publish its public key")
 
             page = get(base, "/applications")
             assert_contains(

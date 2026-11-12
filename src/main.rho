@@ -72,6 +72,7 @@ route POST "/plugins/uninstall" => plugins_uninstall
 route GET "/auth/login" => auth_login
 route POST "/auth/login" => auth_login_post
 route POST "/auth/service-token" => auth_service_token
+route GET "/auth/public-key" => auth_public_key
 route GET "/auth/token" => auth_token_page
 route POST "/auth/token" => auth_token_post
 route GET "/providers" => providers_page
