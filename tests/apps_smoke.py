@@ -122,6 +122,10 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="keeper-apps-") as state:
         demo = external_app(Path(state))
         env = dict(os.environ)
+        # The application finds the toolchain (the documentation generator, the
+        # components) by its home; the test gives the application a HOME of its own,
+        # so the toolchain's home is named before that happens.
+        env.setdefault("RHO_HOME", os.path.join(os.path.expanduser("~"), ".rho"))
         env["ROBOHUB_WORKSPACE"] = str(ROBOHUB)
         env["RHO_KEEPER_STATE_DIR"] = os.path.join(state, "state")
         env["HOME"] = state
