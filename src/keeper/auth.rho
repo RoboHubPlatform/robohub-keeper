@@ -178,10 +178,22 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
     if host == "" || (!auth_loopback(host) && !rho_str_eq(host, keeper_host)) {
         return false
     }
-    let expected: string = app_port(path)
+    // The keeper's own manifest names the port a build serves on by default; the
+    // port it was started on is the one its pages are reached at.
+    var expected: string = app_port(path)
+    if app_kind(path) == "keeper" {
+        expected = keeper_listen_port()
+    }
     let port: string = rho_str_slice(authority, u32(rho_strlen(host)), u32(rho_strlen(authority)) - u32(rho_strlen(host)))
     if expected != "" && !rho_str_eq(port, ":" + expected) {
         return false
+    }
+    // The callback is the application's own: at the root of its port, where an
+    // application served on a port of its own answers it (Mesh at :8478 is
+    // /auth/callback, its route /mesh being only its first page), or under its
+    // route, where it is mounted behind a proxy.
+    if rho_str_eq(address, "/auth/callback") {
+        return true
     }
     var base: string = app_route(path)
     if base == "/" {

@@ -56,8 +56,11 @@ fi
 ORCHESTRATOR_ENV=""
 if [[ -n "$ORCHESTRATOR" && -d "$ORCHESTRATOR" ]]; then
     ORCHESTRATOR="$(cd "$ORCHESTRATOR" && pwd)"
+    # The workspace is the folder that holds the repositories, the orchestrator
+    # among them, so it is said by where the orchestrator is rather than taken
+    # from the keeper's environment, which a unit written before may have wrong.
     ORCHESTRATOR_ENV="Environment=ROBOHUB_ROOT=$ORCHESTRATOR
-Environment=ROBOHUB_WORKSPACE=${ROBOHUB_WORKSPACE:-$(dirname "$ORCHESTRATOR")}
+Environment=ROBOHUB_WORKSPACE=$(dirname "$ORCHESTRATOR")
 "
 fi
 

@@ -7,7 +7,8 @@
   {{#unless running}}
   <form method="post" action="/applications/start" hx-post="/applications/start" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit">Start</button></form>
   {{/unless}}
-  <form method="post" action="/applications/update" hx-post="/applications/update" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet" hx-confirm="Rebuild and restart {{ name }}?">Update</button></form>
+  <form method="post" action="/applications/build" hx-post="/applications/build" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet" title="Build from the sources; what runs is not touched">Build</button></form>
+  <form method="post" action="/applications/redeploy" hx-post="/applications/redeploy" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><button type="submit" class="quiet" title="Build, write the service for where it is now, and restart" hx-confirm="Build {{ name }}, deploy it and restart it?">Redeploy</button></form>
 {{/unless}}
 {{#if pinned}}
 <form method="post" action="/applications/menu" hx-post="/applications/menu" hx-target="closest tr" hx-swap="outerHTML"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="pinned" value="0"><button type="submit" class="quiet">Remove from menu</button></form>

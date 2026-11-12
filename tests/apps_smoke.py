@@ -70,6 +70,26 @@ def post(base: str, path: str, fields: dict) -> str:
         return response.read().decode("utf-8", "replace")
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def sign_in(base: str, audience: str, return_to: str, session: bool) -> tuple:
+    """The keeper's answer to an application sending a person to sign in: the
+    status, where it redirects, and the page."""
+    query = urllib.parse.urlencode({"audience": audience, "return_to": return_to, "next": "/"})
+    request = urllib.request.Request(base + "/auth/login?" + query)
+    if session:
+        request.add_header("Cookie", f"keeper_session={SESSION}")
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        with opener.open(request, timeout=10) as response:
+            return response.status, "", response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as answer:
+        return answer.code, answer.headers.get("Location", ""), answer.read().decode("utf-8", "replace")
+
+
 def assert_contains(haystack: str, needles: list, label: str) -> None:
     for needle in needles:
         if needle not in haystack:
@@ -126,7 +146,9 @@ def main() -> int:
         # components) by its home; the test gives the application a HOME of its own,
         # so the toolchain's home is named before that happens.
         env.setdefault("RHO_HOME", os.path.join(os.path.expanduser("~"), ".rho"))
-        env["ROBOHUB_WORKSPACE"] = str(ROBOHUB)
+        # The workspace is the folder that holds the repositories, Mesh's among
+        # them, which the orchestrator's registry names by a path beside it.
+        env["ROBOHUB_WORKSPACE"] = str(PROJECTS)
         env["RHO_KEEPER_STATE_DIR"] = os.path.join(state, "state")
         env["HOME"] = state
         env["RHO_HTTP_ADDR"] = f":{port}"
@@ -163,6 +185,26 @@ def main() -> int:
                 published = response.read().decode()
             if "BEGIN PUBLIC KEY" not in published or published != (keys / "public.pem").read_text():
                 raise AssertionError("the keeper does not publish its public key")
+
+            # Signing in to an application on a port of its own returns to its
+            # callback at the root of that port: Mesh at :8478 is answered at
+            # /auth/callback, its route /mesh being only its first page.
+            status, _, body = sign_in(base, "mesh", "http://127.0.0.1:8478/auth/callback", False)
+            if status != 200 or "not one this keeper signs in to" in body:
+                raise AssertionError(f"Mesh's sign-in is refused ({status}): {body[:200]}")
+            status, _, body = sign_in(base, "mesh", "http://127.0.0.1:8478/mesh/auth/callback", False)
+            if status != 200:
+                raise AssertionError(f"Mesh's sign-in behind its route is refused ({status})")
+            # Another port, or a callback that is not one, is refused.
+            for wrong in ("http://127.0.0.1:9999/auth/callback", "http://127.0.0.1:8478/elsewhere"):
+                status, _, _ = sign_in(base, "mesh", wrong, False)
+                if status != 400:
+                    raise AssertionError(f"a sign-in returning to {wrong} was not refused ({status})")
+            # The keeper signs in to itself on the port it was started on, which
+            # is not the port its manifest names.
+            status, location, body = sign_in(base, "keeper", base + "/auth/callback", True)
+            if status not in (302, 303) or not location.startswith(base + "/auth/callback?ticket="):
+                raise AssertionError(f"the keeper's own sign-in did not return to it ({status}, {location!r}): {body[:200]}")
 
             page = get(base, "/applications")
             assert_contains(
@@ -226,6 +268,26 @@ def main() -> int:
             assert_contains(get(base, "/api/applications/rows"),
                             ["Demo App", "not built"], "installed row")
             assert_contains(get(base, "/"), ["Demo App", "app-open"], "pinned menu entry")
+
+            # Build builds and nothing else: demo has no sources, so it says the
+            # build failed rather than that it was built.
+            built = post(base, "/applications/build", {"name": "demo"})
+            assert_contains(built, ["build failed"], "build of an application with no sources")
+            # A service unit written for where the application used to be is
+            # written again on a restart, which builds it from where it is now.
+            units = Path(state) / ".config" / "systemd" / "user"
+            units.mkdir(parents=True, exist_ok=True)
+            (units / "demo.service").write_text(
+                "[Service]\nWorkingDirectory=/nowhere/demo-app\n"
+                "Environment=ROBOHUB_APP_MANIFEST=/nowhere/demo-app/module.yml\n"
+                "Environment=RHO_HTTP_ADDR=:9009\nExecStart=/nowhere/demo-app/build/demo\n",
+                encoding="utf-8")
+            restarted = post(base, "/applications/restart", {"name": "demo"})
+            assert_contains(restarted, ["Could not deploy demo again", "the build failed"],
+                            "restart of an application whose unit is out of date")
+            redeployed = post(base, "/applications/redeploy", {"name": "demo"})
+            assert_contains(redeployed, ["the build failed"], "redeploy")
+            (units / "demo.service").unlink()
 
             unpinned = post(base, "/applications/menu", {"name": "demo", "pinned": "0"})
             assert_contains(unpinned, ["no longer in the keeper menu"], "unpin")

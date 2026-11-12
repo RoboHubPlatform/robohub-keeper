@@ -137,9 +137,27 @@ requesting application. The admin UI is behind that session. Tickets are
 verified by the application with Keeper's public key; a ticket carries the
 application audience, redirect URI, one-use id and a 30-second lifetime.
 
+Signing in to an application returns to its callback: `/auth/callback` at the
+root of the port it serves on (Mesh on `:8478`), or `<route>/auth/callback` when it
+is mounted behind a proxy. Keeper signs in to itself on the port it was started on
+(`RHO_HTTP_ADDR`), which need not be the one its manifest names.
+
+## Building, redeploying and restarting
+
+Each application row has three controls that act on what runs:
+
+- **Build** runs `rho build` on the application's folder and touches nothing
+  that is running; **Restart** then runs the new build.
+- **Redeploy** builds, writes the application's systemd user unit for where it
+  is now, and restarts it. A build that fails leaves the running program alone.
+- **Restart** restarts the service. A unit that no longer describes the
+  application — its folder, manifest, program or port changed, as when a
+  repository is moved — is deployed again first, so a moved application is not
+  left restarting a program that is no longer there. **Start** does the same.
+
 ## Artifact updates
 
-A signed artifact placed in `~/.rho/keeper/incoming/` is used by **Update** when
+A signed artifact placed in `~/.rho/keeper/incoming/` is used by **Redeploy** when
 it is the newest file for that application. Keeper verifies it, extracts it to
 `~/.rho/keeper/artifacts/<name>/<version>/`, points `build/<command>` at the new
 entrypoint, restarts the service, and checks its health endpoint. A failed

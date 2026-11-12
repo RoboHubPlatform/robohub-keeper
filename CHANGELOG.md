@@ -143,3 +143,12 @@ at `/auth/public-key`, to anyone and without a session: it is a public key. An
 application the keeper starts fetches it from there, and one started elsewhere is
 pointed at it with RHO_AUTH_URL, so no key is copied by hand. The smoke test
 checks that the published key is the keeper's.
+
+## [0.6.2] - 2026-11-12
+
+Signing in to an application on a port of its own returns to `/auth/callback`
+at its root, and keeper signs in to itself on the port it was started on. An
+application row has **Build** and **Redeploy** (build, write the service unit for
+where the application is now, restart); a unit left behind by a moved
+application is written again on Start and Restart. A failed build is reported
+as one.

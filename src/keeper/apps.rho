@@ -592,6 +592,9 @@ fn app_deploy_service(name: string, path: string) string {
         app_port(path) + "\n" + app_command(name, path) + "\n" + origin + "\n" +
         robohub_root() + "\n" + keeper_listen_port() + "\n", log)
     if code != 0 {
+        if rho_str_index_of(rho_read_text(log), "BUILD FAILED") >= 0 {
+            return "the build failed; see " + log
+        }
         return "its service did not start; see " + log
     }
     return ""
@@ -954,7 +957,10 @@ fn app_start(name: string) string {
     }
     let binary: string = app_binary(name, path)
     if !rho_path_exists(binary) {
-        return name + " is not built yet. Build it with: rho build " + path
+        let built: string = app_build(name, path)
+        if built != "" {
+            return name + " is not built, and " + built
+        }
     }
     let port: string = app_port(path)
     if port == "" {
@@ -990,6 +996,10 @@ fn app_start(name: string) string {
             return name + " is running as a service on port " + port + "."
         }
     }
+    let redeployed: string = app_redeploy_stale(name, path)
+    if redeployed != "" {
+        return redeployed
+    }
     if app_has_unit(name) {
         let code: u32 = app_systemctl("start", name)
         if code != 0 {
@@ -1012,7 +1022,7 @@ fn app_start(name: string) string {
     let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
     let app_manifest: string = path + "/module.yml"
     let script: string = "workspace=$(cd " + shell_quote(robohub_root()) + " && pwd); (cd " + shell_quote(path) +
-        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${ROBOHUB_WORKSPACE:-${workspace%/*}} RHO_APP_WORKSPACE=" +
+        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} RHO_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
         shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
@@ -1061,16 +1071,69 @@ fn app_stop(name: string) string {
     return name + " was stopped."
 }
 
-// app_build runs "rho build ." in the application directory and returns the
-// build log so the Update handler can check whether it succeeded.
+// app_build runs "rho build" on the application's folder and answers "" when it
+// built, or why it did not. A published application carries its program and has
+// nothing to build.
 fn app_build(name: string, path: string) string {
+    if rho_str_eq(record_origin(application_records(), name), "registry") {
+        return name + " is a published package; it is run as it was published."
+    }
     let report: string = apps_report("build-" + name)
     ignore_u32(rho_exec("rm", "-rf " + arg_quote(path + "/build/generated"), report))
-    ignore_u32(rho_exec("rho", "build " + path, report))
-    return rho_read_text(report)
+    if rho_exec("rho", "build " + arg_quote(path), report) != 0 {
+        return "the build failed; see " + report
+    }
+    if !rho_path_exists(app_binary(name, path)) {
+        return "the build made no " + app_binary(name, path) + "; see " + report
+    }
+    return ""
 }
 
+// app_canonical is a folder's path with no `..` and no symbolic link in it,
+// which is how a service unit names it.
+fn app_canonical(path: string) string {
+    let report: string = apps_report("realpath")
+    if rho_exec("realpath", "-e " + arg_quote(path), report) != 0 {
+        return path
+    }
+    let resolved: string = first_line(rho_read_text(report))
+    if resolved == "" {
+        return path
+    }
+    return resolved
+}
 
+// app_unit_current says whether an application's service unit still describes
+// it: its folder, its manifest, its program and its port. A unit written before
+// the application moved, or before its port changed, runs something that is no
+// longer there, and systemd restarts it forever.
+fn app_unit_current(name: string, path: string) bool {
+    let unit: string = rho_read_text(app_unit_path(name))
+    let dir: string = app_canonical(path)
+    var program: string = dir + "/build/" + app_command(name, path)
+    if rho_str_eq(record_origin(application_records(), name), "registry") {
+        program = dir + "/" + app_command(name, path)
+    }
+    return line_in_list(unit, "WorkingDirectory=" + dir) &&
+        line_in_list(unit, "Environment=ROBOHUB_APP_MANIFEST=" + dir + "/module.yml") &&
+        line_in_list(unit, "Environment=RHO_HTTP_ADDR=:" + app_port(path)) &&
+        line_in_list(unit, "ExecStart=" + program)
+}
+
+// app_redeploy_stale writes an application's unit again when it no longer
+// describes the application, which builds it from where it is now and starts
+// it. It answers "" when the unit was current and nothing was done.
+fn app_redeploy_stale(name: string, path: string) string {
+    if !app_has_unit(name) || app_unit_current(name, path) {
+        return ""
+    }
+    info("keeper", "the service unit of " + name + " is out of date; deploying it again")
+    let failure: string = app_deploy_service(name, path)
+    if failure != "" {
+        return "Could not deploy " + name + " again: " + failure
+    }
+    return name + " was deployed again from " + app_canonical(path) + " and is running on port " + app_port(path) + "."
+}
 
 fn app_artifact_dir(name: string) string {
     return keeper_state_dir() + "/artifacts/" + name
@@ -1212,8 +1275,10 @@ fn app_update_artifact(name: string, path: string) string {
     return "ok"
 }
 
-// app_update rebuilds, stops and restarts the application.
-fn app_update(name: string, path: string) string {
+// app_redeploy installs a staged artifact when there is one; otherwise it
+// builds the application from its folder, writes its service unit for where it
+// is now, and restarts it. A build that fails leaves the running program alone.
+fn app_redeploy(name: string, path: string) string {
     let artifact: string = app_update_artifact(name, path)
     if rho_str_eq(artifact, "ok") {
         return name + " was updated from a staged artifact."
@@ -1221,16 +1286,32 @@ fn app_update(name: string, path: string) string {
     if artifact != "" {
         return "artifact update failed: " + artifact
     }
-    let build: string = app_build(name, path)
-    if rho_str_index_of(build, "Generated project:") < 0 {
-        return "build failed: " + build
+    if app_kind(path) == "keeper" {
+        return "The keeper cannot redeploy itself; run scripts/deploy-keeper.sh."
     }
-    ignore_string(app_stop(name))
-    return app_start(name)
+    if app_port(path) == "" {
+        // Nothing is served, so there is no service to write: a build is all a
+        // redeploy can be.
+        let failure: string = app_build(name, path)
+        if failure != "" {
+            return "build failed: " + failure
+        }
+        return name + " was built."
+    }
+    let failure: string = app_deploy_service(name, path)
+    if failure != "" {
+        return failure
+    }
+    info("keeper", "redeployed application " + name)
+    return name + " was built and deployed; it is running on port " + app_port(path) + "."
 }
 
 // app_restart stops and starts the application without rebuilding.
 fn app_restart(name: string, path: string) string {
+    let redeployed: string = app_redeploy_stale(name, path)
+    if redeployed != "" {
+        return redeployed
+    }
     if app_has_unit(name) {
         let code: u32 = app_systemctl("restart", name)
         if code != 0 {
@@ -1272,20 +1353,36 @@ fn applications_stop(req: Request) Response {
     return applications_page_message(req, message)
 }
 
-fn applications_update(req: Request) Response {
+fn applications_redeploy(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if name == "" { return applications_page_message(req, "No name given") }
     let path: string = app_path(name)
     if path == "" { return applications_page_message(req, "Unknown application") }
-    let result: string = app_update(name, path)
+    let result: string = app_redeploy(name, path)
     if htmx_is_request(req) {
         return application_row_response(name)
     }
-    if rho_str_index_of(result, "build failed:") >= 0 {
-        return applications_page_message(req, escape_html(result))
+    return applications_page_message(req, escape_html(result))
+}
+
+// applications_build builds an application without touching what runs; Restart
+// then runs the new build.
+fn applications_build(req: Request) Response {
+    let body: string = request_body(req)
+    let name: string = trim(form_value(body, "name"))
+    if name == "" { return applications_page_message(req, "No name given") }
+    let path: string = app_path(name)
+    if path == "" { return applications_page_message(req, "Unknown application") }
+    let failure: string = app_build(name, path)
+    var result: string = name + " was built; Restart runs the new build."
+    if failure != "" {
+        result = "build failed: " + failure
     }
-    return applications_page_message(req, "Updated " + escape_html(name))
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
+    return applications_page_message(req, escape_html(result))
 }
 
 fn applications_restart(req: Request) Response {
@@ -1298,7 +1395,7 @@ fn applications_restart(req: Request) Response {
     if htmx_is_request(req) {
         return application_row_response(name)
     }
-    return applications_page_message(req, "Restarted " + escape_html(name))
+    return applications_page_message(req, escape_html(result))
 }
 
 fn applications_uninstall(req: Request) Response {
