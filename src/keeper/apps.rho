@@ -112,9 +112,86 @@ fn external_records() string {
     return out
 }
 
+// tsv_field is one tab-separated field of a line, or "" past the last.
+fn tsv_field(line: string, index: u32) string {
+    var rest: string = line
+    var i: u32 = 0
+    while i < index {
+        let at: i32 = rho_str_index_of(rest, "\t")
+        if at < 0 {
+            return ""
+        }
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        i = i + 1
+    }
+    let end: i32 = rho_str_index_of(rest, "\t")
+    if end < 0 {
+        return rest
+    }
+    return rho_str_slice(rest, 0, u32(end))
+}
+
+fn is_application(path: string) bool {
+    return rho_path_exists(manifest_of(path)) &&
+        (yaml.value(manifest_of(path), "module.kind") != "" || yaml.value(manifest_of(path), "application.kind") != "")
+}
+
+// registry_records are the applications published to this machine's module
+// registry, the selected version of each. The toolchain says where each is, so
+// the keeper never learns how the registry lays out what it installs.
+fn registry_records() string {
+    let report: string = apps_report("list-registry")
+    if rho_exec_args("rho", "module\nlist\n--format\ntsv\n", report) != 0 {
+        return ""
+    }
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let path: string = tsv_field(line, 3)
+        if tsv_field(line, 0) == "module" && tsv_field(line, 4) == "selected" && is_application(path) {
+            out = out + record(tsv_field(line, 1), path, "registry")
+        }
+    }
+    return out
+}
+
+// records_without drops the records whose name is already in `taken`, so one
+// application is one row wherever else it is also found.
+fn records_without(records: string, taken: string) string {
+    var out: string = ""
+    var rest: string = records
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line != "" && record_path(taken, tsv_field(line, 0)) == "" {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// application_records are what the keeper runs: what is published to the
+// registry first, then what a folder beside the keeper holds, which is how an
+// application is run before it is published, then what was registered by path.
 fn application_records() string {
     ensure_keeper_state()
-    return bundled_records() + external_records()
+    var records: string = registry_records()
+    records = records + records_without(bundled_records(), records)
+    return records + records_without(external_records(), records)
 }
 
 fn record_path(records: string, wanted: string) string {
@@ -410,8 +487,14 @@ fn port_answers(port: string, path: string) bool {
     return code == 0
 }
 
+// app_binary is the application's program: the one a build in its folder made,
+// or, for a published application, the one its package carries.
 fn app_binary(name: string, path: string) string {
-    return path + "/build/" + app_command(name, path)
+    let built: string = path + "/build/" + app_command(name, path)
+    if !rho_path_exists(built) && rho_path_exists(path + "/" + app_command(name, path)) {
+        return path + "/" + app_command(name, path)
+    }
+    return built
 }
 
 fn app_running(name: string, path: string) bool {
@@ -447,8 +530,13 @@ fn app_remove_unit(name: string) void {
         apps_report("daemon-reload-" + name)))
 }
 
+// app_deploy_service installs an application as a user service with the
+// deploy script the keeper carries. The keeper says everything the script needs
+// — where the application is, its port and program, whether it is built from its
+// sources or is a published package, and the orchestrator it belongs to — so the
+// script reads no manifest and knows no repository layout.
 fn app_deploy_service(name: string, path: string) string {
-    let script: string = robohub_root() + "/scripts/deploy-app.sh"
+    let script: string = rho_asset_dir("keeper") + "/scripts/deploy-app.sh"
     if !rho_path_exists(script) {
         return "its deploy script is missing"
     }
@@ -456,7 +544,13 @@ fn app_deploy_service(name: string, path: string) string {
     // The credential is registered and the environment file written before the
     // unit is, so the unit can name the file.
     ignore_string(app_write_client_env(name, path, app_provision_client(name, path)))
-    let code: u32 = rho_exec_args("bash", script + "\n" + name + "\n" + path + "\n", log)
+    var origin: string = record_origin(application_records(), name)
+    if origin == "" {
+        origin = "bundled"
+    }
+    let code: u32 = rho_exec_args("bash", script + "\n" + name + "\n" + path + "\n" +
+        app_port(path) + "\n" + app_command(name, path) + "\n" + origin + "\n" +
+        robohub_root() + "\n" + keeper_listen_port() + "\n", log)
     if code != 0 {
         return "its service did not start; see " + log
     }
@@ -877,14 +971,14 @@ fn app_start(name: string) string {
     let pid_file: string = path + "/build/app.pid"
     let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
     let app_manifest: string = path + "/module.yml"
-    let script: string = "workspace=$(pwd); (cd " + shell_quote(path) +
-        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} RHO_APP_WORKSPACE=" +
+    let script: string = "workspace=$(cd " + shell_quote(robohub_root()) + " && pwd); (cd " + shell_quote(path) +
+        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${ROBOHUB_WORKSPACE:-${workspace%/*}} RHO_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_WORKSPACE=" +
         shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
         shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
         app_client_env(name, path, app_provision_client(name, path)) +
         " RHO_HTTP_ADDR=:" + port +
-        " exec nohup ./build/" + app_command(name, path) +
+        " exec nohup " + shell_quote(app_binary(name, path)) +
         " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)
     let code: u32 = rho_exec("sh", "-c \"" + script + "\"", apps_report("start-" + name))
     if code != 0 {

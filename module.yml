@@ -23,6 +23,7 @@ build:
 # The application's own files, embedded when it is built.
 assets:
   - module.yml
+  - scripts/deploy-app.sh
 
 deps:
   rho-log: ">=0.1.2"
