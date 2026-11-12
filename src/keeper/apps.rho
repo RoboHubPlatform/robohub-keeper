@@ -184,12 +184,52 @@ fn records_without(records: string, taken: string) string {
     return out
 }
 
+// workspace_records are the applications the orchestrator's registry names by
+// where they are checked out (`registry/modules/<name>.yml`, `role: application`):
+// an application that has a repository of its own, beside the orchestrator,
+// rather than a folder in it. The registry says where; the application's own
+// manifest says what it is.
+fn workspace_records() string {
+    let dir: string = robohub_root() + "/registry/modules"
+    if !rho_path_exists(dir) {
+        return ""
+    }
+    let report: string = apps_report("list-workspace")
+    ignore_u32(rho_exec("ls", dir, report))
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var file: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            file = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_index_of(file, ".yml") < 0 {
+            continue
+        }
+        let entry: string = dir + "/" + file
+        if yaml.value(entry, "role") != "application" {
+            continue
+        }
+        let path: string = resolve_path(yaml.value(entry, "path"))
+        if is_application(path) {
+            out = out + record(yaml.value(manifest_of(path), "module.name"), path, "workspace")
+        }
+    }
+    return out
+}
+
 // application_records are what the keeper runs: what is published to the
-// registry first, then what a folder beside the keeper holds, which is how an
-// application is run before it is published, then what was registered by path.
+// registry first, then what the orchestrator's registry names in the workspace,
+// then a folder beside the keeper, which is how an application is run before it
+// is published, then what was registered by path.
 fn application_records() string {
     ensure_keeper_state()
     var records: string = registry_records()
+    records = records + records_without(workspace_records(), records)
     records = records + records_without(bundled_records(), records)
     return records + records_without(external_records(), records)
 }

@@ -105,3 +105,10 @@ log. The keeper itself reads the same policy and writes to the shared logging
 path. Starting a bundled application that has no unit now deploys it as a user
 service first, so energy and future bundled apps are managed by systemd like
 mesh and aquarium.
+
+## [0.5.8] - 2026-11-12
+
+The keeper finds the applications the orchestrator's registry names with
+`role: application`, by the path each entry gives, after the published ones and
+before the folders beside it. That is how Mesh, which has its own repository
+now, is listed and started.

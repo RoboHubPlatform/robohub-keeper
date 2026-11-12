@@ -62,8 +62,9 @@ left-menu selection and the paths of externally registered applications live in
 `~/.rho/keeper/` (`menu.txt`, `applications.txt`), or in
 `RHO_KEEPER_STATE_DIR`.
 
-The Mesh application is one of these: build it with
-`rho build applications/mesh` and launch it from the registry. Its own guide is
+The Mesh application is one of these: it has its own repository, robohub-mesh,
+which the orchestrator's registry names (`registry/modules/robohub-mesh.yml`);
+build it with `rho build ../robohub-mesh` and launch it from the registry. Its own guide is
 the Mesh module's documentation.
 
 ## Tests

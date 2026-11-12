@@ -75,8 +75,10 @@ rendered. A started application is also told the keeper's port, so it can offer
 a **Go to Keeper** link back. `RHO_KEEPER_STATE_DIR` names another state
 directory, which is what the tests use.
 
-`rho build applications/mesh` builds the Mesh application, and the keeper can
-start it from its registry row. Its own guide is the Mesh module's
+Mesh has its own repository, robohub-mesh, beside the orchestrator: `rho build
+../robohub-mesh` builds it, and the keeper finds it through the orchestrator's
+registry (`registry/modules/robohub-mesh.yml`, `role: application`) and can start
+it from its row. Its own guide is the Mesh module's
 documentation.
 
 ## Registry
