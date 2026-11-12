@@ -6,7 +6,7 @@ include "keeper/storage.rho"
 include "keeper/apps_text.rho"
 include "forms"
 include "settings"
-include "robohub-contract-alert"
+include "keeper/plugin_registry.rho"
 include "keeper/alerts.rho"
 include "keeper/apps.rho"
 include "keeper/plugins.rho"
@@ -24,6 +24,7 @@ include "logging"
 import std.web.http
 import std.web.template
 import rho.log
+import robohub.alert
 
 /// The documentation tree the site is built from.
 const DOCS_TREE: string = "build/doctree"

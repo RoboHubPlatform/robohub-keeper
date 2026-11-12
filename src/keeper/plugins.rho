@@ -2,12 +2,13 @@ module keeper.plugins
 
 // The keeper's plugin registry.
 //
-// The plugins themselves are Rho modules under the ecosystem's plugins/
-// directory. This page lists what is installed, what the keeper has enabled, and
-// lets a person install or remove one and send a test alert through it. The
-// application's own module.yml says which plugins it wants; an override written
-// here changes only this keeper, so a source-controlled default is not edited by
-// a dashboard.
+// Two lists. The alert channels are the providers of the alert interface the
+// keeper's module.yml binds: this page switches one on or off and sends a test
+// through it, both through the interface. The plugins are Rho modules under the
+// ecosystem's plugins/ directory: this page lists what is installed and what the
+// keeper has enabled, and installs or removes one. Either change is this
+// installation's only, so a source-controlled default is not edited by a
+// dashboard.
 
 import std.web.http
 import std.web.template
@@ -53,7 +54,7 @@ fn plugin_action_forms(name: string, enabled: bool) string {
 
 fn plugin_row_line(line: string) string {
     let name: string = field(line, 0)
-    let enabled: bool = registry_enabled(keeper_registry(), name)
+    let enabled: bool = keeper_plugin_enabled(name)
     var status: string = plugin_status("stopped", "disabled")
     if enabled {
         status = plugin_status("running", "enabled")
@@ -110,6 +111,48 @@ fn plugin_rows_html() string {
     return out
 }
 
+fn channel_row_html(name: string) string {
+    let enabled: bool = alert.enabled(name)
+    var enabled_flag: string = ""
+    var status: string = plugin_status("stopped", "disabled")
+    if enabled {
+        enabled_flag = "true"
+        status = plugin_status("running", "enabled")
+    }
+    var threshold: string = alert.config(name, "severity_threshold")
+    if threshold == "" {
+        threshold = "INFO"
+    }
+    return template_fill(template_get("channel-row"),
+        vars("name", name) +
+        vars("threshold", threshold) +
+        vars("status", status) +
+        vars("actions", template_fill(template_get("channel-actions"),
+            vars("name", name) + vars("enabled", enabled_flag))))
+}
+
+fn channel_rows_html() string {
+    var out: string = ""
+    var rest: string = alert.providers()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            name = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if name != "" {
+            out = out + channel_row_html(name)
+        }
+    }
+    if out == "" {
+        out = "<tr><td colspan=\"4\">The keeper binds no alert channel.</td></tr>"
+    }
+    return out
+}
+
 fn plugin_status(tone: string, label: string) string {
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
@@ -120,7 +163,8 @@ fn plugins_page_message(req: Request, message: string) Response {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("plugins"),
-        vars("notice", notice) + vars("rows", plugin_rows_html()) +
+        vars("notice", notice) + vars("channels", channel_rows_html()) +
+        vars("rows", plugin_rows_html()) +
         vars("root", plugin_root()))
     return page(req, i18n_t(req, "page.plugins"), body)
 }
@@ -133,6 +177,20 @@ fn plugins_toggle(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     let enabled: string = form_value(body, "enabled")
+    if keeper_alert_bound(name) {
+        var value: string = "true"
+        if enabled == "0" {
+            value = "false"
+        }
+        if !alert.configure(name, "enabled", value) {
+            return plugins_page_message(req, "The setting for " + name + " could not be saved.")
+        }
+        info("keeper", "alert channel " + name + " enabled=" + value)
+        if htmx_is_request(req) {
+            return html(status_ok(), channel_row_html(name))
+        }
+        return plugins_page_message(req, name + " is " + value_word(value) + " for the keeper.")
+    }
     if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
         return plugins_page_message(req, "No such plugin: " + name)
     }
@@ -154,20 +212,26 @@ fn plugins_toggle(req: Request) Response {
 fn plugins_test(req: Request) Response {
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
-    if !rho_path_exists(plugin_manifest(plugin_root(), name)) {
-        return plugins_page_message(req, "No such plugin: " + name)
+    if !keeper_alert_bound(name) {
+        return plugins_page_message(req, "No such alert channel: " + name)
     }
-    let sent: u32 = registry_alert_one(plugin_root(), keeper_registry(), name, "INFO",
-        "Test alert from the RoboHub keeper", "app=keeper")
+    let sent: u32 = alert.test(name, "Test alert from the RoboHub keeper")
     if sent == 0 {
-        return plugins_page_message(req, "The test alert from " + name +
-            " was not delivered. Its settings or its provider are incomplete.")
+        return plugins_page_message(req, "The test alert through " + name +
+            " was not delivered. Its settings are incomplete or its program failed.")
     }
     info("keeper", "sent a test alert through " + name)
     if htmx_is_request(req) {
-        return html(status_ok(), plugin_row_html(name))
+        return html(status_ok(), channel_row_html(name))
     }
     return plugins_page_message(req, "The test alert was handed to " + name + ".")
+}
+
+fn value_word(value: string) string {
+    if value == "false" {
+        return "disabled"
+    }
+    return "enabled"
 }
 
 fn plugin_source_name(source: string) string {

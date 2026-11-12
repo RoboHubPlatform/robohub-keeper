@@ -1,0 +1,291 @@
+module keeper.plugin_registry
+
+// The keeper's plugin and provider registries: plugins/registry.yml and
+// providers/registry.yml, the installed set a person manages from the keeper's
+// pages. The keeper owns these files; no application reads them to reach a
+// plugin, because an application reaches what it uses through its declared
+// dependencies and its bindings.
+
+fn plugin_trim(text: string) string {
+    var out: string = text
+    while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, 0, 1), " ") {
+        out = rho_str_slice(out, 1, u32(rho_strlen(out)) - 1)
+    }
+    while rho_strlen(out) > 0 &&
+        rho_str_eq(rho_str_slice(out, u32(rho_strlen(out)) - 1, 1), " ") {
+        out = rho_str_slice(out, 0, u32(rho_strlen(out)) - 1)
+    }
+    return out
+}
+
+fn plugin_unquote(text: string) string {
+    let value: string = plugin_trim(text)
+    if rho_strlen(value) >= 2 &&
+        (rho_str_eq(rho_str_slice(value, 0, 1), "\"") ||
+         rho_str_eq(rho_str_slice(value, 0, 1), "'")) {
+        let first: string = rho_str_slice(value, 0, 1)
+        let last: string = rho_str_slice(value, u32(rho_strlen(value)) - 1, 1)
+        if rho_str_eq(first, last) {
+            return rho_str_slice(value, 1, u32(rho_strlen(value)) - 2)
+        }
+    }
+    return value
+}
+
+fn plugin_home() string {
+    let home: string = getenv("HOME")
+    if home == "" {
+        return "."
+    }
+    return home
+}
+
+fn plugin_state_dir() string {
+    let dir: string = plugin_home() + "/.rho/plugins"
+    ignore_u32(rho_exec("mkdir", "-p " + dir, dir + "/mkdir.txt"))
+    return dir
+}
+
+fn plugin_location(root: string, name: string) string {
+    var rest: string = plugin_db_entries(root)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let pipe: i32 = rho_str_index_of(line, "|")
+        if pipe >= 0 && rho_str_eq(rho_str_slice(line, 0, u32(pipe)), name) {
+            let location: string = rho_str_slice(line, u32(pipe) + 1,
+                u32(rho_strlen(line)) - u32(pipe) - 1)
+            if location != "" {
+                return location
+            }
+        }
+    }
+    return name
+}
+
+fn plugin_manifest(root: string, name: string) string {
+    return root + "/" + plugin_location(root, name) + "/module.yml"
+}
+
+// plugin_rows lists every plugin in the registry database:
+//   name|kind|transport|summary|manifest|present
+// The path is checked on disk on every call; a row whose directory is gone is
+// still shown, marked not present, rather than silently disappearing.
+fn plugin_rows(root: string) string {
+    var out: string = ""
+    let entries: string = plugin_db_entries(root)
+    if entries != "" {
+        var rest: string = entries
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "\n")
+            let line: string = ""
+            if at < 0 {
+                line = rest
+                rest = ""
+            } else {
+                line = rho_str_slice(rest, 0, u32(at))
+                rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            }
+            let pipe: i32 = rho_str_index_of(line, "|")
+            if pipe < 0 {
+                continue
+            }
+            let name: string = rho_str_slice(line, 0, u32(pipe))
+            let location: string = rho_str_slice(line, u32(pipe) + 1,
+                u32(rho_strlen(line)) - u32(pipe) - 1)
+            if location == "" {
+                location = name
+            }
+            let manifest: string = root + "/" + location + "/module.yml"
+            var present: string = "true"
+            if !rho_path_exists(manifest) {
+                present = "false"
+            }
+            var kind: string = ""
+            var transport: string = ""
+            var summary: string = "not found on disk"
+            if rho_str_eq(present, "true") {
+                kind = plugin_field(manifest, "kind")
+                transport = plugin_field(manifest, "transport")
+                summary = yaml.value(manifest, "module.description")
+                if summary == ">" {
+                    summary = ""
+                }
+                if summary == "" {
+                    summary = yaml.value(manifest, "plugin.summary")
+                }
+            }
+            out = out + name + "|" + kind + "|" + transport + "|" + summary + "|" +
+                manifest + "|" + present + "\n"
+        }
+        return out
+    }
+    // A checkout that has never had a registry file uses the folder as the
+    // database. The first install writes the file.
+    let report: string = plugin_state_dir() + "/find.txt"
+    ignore_u32(rho_exec("mkdir", "-p " + plugin_state_dir(), report))
+    let code: u32 = rho_exec("find", root + " -maxdepth 2 -type f -name module.yml", report)
+    if code != 0 {
+        return ""
+    }
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let manifest: string = ""
+        if at < 0 {
+            manifest = rest
+            rest = ""
+        } else {
+            manifest = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if manifest == "" {
+            continue
+        }
+        let name: string = yaml.value(manifest, "module.name")
+        if name == "" {
+            continue
+        }
+        let kind: string = plugin_field(manifest, "kind")
+        let transport: string = plugin_field(manifest, "transport")
+        var summary: string = yaml.value(manifest, "module.description")
+        if summary == ">" {
+            summary = ""
+        }
+        if summary == "" {
+            summary = yaml.value(manifest, "plugin.summary")
+        }
+        out = out + name + "|" + kind + "|" + transport + "|" + summary + "|" +
+            manifest + "|true\n"
+    }
+    return out
+}
+
+// plugin_field is one of a plugin's own facts — its kind, transport or provider —
+// where its manifest declares it: `module.plugin_<key>`, as every plugin here is
+// written, or a `plugin:` block, as the manifest guide describes.
+fn plugin_field(manifest: string, key: string) string {
+    let declared: string = yaml.value(manifest, "module.plugin_" + key)
+    if declared != "" {
+        return declared
+    }
+    return yaml.value(manifest, "plugin." + key)
+}
+
+// plugin_registry_file is the installed set under a root. An entry whose path
+// has no module.yml is reported as missing; with no file the folder itself is
+// the set, so a checkout that has never had one installed still lists it.
+fn plugin_registry_file(root: string) string {
+    return root + "/registry.yml"
+}
+
+fn plugin_db_entries(root: string) string {
+    let path: string = plugin_registry_file(root)
+    if !rho_path_exists(path) {
+        return ""
+    }
+    let text: string = rho_read_text(path)
+    var out: string = ""
+    var name: string = ""
+    var location: string = ""
+    var i: u32 = 0
+    while i < u32(rho_strlen(text)) {
+        let at: i32 = rho_str_index_of(
+            rho_str_slice(text, i, u32(rho_strlen(text)) - i), "\n")
+        let end: u32 = u32(rho_strlen(text))
+        if at >= 0 {
+            end = i + u32(at)
+        }
+        let line: string = rho_str_slice(text, i, end - i)
+        let trimmed: string = plugin_trim(line)
+        if rho_str_index_of(trimmed, "- name:") == 0 {
+            if name != "" {
+                out = out + name + "|" + location + "\n"
+            }
+            name = plugin_unquote(rho_str_slice(trimmed, 7,
+                u32(rho_strlen(trimmed)) - 7))
+            location = name
+        } else if rho_str_index_of(trimmed, "path:") == 0 {
+            location = plugin_unquote(rho_str_slice(trimmed, 5,
+                u32(rho_strlen(trimmed)) - 5))
+        }
+        i = end + 1
+    }
+    if name != "" {
+        out = out + name + "|" + location + "\n"
+    }
+    return out
+}
+
+fn plugin_db_add(root: string, name: string) bool {
+    let path: string = plugin_registry_file(root)
+    let text: string = rho_read_text(path)
+    if rho_str_index_of(text, "  - name: " + name + "\n") >= 0 {
+        return true
+    }
+    var out: string = text
+    if rho_strlen(out) == 0 {
+        out = "plugins:\n"
+    }
+    out = out + "  - name: " + name + "\n    path: " + name + "\n    enabled: true\n"
+    return rho_write_text(path, out)
+}
+
+fn plugin_db_remove(root: string, name: string) bool {
+    let path: string = plugin_registry_file(root)
+    let text: string = rho_read_text(path)
+    var out: string = ""
+    var skip: bool = false
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = ""
+        if at < 0 {
+            line = rest
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let trimmed: string = plugin_trim(line)
+        if rho_str_index_of(trimmed, "- name:") == 0 {
+            let found: string = plugin_unquote(rho_str_slice(trimmed, 7,
+                u32(rho_strlen(trimmed)) - 7))
+            skip = rho_str_eq(found, name)
+        }
+        if !skip {
+            out = out + line + "\n"
+        }
+    }
+    return rho_write_text(path, out)
+}
+
+// keeper_plugin_enabled is whether the keeper has a plugin switched on: what the
+// keeper's own override says (plugins.txt, written by the plugins page), and on
+// when it says nothing.
+fn keeper_plugin_enabled(name: string) bool {
+    var rest: string = rho_read_text(keeper_plugin_state_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let equals: i32 = rho_str_index_of(line, "=")
+        if equals >= 0 && rho_str_eq(rho_str_slice(line, 0, u32(equals)), name) {
+            let value: string = rho_str_slice(line, u32(equals) + 1, u32(rho_strlen(line)) - u32(equals) - 1)
+            return !(value == "0" || value == "false")
+        }
+    }
+    return true
+}

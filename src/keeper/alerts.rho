@@ -1,8 +1,8 @@
 module keeper.alerts
 
-// The keeper's view of the plugin registry. It lives apart from the plugins
-// page so the application registry can raise an alert without depending on a
-// page, and the page can use the same registry the application does.
+// Where the keeper's plugins are, and how the keeper raises an alert. It lives
+// apart from the plugins page so the application registry can raise an alert
+// without depending on a page.
 
 fn plugin_root() string {
     return robohub_root() + "/plugins"
@@ -26,18 +26,36 @@ fn keeper_plugin_state_file() string {
     return keeper_state_dir() + "/plugins.txt"
 }
 
-fn keeper_registry() string {
-    let manifest: string = keeper_manifest_path()
-    if manifest == "" {
-        return ""
-    }
-    return registry_load_app(plugin_root(), manifest, keeper_plugin_state_file())
+// keeper_alert raises an alert through the alert interface: every channel the
+// keeper binds in its module.yml, as configured on the Settings page.
+fn keeper_alert(level: string, message: string, metadata: string) u32 {
+    return alert.raise(level, message, metadata)
 }
 
-fn keeper_alert(level: string, message: string, metadata: string) u32 {
-    let registry: string = keeper_registry()
-    if registry == "" {
-        return 0
+// keeper_alert_list is the bound channels as a comma-separated list.
+fn keeper_alert_list() string {
+    var out: string = ""
+    var rest: string = alert.providers()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            name = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if name != "" {
+            if out != "" {
+                out = out + ", "
+            }
+            out = out + name
+        }
     }
-    return registry_alert(plugin_root(), registry, level, message, metadata)
+    return out
+}
+
+// keeper_alert_bound is whether a channel is one the keeper binds.
+fn keeper_alert_bound(name: string) bool {
+    return name != "" && rho_str_index_of("\n" + alert.providers(), "\n" + name + "\n") >= 0
 }

@@ -34,7 +34,6 @@
   "settings.orientation.horizontal": "Horizontal",
   "settings.save": "Save",
   "settings.csrf_refused": "Refused: the form token did not match.",
-  "settings.alerts.targets": "Enabled channels",
   "settings.alerts.threshold": "Alert threshold",
   "settings.alerts.log_path": "Alert log path",
   "settings.alerts.email_to": "Email recipient",
@@ -62,5 +61,10 @@
   "nodes.rotate": "Rotate",
   "nodes.revoke": "Revoke",
   "settings.tab.logging": "Logging",
-  "nav.logout": "Logout"
+  "nav.logout": "Logout",
+  "settings.alerts.on": "On",
+  "settings.alerts.off": "Off",
+  "settings.alerts.email_enabled": "E-mail alerts",
+  "settings.alerts.telegram_enabled": "Telegram alerts",
+  "settings.alerts.telegram_threshold": "Telegram threshold"
 }

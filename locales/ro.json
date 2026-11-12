@@ -34,7 +34,6 @@
   "settings.orientation.horizontal": "Orizontal",
   "settings.save": "Salvează",
   "settings.csrf_refused": "Refuzat: tokenul formularului nu corespunde.",
-  "settings.alerts.targets": "Canale active",
   "settings.alerts.threshold": "Prag alerte",
   "settings.alerts.log_path": "Calea jurnalului de alerte",
   "settings.alerts.email_to": "Destinatar email",
@@ -62,5 +61,10 @@
   "nodes.rotate": "Rotește",
   "nodes.revoke": "Revocă",
   "settings.tab.logging": "Jurnalizare",
-  "nav.logout": "Deconectare"
+  "nav.logout": "Deconectare",
+  "settings.alerts.on": "Pornit",
+  "settings.alerts.off": "Oprit",
+  "settings.alerts.email_enabled": "Alerte prin e-mail",
+  "settings.alerts.telegram_enabled": "Alerte prin Telegram",
+  "settings.alerts.telegram_threshold": "Prag Telegram"
 }

@@ -1,9 +1,23 @@
 <h1>Plugins</h1>
-<p>Plugins are Rho modules under <code>plugins/</code>. An application names the
-ones it uses in its <code>module.yml</code>; this page manages the keeper's own
-set. Enabling or disabling here changes only the keeper, leaving the manifest it
-was installed with intact.</p>
 {{{ notice }}}
+<h2>Alert channels</h2>
+<p>The channels the keeper's alerts go to: the providers of the alert interface
+its <code>module.yml</code> binds. Switching one off, or changing its settings on
+the Settings page, changes this installation only. A channel is added by binding
+its provider and rebuilding the keeper.</p>
+<table>
+<thead>
+<tr><th>Channel</th><th>Threshold</th><th>State</th><th></th></tr>
+</thead>
+<tbody>
+{{{ channels }}}
+</tbody>
+</table>
+
+<h2>Installed plugins</h2>
+<p>Plugins are Rho modules under <code>plugins/</code>. This page manages the
+keeper's own set. Enabling or disabling here changes only the keeper, leaving
+the manifest it was installed with intact.</p>
 <table>
 <thead>
 <tr><th>Plugin</th><th>Kind</th><th>Transport</th><th>Description</th><th>State</th><th></th></tr>
@@ -18,11 +32,11 @@ was installed with intact.</p>
 machine. A plugin is a module whose manifest says <code>type: plugin</code>.</p>
 <form class="grid app-install" method="post" action="/plugins/install">
   <label>Name
-    <input name="name" placeholder="alert-log">
+    <input name="name" placeholder="mesh-gateway">
     <small>Empty uses the repository or folder name.</small>
   </label>
   <label>Source
-    <input name="source" placeholder="https://github.com/RoboHubPlatform/robohub-alert-plugin or /path/to/plugin">
+    <input name="source" placeholder="https://github.com/RoboHubPlatform/robohub-plugin or /path/to/plugin">
     <small>A git URL, or a folder with a plugin module.yml.</small>
   </label>
   <button type="submit">Install</button>

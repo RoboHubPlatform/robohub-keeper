@@ -122,3 +122,16 @@ it. Installing a module checks `module.type: module`, and module titles come
 from `module.title`. `deploy-keeper.sh` gives the keeper a workspace of its own
 (`~/.rho/keeper`), carrying over settings it had in the shared store, and
 rewrites a unit written before that.
+
+## [0.6.0] - 2026-11-12
+
+The keeper raises its alerts through the alert interface: it binds the log,
+e-mail and Telegram providers in its `module.yml`, and the alert plugins it used
+to name are gone. The Settings page's Alerts tab writes each channel's settings
+through the binding, including whether e-mail and Telegram are on, and the
+Plugins page lists the bound channels apart from the installed plugins: a
+channel is switched on or off and sent a test through the interface, and a
+plugin is enabled, installed or removed as before. The Providers page shows
+which interface a provider implements, from its `implements` list. The plugin
+and provider registry files are the keeper's own code rather than the alert
+contract's.

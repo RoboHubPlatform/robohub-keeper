@@ -162,22 +162,30 @@ def main() -> int:
                 "application rows",
             )
 
+            # The alert channels are the providers the keeper binds; the plugins
+            # are the installed set under plugins/.
             plugins = get(base, "/plugins")
             assert_contains(
                 plugins,
-                ["Plugins", "alert-dispatcher", "alert-log", "email-alert",
-                 "telegram-notifier", "webhook-alert", "Install a plugin"],
+                ["Alert channels", "robohub-provider-log", "robohub-provider-email",
+                 "robohub-provider-telegram", "Installed plugins", "robohub-auth",
+                 "mesh-gateway", "Install a plugin"],
                 "plugin registry",
             )
-            tested = post(base, "/plugins/test", {"name": "alert-log"})
-            assert_contains(tested, ["handed to alert-log"], "plugin test")
+            tested = post(base, "/plugins/test", {"name": "robohub-provider-log"})
+            assert_contains(tested, ["handed to robohub-provider-log"], "alert channel test")
             alert_log = Path(state) / ".rho" / "keeper" / "alerts.log"
             if not alert_log.exists() or "Test alert" not in alert_log.read_text():
                 raise AssertionError("the local alert channel wrote no alert")
-            toggled = post(base, "/plugins/toggle", {"name": "email-alert", "enabled": "1"})
-            assert_contains(toggled, ["enabled for the keeper"], "plugin toggle")
+            toggled = post(base, "/plugins/toggle", {"name": "robohub-provider-email", "enabled": "1"})
+            assert_contains(toggled, ["enabled for the keeper"], "alert channel toggle")
+            bind_conf = Path(state) / ".rho" / "apps" / "keeper" / "bind.conf"
+            if "robohub-provider-email.enabled=true" not in bind_conf.read_text():
+                raise AssertionError("the alert channel setting was not written to bind.conf")
+            toggled = post(base, "/plugins/toggle", {"name": "robohub-auth", "enabled": "0"})
+            assert_contains(toggled, ["disabled for the keeper"], "plugin toggle")
             plugin_state = Path(state) / "state" / "plugins.txt"
-            if "email-alert=1" not in plugin_state.read_text():
+            if "robohub-auth=0" not in plugin_state.read_text():
                 raise AssertionError("the keeper plugin override was not written")
 
             micro = get(base, "/app-modules")

@@ -72,6 +72,10 @@ targets:
         file: templates/rows/plugin-row.html
       - name: plugin-actions
         file: templates/parts/plugin-actions.html
+      - name: channel-row
+        file: templates/rows/channel-row.html
+      - name: channel-actions
+        file: templates/parts/channel-actions.html
       - name: providers
         file: templates/pages/providers.html
       - name: provider-row

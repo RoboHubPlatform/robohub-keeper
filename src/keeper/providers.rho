@@ -15,6 +15,24 @@ fn provider_root() string {
     return robohub_root() + "/providers"
 }
 
+// provider_contract is the interface a provider implements: its `implements`
+// list, or the `provider.contract` a provider of the older form names.
+fn provider_contract(manifest: string) string {
+    var value: string = plugin_trim(yaml.value(manifest, "implements"))
+    if rho_str_index_of(value, "[") == 0 {
+        value = rho_str_slice(value, 1, u32(rho_strlen(value)) - 1)
+    }
+    let close: i32 = rho_str_index_of(value, "]")
+    if close >= 0 {
+        value = rho_str_slice(value, 0, u32(close))
+    }
+    value = plugin_trim(value)
+    if value != "" {
+        return value
+    }
+    return yaml.value(manifest, "provider.contract")
+}
+
 fn provider_rows(root: string) string {
     let entries: string = plugin_db_entries(root)
     if entries != "" {
@@ -49,7 +67,7 @@ fn provider_rows(root: string) string {
             var transport: string = ""
             var summary: string = "not found on disk"
             if rho_str_eq(present, "true") {
-                contract = yaml.value(manifest, "provider.contract")
+                contract = provider_contract(manifest)
                 transport = yaml.value(manifest, "provider.transport")
                 summary = yaml.value(manifest, "module.description")
                 if summary == ">" {
@@ -89,7 +107,7 @@ fn provider_rows(root: string) string {
         if name == "" {
             continue
         }
-        let contract: string = yaml.value(manifest, "provider.contract")
+        let contract: string = provider_contract(manifest)
         let transport: string = yaml.value(manifest, "provider.transport")
         var summary: string = yaml.value(manifest, "module.description")
         if summary == ">" {
@@ -111,14 +129,14 @@ fn provider_db_add(root: string, name: string) bool {
         return true
     }
     let manifest: string = root + "/" + name + "/module.yml"
-    let contract: string = yaml.value(manifest, "provider.contract")
+    let contract: string = provider_contract(manifest)
     let transport: string = yaml.value(manifest, "provider.transport")
     var out: string = text
     if rho_strlen(out) == 0 {
         out = "providers:\n"
     }
     out = out + "  - name: " + name + "\n    path: " + name +
-        "\n    contract: " + contract + "\n    transport: " + transport +
+        "\n    implements: " + contract + "\n    transport: " + transport +
         "\n    enabled: true\n"
     return rho_write_text(path, out)
 }
@@ -236,7 +254,7 @@ fn providers_install(req: Request) Response {
     if code != 0 {
         return providers_page_message(req, "Could not install " + source + ".")
     }
-    if yaml.value(target + "/module.yml", "provider.contract") == "" {
+    if provider_contract(target + "/module.yml") == "" {
         ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-provider")))
         return providers_page_message(req, source + " is not a provider module.")
     }

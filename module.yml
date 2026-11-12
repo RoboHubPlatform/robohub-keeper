@@ -9,7 +9,7 @@ module:
   route: /
   port: "8080"
   command: keeper
-  version: 0.5.9
+  version: 0.6.0
   author: Aurel Miron
   maintainer: Aurel Miron
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
@@ -33,44 +33,42 @@ deps:
     settings: ">=0.1.0"
     logging: ">=0.1.0"
     forms: ">=0.1.0"
-    alert-dispatcher: ">=0.1.0"
-    alert-log: ">=0.1.0"
-    email-alert: ">=0.1.0"
-    telegram-notifier: ">=0.1.0"
-    robohub-contract-alert: ">=0.1.0"
+    robohub-alert: ">=1.0.0"
+    robohub-provider-log: ">=0.2.0"
+    robohub-provider-email: ">=0.2.0"
+    robohub-provider-telegram: ">=0.2.0"
 
 # The keeper is the application a person is already looking at, and the one
 # that runs the others. The block is what makes it the first row of its own
 # registry and what stops that registry offering to remove it.
 
-# The alert channels this application uses. The dispatcher is the one alert
-# plugin the application calls; it fans out to the channels named in targets.
-plugins:
-  - name: alert-dispatcher
-    enabled: true
+# The alert channels the keeper raises its alerts through, and their settings.
+# The Settings page changes them on a running installation (bind.conf in the
+# keeper's workspace, or ~/.rho/apps/keeper when it is started by hand); these
+# are the defaults.
+bind:
+  robohub.alert:
+    providers:
+      - robohub-provider-log
+      - robohub-provider-email
+      - robohub-provider-telegram
     config:
-      targets: "alert-log,email-alert,telegram-notifier"
-      severity_threshold: INFO
-  - name: alert-log
-    enabled: true
-    config:
-      path: "~/.rho/keeper/alerts.log"
-      severity_threshold: INFO
-  - name: email-alert
-    enabled: false
-    config:
-      provider: local
-      from_address: "alerts@robohub.internal"
-      to_address: "ops@robohub.internal"
-      subject_template: "[RoboHub {app}] {level}: {rule}"
-      body_template: "{message}"
-      severity_threshold: ERROR
-  - name: telegram-notifier
-    enabled: false
-    config:
-      bot_token: ""
-      chat_id: ""
-      severity_threshold: WARNING
+      robohub-provider-log:
+        path: "~/.rho/keeper/alerts.log"
+        severity_threshold: INFO
+      robohub-provider-email:
+        enabled: "false"
+        mode: local
+        from_address: "alerts@robohub.internal"
+        to_address: "ops@robohub.internal"
+        subject_template: "[RoboHub {app}] {level}: {rule}"
+        body_template: "{message}"
+        severity_threshold: ERROR
+      robohub-provider-telegram:
+        enabled: "false"
+        bot_token: ""
+        chat_id: ""
+        severity_threshold: WARNING
 
 deploy:
   port: 19090
