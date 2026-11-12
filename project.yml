@@ -1,14 +1,9 @@
-version: 1
-
-output_dir: build/generated
-build_dir: build
+# What the keeper go-server target has that the toolchain's built-in one does
+# not. The files, the kind, the router and the output folders are the built-in
+# target's.
 
 targets:
   - id: go-server
-    emitter: go
-    kind: server
-    description: RoboHub keeper HTTP service
-    router: serveMux
     # The documentation-store port renders the pages, through the generator the
     # rest of the toolchain documents with, so a page served here and a page a
     # build writes are the same page.
@@ -35,75 +30,6 @@ targets:
         file: locales/en.json
       - locale: ro
         file: locales/ro.json
+    # Every file under templates/ is a template, named by its file name.
     templates:
-      - name: layout
-        file: templates/layouts/layout.html
-      - name: home
-        file: templates/pages/home.html
-      - name: settings
-        file: templates/pages/settings.html
-      - name: module-settings
-        file: templates/pages/module-settings.html
-      - name: nodes
-        file: templates/pages/nodes.html
-      - name: node-row
-        file: templates/rows/node-row.html
-      - name: modules
-        file: templates/pages/modules.html
-      - name: docs
-        file: templates/pages/docs.html
-      - name: module-detail
-        file: templates/pages/module-detail.html
-      - name: module-row
-        file: templates/rows/module-row.html
-      - name: applications
-        file: templates/pages/applications.html
-      - name: application-row
-        file: templates/rows/application-row.html
-      - name: app-actions
-        file: templates/parts/app-actions.html
-      - name: notice
-        file: templates/parts/notice.html
-      - name: status
-        file: templates/parts/status.html
-      - name: plugins
-        file: templates/pages/plugins.html
-      - name: plugin-row
-        file: templates/rows/plugin-row.html
-      - name: plugin-actions
-        file: templates/parts/plugin-actions.html
-      - name: channel-row
-        file: templates/rows/channel-row.html
-      - name: channel-actions
-        file: templates/parts/channel-actions.html
-      - name: providers
-        file: templates/pages/providers.html
-      - name: provider-row
-        file: templates/rows/provider-row.html
-      - name: provider-actions
-        file: templates/parts/provider-actions.html
-      - name: app-modules
-        file: templates/pages/app-modules.html
-      - name: app-module-row
-        file: templates/rows/app-module-row.html
-      - name: app-module-actions
-        file: templates/parts/app-module-actions.html
-      - name: auth-login
-        file: templates/pages/auth-login.html
-      - name: auth-token
-        file: templates/pages/auth-token.html
-      - name: auth-token-block
-        file: templates/parts/auth-token-block.html
-    files:
-      - path: app.go
-        role: implementation
-      - path: runtime.go
-        role: runtime
-      - path: server.go
-        role: server
-      - path: main.go
-        role: entrypoint
-      - path: go.mod
-        role: build
-      - path: static
-        kind: dir
+      - dir: templates
