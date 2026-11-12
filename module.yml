@@ -15,6 +15,11 @@ module:
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
 main: src/main.rho
 
+# The host port that supplies the docs_* functions the keeper's pages call: the
+# documentation store renders through the same generator the toolchain uses.
+ports:
+  - docstore
+
 build:
   language: go
   targets:

@@ -4,12 +4,6 @@
 
 targets:
   - id: go-server
-    # The documentation-store port renders the pages, through the generator the
-    # rest of the toolchain documents with, so a page served here and a page a
-    # build writes are the same page.
-    ports:
-      - docstore
-      - logemit
     api:
       public_paths: "/, /modules, /applications, /plugins, /providers, /app-modules, /auth/login, /docs"
     middleware:
@@ -18,12 +12,9 @@ targets:
           issuer: keeper
           audience: keeper
           cookie: keeper_session
-          public_key: ~/.rho/auth/public.pem
-          mode: direct
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
           skip_paths: /auth/login,/auth/service-token,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
-          scheme: auto
     default_locale: en
     locales:
       - locale: en
