@@ -132,7 +132,9 @@ fn catalog_write(flat: string) bool {
 // catalog_put records an application. The port is the one asked for when no other
 // application has it, the next free one otherwise.
 fn catalog_put(name: string, origin: string, where: string) string {
-    if !valid_name(name) || !rho_path_exists(manifest_of(where)) {
+    // The catalogue's keys are `apps.<name>.<field>`: a name with a dot in it
+    // would be read back as a record of its own.
+    if !valid_name(name) || rho_str_index_of(name, ".") >= 0 || !rho_path_exists(manifest_of(where)) {
         return ""
     }
     let location: string = app_canonical(where)

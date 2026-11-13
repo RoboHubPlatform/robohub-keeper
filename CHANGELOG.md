@@ -307,3 +307,8 @@ Correctness fixes from the 2026-11 review.
 ## [0.9.3] - 2026-11-13
 
 Built on provider-email 0.2.1, provider-webhook 0.2.1, provider-log 0.2.1 and notifications 0.1.6.
+
+## [0.9.4] - 2026-11-13
+
+- Uninstalling an application removes its releases and its secrets (app.env, app.secret), so the same name installed again starts afresh; its data is kept.
+- An application's name may not contain a dot, which the catalogue would read back as a record of its own.

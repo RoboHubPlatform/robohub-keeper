@@ -535,6 +535,9 @@ def main() -> int:
                 raise AssertionError("the stale job was not marked failed")
 
             post(base, "/applications/uninstall", {"name": "hello"})
+            # Its releases go with it: the same name installed again starts afresh.
+            if (releases_home / "hello").exists():
+                raise AssertionError("uninstalling left the releases behind")
         finally:
             process.terminate()
             try:

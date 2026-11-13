@@ -1351,6 +1351,11 @@ fn applications_uninstall(req: Request) Response {
     app_remove_client(name)
     unpin(name)
     catalog_remove(name)
+    // Its releases and its secrets go with it, so the same name installed again
+    // starts with its own; its data is kept, which is a person's to remove.
+    ignore_u32(rho_exec_args("rm", "-rf\n--\n" + app_home(name) + "\n", apps_report("uninstall-releases-" + name)))
+    ignore_u32(rho_exec_args("rm", "-f\n--\n" + app_workspace(name) + "/app.env\n" + app_workspace(name) + "/app.secret\n",
+        apps_report("uninstall-secrets-" + name)))
     var message: string = name + " was taken out of the keeper; its folder " + path + " was left alone."
     if rho_str_eq(origin, "fetched") && rho_str_starts_with(path, apps_home() + "/") {
         ignore_u32(rho_exec_args("rm", "-rf\n--\n" + path + "\n", apps_report("uninstall-" + name)))
