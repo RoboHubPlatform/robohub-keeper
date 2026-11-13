@@ -292,6 +292,13 @@ fn overview_inspector(name: string, tab: string, notice: string) string {
             overview_row("Folder", path) + overview_row("Port", port) + overview_row("Route", app_route(path))
         if !is_keeper {
             body = body + overview_row("Unit", app_unit_name(name) + ".service")
+            if app_released(name) {
+                var release: string = app_release_in_use(name)
+                if release == "" {
+                    release = "none yet: the next redeploy makes one"
+                }
+                body = body + overview_row("Release", release) + overview_row("Runs from", app_run_dir(name))
+            }
             let job: string = job_running_for(name)
             if job != "" {
                 body = body + "<div class=\"rh-impact\"><b>" + escape_html(job_action_words(job_meta(job, 1))) +
@@ -309,8 +316,12 @@ fn overview_inspector(name: string, tab: string, notice: string) string {
                 body = body + overview_action(name, "update", "Update to " + update, "", "Update " + name + " to " + update + " and restart it?")
             }
             body = body + overview_action(name, "build", "Build", "quiet", "") +
-                overview_action(name, "redeploy", "Redeploy", "quiet", "Build " + name + ", deploy it and restart it?") + "</div>" +
-                "<div class=\"rh-impact\"><b>What these do</b><span>Build leaves what runs alone; Restart runs the newest build; Redeploy builds, restarts and waits for it to answer.</span></div>"
+                overview_action(name, "redeploy", "Redeploy", "quiet", "Build " + name + ", deploy it and restart it?")
+            if app_released(name) && rho_strlen(trim(app_releases(name))) > 0 && rho_str_index_of(trim(app_releases(name)), "\n") > 0 {
+                body = body + overview_action(name, "rollback", "Roll back", "quiet", "Put " + name + "'s previous release back in use and restart it?")
+            }
+            body = body + "</div>" +
+                "<div class=\"rh-impact\"><b>What these do</b><span>Build leaves what runs alone; Restart runs the release in use; Redeploy builds, makes a release of the build, puts it in use, restarts and waits for it to answer; Roll back puts the previous release back in use.</span></div>"
         }
     }
     var foot: string = ""
@@ -356,6 +367,8 @@ fn overview_action_endpoint(req: Request) Response {
         message = app_redeploy(name)
     } else if rho_str_eq(action, "build") {
         message = app_build_job(name)
+    } else if rho_str_eq(action, "rollback") {
+        message = app_rollback(name)
     } else if rho_str_eq(action, "add-device") || rho_str_eq(action, "remove-device") || rho_str_eq(action, "listen") {
         if !keeper_allowed(req, "admin") {
             return html(status_ok(), overview_inspector(name, "clients", "Broker users are an admin's to change."))

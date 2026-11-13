@@ -29,19 +29,13 @@ export PATH="$(dirname "$RHO"):$HOME/.local/bin:/usr/local/go/bin:$PATH"
 
 mkdir -p "$(dirname "$DEPLOY_LOG")"
 
-# If the service already exists and still describes this keeper, just report
-# and exit. A unit written before the keeper had a workspace of its own, or for a
-# checkout that has moved, is written again.
-if systemctl --user is-enabled "$SERVICE_NAME" >/dev/null 2>&1 &&
-   grep -q "ROBOHUB_APP_WORKSPACE" "$SERVICE_FILE" 2>/dev/null &&
-   grep -qx "ExecStart=$KEEPER/build/keeper" "$SERVICE_FILE" &&
-   grep -qx "Environment=ROBOHUB_ROOT=$ROBOHUB" "$SERVICE_FILE" &&
-   grep -qx "Environment=ROBOHUB_WORKSPACE=$(dirname "$ROBOHUB")" "$SERVICE_FILE" &&
-   grep -q "^Environment=PATH=$(dirname "$RHO"):" "$SERVICE_FILE" &&
-   grep -qx "Environment=RHO_HTTP_ADDR=$KEEPER_LISTEN:$KEEPER_PORT" "$SERVICE_FILE"; then
-    echo "[$(date)] $SERVICE_NAME is already deployed."
+# --status reports and changes nothing. Otherwise every run builds the keeper,
+# makes a release of the build and restarts the service on it: the service runs
+# the release in use (~/.rho/keeper/apps/keeper/current), never this checkout's
+# build, so a rebuild here changes nothing until the next deploy.
+if [ "${1:-}" = "--status" ]; then
     echo "  Status: $(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || echo 'inactive')"
-    echo "  Use 'systemctl --user restart $SERVICE_NAME' to restart."
+    echo "  Release: $(basename "$(readlink "$HOME/.rho/keeper/apps/keeper/current" 2>/dev/null)" 2>/dev/null || echo none)"
     exit 0
 fi
 
@@ -50,6 +44,18 @@ cd "$KEEPER"
 "$RHO" build . >> "$DEPLOY_LOG" 2>&1 || {
     echo "BUILD FAILED"; exit 1
 }
+
+# A release of the build: the program and its manifest, in a folder of its
+# own; `current` moves to it in one rename, and the three newest are kept.
+APPHOME="$HOME/.rho/keeper/apps/keeper"
+VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('$KEEPER/module.yml'))['module']['version'])")
+REL="$APPHOME/releases/$VERSION-$(date +%Y%m%d%H%M%S)"
+mkdir -p "$REL"
+cp -a "$KEEPER/build/keeper" "$KEEPER/module.yml" "$REL/"
+[ -d "$KEEPER/static" ] && cp -a "$KEEPER/static" "$REL/"
+ln -sfn "$REL" "$APPHOME/current.next" && mv -T "$APPHOME/current.next" "$APPHOME/current"
+ls -1dt "$APPHOME"/releases/*/ 2>/dev/null | tail -n +4 | while read -r old; do rm -rf -- "$old"; done
+echo "[$(date)] Release $(basename "$REL") is in use." | tee -a "$DEPLOY_LOG"
 
 # The keeper's own workspace, as every application it starts has one: its
 # settings live there rather than in the store shared by anything started
@@ -70,7 +76,7 @@ Description=RoboHub Keeper – web dashboard and application manager
 After=network-online.target
 
 [Service]
-ExecStart=$KEEPER/build/keeper
+ExecStart=$APPHOME/current/keeper
 Restart=on-failure
 RestartSec=3
 WorkingDirectory=$ROBOHUB

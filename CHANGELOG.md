@@ -278,3 +278,15 @@ only when that worked (two writes take turns, empty lines are left out), so the
 broker keeps the users it had if anything goes wrong; and the broker does not log
 the connection the keeper's health check opens.
 
+## [0.9.0] - 2026-11-13
+
+An application built from a folder runs from a release, never from the folder:
+a redeploy (and the first start) builds, copies the program, its manifest,
+static/ and what deploy.files names into ~/.rho/keeper/apps/<name>/releases/
+<version>-<time>, moves `current` to it in one rename, and restarts the unit,
+which runs `current`. A rebuild in the folder changes nothing until the next
+redeploy. The three newest releases are kept, and Roll back (on the
+application's page, or POST /api/v1/apps/<name>/rollback) puts the previous one
+back in use. The application's page says which release is in use. The keeper
+deploys itself the same way: scripts/deploy-keeper.sh builds, makes a release
+and restarts on it every time it runs (--status only reports).

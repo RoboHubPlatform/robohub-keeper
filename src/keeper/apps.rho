@@ -1234,6 +1234,22 @@ fn app_redeploy(name: string) string {
     return name + " is being built and redeployed."
 }
 
+// app_rollback puts the release before the one in use back in use, by a job that
+// restarts the application on it.
+fn app_rollback(name: string) string {
+    if !catalog_has(name) {
+        return "No such application: " + name
+    }
+    if !app_released(name) {
+        return name + " runs as it was installed; there are no releases to go back to."
+    }
+    if job_rollback(name) == "" {
+        return name + " is busy with a job."
+    }
+    keeper_event("app.rollback", name, name + " is going back to its previous release.")
+    return name + " is going back to its previous release."
+}
+
 // app_restart restarts an application without building it, writing its unit
 // first when it no longer describes it.
 fn app_restart(name: string) string {

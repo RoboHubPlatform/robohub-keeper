@@ -42,6 +42,89 @@ fn app_workspace(name: string) string {
     return keeper_state_dir() + "/workspaces/" + name
 }
 
+// An application built from a folder runs from a release the keeper made of the
+// build, never from the folder: ~/.rho/keeper/apps/<name>/releases/<version>-<time>
+// holds the program, its manifest and the files it reads at run time (static/,
+// and what deploy.files names), and `current` is a link to the release in use.
+// A rebuild in the folder changes nothing until the next redeploy; the three
+// newest releases are kept, so a rollback is one link moved back.
+
+fn app_home(name: string) string {
+    return keeper_state_dir() + "/apps/" + name
+}
+
+fn app_current(name: string) string {
+    return app_home(name) + "/current"
+}
+
+// app_released says whether an application runs from releases: one built from a
+// folder (a published package runs as it was installed; an integration runs its
+// service's own program).
+fn app_released(name: string) bool {
+    return !integration_is(name) && !rho_str_eq(catalog_get(name, "origin"), "registry")
+}
+
+// app_release_lines is the shell that makes a release of a finished build and
+// puts it in use: the program, the manifest, static/ and deploy.files, copied
+// into a new release; `current` switched to it in one rename; the oldest beyond
+// three removed.
+fn app_release_lines(name: string) string {
+    if !app_released(name) {
+        return ""
+    }
+    let location: string = app_canonical(catalog_get(name, "location"))
+    let command: string = app_command(name, location)
+    var version: string = app_version(location)
+    if version == "" {
+        version = "0"
+    }
+    var files: string = "static\n" + app_manifest_list(location, "deploy.files")
+    var copies: string = ""
+    while files != "" {
+        let at: i32 = rho_str_index_of(files, "\n")
+        var one: string = files
+        if at < 0 { files = "" } else { one = rho_str_slice(files, 0, u32(at)); files = rho_str_slice(files, u32(at) + 1, u32(rho_strlen(files)) - u32(at) - 1) }
+        let file: string = trim(one)
+        if file != "" && !rho_str_starts_with(file, "/") && rho_str_index_of(file, "..") < 0 {
+            copies = copies + "if [ -e " + shell_quote(file) + " ]; then cp -a " + shell_quote(file) + " \"$REL/\" || finish failed \"" +
+                file + " could not be copied into the release\"; fi\n"
+        }
+    }
+    let home: string = shell_quote(app_home(name))
+    return "echo \"Making a release of " + name + " " + version + " …\"\n" +
+        "cd " + shell_quote(location) + " || finish failed \"the folder is gone\"\n" +
+        "REL=" + home + "/releases/" + shell_quote(version) + "-$(date +%Y%m%d%H%M%S)\n" +
+        "mkdir -p \"$REL\" || finish failed \"the release could not be made\"\n" +
+        "cp -a " + shell_quote("build/" + command) + " \"$REL/\" || finish failed \"the program could not be copied into the release\"\n" +
+        "cp -a module.yml \"$REL/\" || finish failed \"the manifest could not be copied into the release\"\n" +
+        copies +
+        "ln -sfn \"$REL\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current || finish failed \"the release could not be put in use\"\n" +
+        "echo \"Release $(basename \"$REL\") is in use.\"\n" +
+        "ls -1dt " + home + "/releases/*/ 2>/dev/null | tail -n +4 | while read old; do rm -rf -- \"$old\"; done\n"
+}
+
+// app_releases are an application's releases, newest first, one per line.
+fn app_releases(name: string) string {
+    let report: string = apps_report("releases-" + name)
+    if rho_exec_args("sh", "-c\nls -1t " + shell_quote(app_home(name) + "/releases") + " 2>/dev/null\n", report) != 0 {
+        return ""
+    }
+    return rho_read_text(report)
+}
+
+// app_release_in_use is the release `current` points at, by name, or "".
+fn app_release_in_use(name: string) string {
+    let report: string = apps_report("release-" + name)
+    if rho_exec_args("sh", "-c\nbasename \"$(readlink " + shell_quote(app_current(name)) + ")\"\n", report) != 0 {
+        return ""
+    }
+    let text: string = trim(rho_read_text(report))
+    if rho_str_eq(text, ".") || rho_str_eq(text, "current") {
+        return ""
+    }
+    return text
+}
+
 fn app_env_path(name: string) string {
     return app_workspace(name) + "/app.env"
 }
@@ -116,7 +199,7 @@ fn app_environment(name: string) string {
         "RHO_AUTH_URL=" + keeper_url() + "\n" +
         "ROBOHUB_KEEPER_URL=" + keeper_url() + "\n" +
         "RHO_KEEPER_PORT=" + keeper_listen_port() + "\n" +
-        "ROBOHUB_APP_MANIFEST=" + location + "/module.yml\n" +
+        "ROBOHUB_APP_MANIFEST=" + app_manifest_in_use(name) + "\n" +
         "HOME=" + getenv("HOME") + "\n" +
         "PATH=" + getenv("PATH") + "\n" + bus_environment(name)
     let root: string = robohub_root()
@@ -151,8 +234,8 @@ fn app_write_environment(name: string) void {
     ignore_bool(rho_write_secret(app_env_path(name), app_environment(name)))
 }
 
-// app_program is what the unit runs: a published package's own program, or what
-// a build of a folder made.
+// app_program is what the unit runs: a published package's own program, or the
+// program of the release in use.
 fn app_program(name: string) string {
     if integration_is(name) {
         return integration_program(name)
@@ -162,7 +245,31 @@ fn app_program(name: string) string {
     if rho_str_eq(catalog_get(name, "origin"), "registry") {
         return location + "/" + command
     }
-    return location + "/build/" + command
+    return app_current(name) + "/" + command
+}
+
+// app_built is what a build of the folder made, before any release of it.
+fn app_built(name: string) string {
+    let location: string = app_canonical(catalog_get(name, "location"))
+    return location + "/build/" + app_command(name, location)
+}
+
+// app_manifest_in_use is the manifest of what runs: the release's copy, or the
+// folder's while there is no release yet.
+fn app_manifest_in_use(name: string) string {
+    if app_released(name) && rho_path_exists(app_current(name) + "/module.yml") {
+        return app_current(name) + "/module.yml"
+    }
+    return app_canonical(catalog_get(name, "location")) + "/module.yml"
+}
+
+// app_run_dir is where the unit runs the application from: the release in use,
+// or, for a published package, its own folder.
+fn app_run_dir(name: string) string {
+    if app_released(name) {
+        return app_current(name)
+    }
+    return app_canonical(catalog_get(name, "location"))
 }
 
 // app_unit_description is the unit's description: the application's title,
@@ -209,7 +316,7 @@ fn app_unit_text(name: string) string {
     if wants != "" {
         unit = unit + "Wants=" + trim(wants) + "\n"
     }
-    return unit + "\n[Service]\nType=simple\nWorkingDirectory=" + location + "\n" +
+    return unit + "\n[Service]\nType=simple\nWorkingDirectory=" + app_run_dir(name) + "\n" +
         "EnvironmentFile=" + app_env_path(name) + "\n" +
         "ExecStart=" + app_program(name) + "\n" +
         "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"

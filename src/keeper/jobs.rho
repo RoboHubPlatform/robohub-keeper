@@ -153,7 +153,7 @@ fn job_build_lines(name: string) string {
         "cd " + location + " || finish failed \"the folder is gone\"\n" +
         "rm -rf build/generated\n" +
         "rho build . || finish failed \"the build failed\"\n" +
-        "[ -x " + shell_quote(app_program(name)) + " ] || finish failed \"the build made no program\"\n"
+        "[ -x " + shell_quote(app_built(name)) + " ] || finish failed \"the build made no program\"\n"
 }
 
 // job_start writes a job and starts it in the background. `body` is the shell
@@ -201,7 +201,8 @@ fn job_build(name: string) string {
 // it and waits for it to answer.
 fn job_redeploy(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
-    return job_start(name, "redeploy", job_build_lines(name) +
+    return job_start(name, "redeploy", job_build_lines(name) + app_release_lines(name) +
+        "systemctl --user daemon-reload || true\n" +
         "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
         job_health_lines(name))
 }
@@ -209,8 +210,25 @@ fn job_redeploy(name: string) string {
 // job_start_built builds an application that has never been built, then starts it.
 fn job_start_built(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
-    return job_start(name, "start", job_build_lines(name) +
+    return job_start(name, "start", job_build_lines(name) + app_release_lines(name) +
         "systemctl --user start " + unit + " || finish failed \"systemd could not start it\"\n" +
+        job_health_lines(name))
+}
+
+// job_rollback puts the release before the one in use back in use and restarts
+// the application on it; it answers the job's id, or "" when the application is
+// busy. With no earlier release it says so and changes nothing.
+fn job_rollback(name: string) string {
+    let unit: string = shell_quote(app_unit_name(name))
+    let home: string = shell_quote(app_home(name))
+    return job_start(name, "rollback",
+        "cur=$(basename \"$(readlink " + home + "/current)\")\n" +
+        "prev=$(ls -1t " + home + "/releases | grep -vx \"$cur\" | head -n 1)\n" +
+        "[ -n \"$prev\" ] || finish failed \"there is no earlier release\"\n" +
+        "ln -sfn " + home + "/releases/\"$prev\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current || finish failed \"the release could not be put in use\"\n" +
+        "touch " + home + "/releases/\"$prev\"\n" +
+        "echo \"Release $prev is in use again (was $cur).\"\n" +
+        "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
         job_health_lines(name))
 }
 
@@ -221,6 +239,7 @@ fn job_start_built(name: string) string {
 fn job_action_words(action: string) string {
     if rho_str_eq(action, "build") { return "Building" }
     if rho_str_eq(action, "redeploy") { return "Redeploying" }
+    if rho_str_eq(action, "rollback") { return "Rolling back" }
     if rho_str_eq(action, "start") { return "Building and starting" }
     if rho_str_eq(action, "install") { return "Installing for" }
     return action

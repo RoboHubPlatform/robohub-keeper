@@ -18,7 +18,7 @@ module keeper.api
 //
 //   GET  /api/v1/apps                    every application in the catalogue
 //   GET  /api/v1/apps/{name}             one of them
-//   POST /api/v1/apps/{name}/{action}    start | stop | restart | redeploy | build
+//   POST /api/v1/apps/{name}/{action}    start | stop | restart | redeploy | rollback | build
 //   GET  /api/v1/jobs                    the recent jobs
 //   GET  /api/v1/jobs/{id}               one job, with its log
 
@@ -100,8 +100,10 @@ fn api_app_action(req: Request) Response {
         message = app_redeploy(name)
     } else if rho_str_eq(action, "build") {
         message = app_build_job(name)
+    } else if rho_str_eq(action, "rollback") {
+        message = app_rollback(name)
     } else {
-        return api_error(status_bad_request(), "the actions are start, stop, restart, redeploy and build")
+        return api_error(status_bad_request(), "the actions are start, stop, restart, redeploy, rollback and build")
     }
     return json(status_ok(), "{\"ok\":true,\"message\":" + json_string(message) +
         ",\"job\":" + json_string(job_running_for(name)) + ",\"app\":" + api_app_json(name) + "}")

@@ -101,6 +101,56 @@ def csrf_token(base: str) -> str:
     return match.group(1)
 
 
+HELLO_MANIFEST = """module:
+  name: hello
+  type: rho
+  version: 0.1.0
+  kind: keeper-hosted
+  title: Hello
+  command: hello
+  port: "9011"
+main: src/main.rho
+build:
+  language: go
+  targets:
+    - go-server
+deploy:
+  port: 9011
+  files: [notes.txt]
+"""
+
+HELLO_MAIN = """module hello
+
+import std.web.http
+
+route GET "/healthz" => hello
+
+fn hello(req: Request) Response {
+    return html(status_ok(), "hi")
+}
+"""
+
+
+def make_hello(root: Path) -> Path:
+    """An application small enough to build in a second."""
+    app = root / "hello-app"
+    (app / "src").mkdir(parents=True)
+    (app / "static").mkdir()
+    (app / "module.yml").write_text(HELLO_MANIFEST, encoding="utf-8")
+    (app / "src" / "main.rho").write_text(HELLO_MAIN, encoding="utf-8")
+    (app / "static" / "a.txt").write_text("a", encoding="utf-8")
+    (app / "notes.txt").write_text("n", encoding="utf-8")
+    return app
+
+
+def post_json(base: str, path: str) -> str:
+    request = urllib.request.Request(base + path, data=b"", method="POST")
+    request.add_header("Origin", base)
+    request.add_header("Cookie", f"keeper_session={SESSION}")
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return response.read().decode("utf-8", "replace")
+
+
 def wait_job(base: str, name: str, timeout: float = 60.0) -> dict:
     """Waits for an application's job to end and answers the job."""
     deadline = time.time() + timeout
@@ -342,8 +392,11 @@ def main() -> int:
                             encoding="utf-8")
             restarted = post(base, "/applications/restart", {"name": "demo"})
             assert_contains(restarted, ["demo is being built and started"], "restart of a stale unit")
+            # The unit runs the release in use, never the folder's build.
+            releases_home = Path(state) / "state" / "apps"
             assert_contains(unit.read_text(), ["Written by the RoboHub keeper",
-                                               "WorkingDirectory=" + str(demo.resolve()),
+                                               "WorkingDirectory=" + str(releases_home / "demo" / "current"),
+                                               "ExecStart=" + str(releases_home / "demo" / "current" / "demo"),
                                                "EnvironmentFile="], "rewritten unit")
             wait_job(base, "demo")
             redeployed = post(base, "/applications/redeploy", {"name": "demo"})
@@ -368,6 +421,40 @@ def main() -> int:
             assert not unit.exists(), "the unit of an uninstalled application is removed"
             assert "demo:" not in catalogue_file.read_text(), "an uninstalled application stays in the catalogue"
             assert "Demo App" not in get(base, "/applications")
+
+            # An application that builds: each redeploy makes a release of the
+            # build (the program, its manifest, static/ and deploy.files) and puts
+            # it in use; a rollback puts the one before back. systemd cannot start
+            # the unit in this test's home, so the jobs end failed after that.
+            hello = make_hello(Path(state))
+            post(base, "/applications/install", {"name": "hello", "source": str(hello), "csrf": csrf_token(base)})
+            wait_job(base, "hello", 120)
+            current = releases_home / "hello" / "current"
+            if not current.is_symlink() or not (current / "hello").exists():
+                raise AssertionError("the first start made no release")
+            for wanted in ("module.yml", "static/a.txt", "notes.txt"):
+                if not (current / wanted).exists():
+                    raise AssertionError(f"the release has no {wanted}")
+            first = os.readlink(current)
+            time.sleep(1.1)
+            post(base, "/applications/redeploy", {"name": "hello"})
+            wait_job(base, "hello", 120)
+            second = os.readlink(current)
+            if second == first or not Path(second).is_dir():
+                raise AssertionError(f"a redeploy did not put a new release in use: {first} {second}")
+            assert_contains(get(base, "/overview/app/hello"), ["Release", Path(second).name, "Roll back"], "the release in use")
+            rolled = json.loads(post_json(base, "/api/v1/apps/hello/rollback"))
+            assert_contains(rolled["message"], ["previous release"], "rollback")
+            wait_job(base, "hello", 60)
+            if os.readlink(current) != first:
+                raise AssertionError(f"the rollback did not put the first release back: {os.readlink(current)}")
+            for _ in range(3):
+                time.sleep(1.1)
+                post(base, "/applications/redeploy", {"name": "hello"})
+                wait_job(base, "hello", 120)
+            if len(list((releases_home / "hello" / "releases").iterdir())) != 3:
+                raise AssertionError("more than three releases were kept")
+            post(base, "/applications/uninstall", {"name": "hello"})
         finally:
             process.terminate()
             try:
