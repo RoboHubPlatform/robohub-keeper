@@ -25,6 +25,12 @@ extern fn rho_append_text(path: string, text: string) bool
 extern fn rho_random_hex(bytes: u32) string
 extern fn rho_exec_args(program: string, arguments: string, output_path: string) u32
 extern fn rho_exec(program: string, arguments: string, output_path: string) u32
+// The clock, from the runtime rather than from `date` written to a file and read
+// back, which two callers at once could truncate under each other.
+extern fn rho_now_s() u32
+extern fn rho_local_date() string
+extern fn rho_local_clock() string
+extern fn rho_exec_capture(program: string, arguments: string) string
 extern fn rho_strlen(s: string) u64
 extern fn rho_str_slice(s: string, start: u32, length: u32) string
 extern fn rho_str_index_of(s: string, needle: string) i32

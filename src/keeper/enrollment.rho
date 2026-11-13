@@ -25,9 +25,7 @@ fn enrollment_nodes_dir() string {
 }
 
 fn enrollment_now() u32 {
-    let report: string = apps_report("enrollment-now")
-    ignore_u32(rho_exec_args("date", "+%s\n", report))
-    return u32(rho_int_from_str(first_line(rho_read_text(report))))
+    return rho_now_s()
 }
 
 fn enrollment_find_token(token: string) string {

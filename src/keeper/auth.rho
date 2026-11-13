@@ -74,11 +74,7 @@ fn auth_report(name: string) string {
 // generated auth middleware reads the second field as an epoch, not a TTL, so
 // the login writes `now + ttl` rather than the duration.
 fn auth_now() u32 {
-    let report: string = auth_report("auth-now")
-    if rho_exec_args("date", "+%s\n", report) == 0 {
-        return rho_int_from_str(auth_clean(rho_read_text(report)))
-    }
-    return 0
+    return rho_now_s()
 }
 
 // auth_random is 128 random bits as hex, or "" when they cannot be had. A

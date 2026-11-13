@@ -290,3 +290,7 @@ application's page, or POST /api/v1/apps/<name>/rollback) puts the previous one
 back in use. The application's page says which release is in use. The keeper
 deploys itself the same way: scripts/deploy-keeper.sh builds, makes a release
 and restarts on it every time it runs (--status only reports).
+
+## [0.9.1] - 2026-11-13
+
+The clock sign-in, sessions and enrolment use is read from the process (`rho_now_s`) instead of from `date` written to a fixed file, which two requests at once could truncate under each other and make a session expire at once. Built on rho-sql 0.2.1.
