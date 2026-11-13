@@ -317,7 +317,7 @@ fn overview_inspector(name: string, tab: string, notice: string) string {
             }
             body = body + overview_action(name, "build", "Build", "quiet", "") +
                 overview_action(name, "redeploy", "Redeploy", "quiet", "Build " + name + ", deploy it and restart it?")
-            if app_released(name) && rho_strlen(trim(app_releases(name))) > 0 && rho_str_index_of(trim(app_releases(name)), "\n") > 0 {
+            if app_released(name) && rho_strlen(str_trim(app_releases(name))) > 0 && rho_str_index_of(str_trim(app_releases(name)), "\n") > 0 {
                 body = body + overview_action(name, "rollback", "Roll back", "quiet", "Put " + name + "'s previous release back in use and restart it?")
             }
             body = body + "</div>" +

@@ -84,7 +84,7 @@ fn app_release_lines(name: string) string {
         let at: i32 = rho_str_index_of(files, "\n")
         var one: string = files
         if at < 0 { files = "" } else { one = rho_str_slice(files, 0, u32(at)); files = rho_str_slice(files, u32(at) + 1, u32(rho_strlen(files)) - u32(at) - 1) }
-        let file: string = trim(one)
+        let file: string = str_trim(one)
         if file != "" && !rho_str_starts_with(file, "/") && rho_str_index_of(file, "..") < 0 {
             copies = copies + "if [ -e " + shell_quote(file) + " ]; then cp -a " + shell_quote(file) + " \"$REL/\" || finish failed \"" +
                 file + " could not be copied into the release\"; fi\n"
@@ -131,7 +131,7 @@ fn app_release_in_use(name: string) string {
     if rho_exec_args("sh", "-c\nbasename \"$(readlink " + shell_quote(app_current(name)) + ")\"\n", report) != 0 {
         return ""
     }
-    let text: string = trim(rho_read_text(report))
+    let text: string = str_trim(rho_read_text(report))
     if rho_str_eq(text, ".") || rho_str_eq(text, "current") {
         return ""
     }
@@ -190,7 +190,7 @@ fn keeper_url() string {
 // workspace.
 fn app_secret(name: string) string {
     let file: string = app_workspace(name) + "/auth/app.secret"
-    let existing: string = trim(rho_read_text(file))
+    let existing: string = str_trim(rho_read_text(file))
     if rho_strlen(existing) >= 32 {
         return existing
     }
@@ -345,7 +345,7 @@ fn app_unit_text(name: string) string {
         "# The keeper writes it again when the application changes; edits here are lost.\n" +
         "[Unit]\nDescription=" + app_unit_description(name, location) + "\nAfter=" + after + "\n"
     if wants != "" {
-        unit = unit + "Wants=" + trim(wants) + "\n"
+        unit = unit + "Wants=" + str_trim(wants) + "\n"
     }
     return unit + "\n[Service]\nType=simple\nWorkingDirectory=" + app_run_dir(name) + "\n" +
         "EnvironmentFile=" + app_env_path(name) + "\n" +
@@ -356,7 +356,6 @@ fn app_unit_text(name: string) string {
 fn app_systemd(args: string, report: string) u32 {
     return rho_exec_args("systemctl", "--user\n" + args, apps_report(report))
 }
-
 
 // app_install_unit writes the environment and the unit, and tells systemd. It
 // answers whether the unit changed, which is when a running application has to be

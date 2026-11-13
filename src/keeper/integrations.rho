@@ -61,7 +61,7 @@ fn integration_service(path: string, key: string) string {
 // integration_listen is where the service listens: "127.0.0.1", or "0.0.0.0"
 // when an admin opened it to the network for devices.
 fn integration_listen(name: string) string {
-    if rho_str_eq(trim(rho_read_text(integration_dir(name) + "/listen")), "lan") {
+    if rho_str_eq(str_trim(rho_read_text(integration_dir(name) + "/listen")), "lan") {
         return "0.0.0.0"
     }
     return "127.0.0.1"
@@ -148,7 +148,7 @@ fn bus_password_file(name: string) string {
 
 // bus_password is a broker user's password, made once.
 fn bus_password(file: string) string {
-    let existing: string = trim(rho_read_text(file))
+    let existing: string = str_trim(rho_read_text(file))
     if rho_strlen(existing) >= 32 {
         return existing
     }
@@ -280,7 +280,7 @@ fn mqtt_lines_only(text: string) string {
         let at: i32 = rho_str_index_of(rest, "\n")
         var line: string = rest
         if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        line = trim(line)
+        line = str_trim(line)
         if line != "" {
             out = out + line + "\n"
         }
@@ -362,8 +362,8 @@ fn mqtt_clients_body(name: string) string {
             continue
         }
         apps = apps + "<div class=\"rh-row ok\"><b>" + escape_html(app) + "</b><span>writes " +
-            escape_html(i18n_replace_all(trim(app_manifest_list(where, "bus.publish")), "\n", ", ")) + " · reads " +
-            escape_html(i18n_replace_all(trim(app_manifest_list(where, "bus.subscribe")), "\n", ", ")) + "</span></div>"
+            escape_html(i18n_replace_all(str_trim(app_manifest_list(where, "bus.publish")), "\n", ", ")) + " · reads " +
+            escape_html(i18n_replace_all(str_trim(app_manifest_list(where, "bus.subscribe")), "\n", ", ")) + "</span></div>"
     }
     if apps == "" {
         apps = "<p class=\"rh-empty\">No application binds the bus yet.</p>"
@@ -393,8 +393,8 @@ fn mqtt_clients_body(name: string) string {
 fn mqtt_client_action(req: Request, action: string) string {
     if rho_str_eq(action, "add-device") {
         let body: string = request_body(req)
-        let device: string = trim(form_value(body, "device"))
-        let answer: string = mqtt_add_device(device, trim(form_value(body, "prefix")))
+        let device: string = str_trim(form_field(body, "device"))
+        let answer: string = mqtt_add_device(device, str_trim(form_field(body, "prefix")))
         if rho_str_starts_with(answer, "!") {
             return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
         }
@@ -482,7 +482,7 @@ fn integrations_install_post(req: Request) Response {
     if !forms_csrf_ok(body) {
         return applications_page_message(req, "That form was not drawn by this keeper.")
     }
-    let path: string = trim(form_value(body, "plugin"))
+    let path: string = str_trim(form_field(body, "plugin"))
     if !line_in_list(integration_plugins(), path) {
         return applications_page_message(req, "That is not an integration plugin here.")
     }

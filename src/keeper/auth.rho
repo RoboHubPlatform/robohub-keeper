@@ -496,7 +496,6 @@ fn auth_page(req: Request, status: u32, return_to: string, audience: string, nex
     return html(status, keeper_translate(req, body))
 }
 
-
 // auth_ticket mints the one-use ticket an application exchanges for its own
 // session: the person's own name, their grants for that application, and the
 // keeper session it came from, so the application's session ends with it. It
@@ -578,14 +577,14 @@ fn auth_keys_ensure() void {
 fn auth_login_post(req: Request) Response {
     auth_ensure_master()
     let body: string = request_body(req)
-    let return_to: string = form_value(body, "return_to")
-    let audience: string = form_value(body, "audience")
-    let next: string = form_value(body, "next")
+    let return_to: string = form_field(body, "return_to")
+    let audience: string = form_field(body, "audience")
+    let next: string = form_field(body, "next")
     if (return_to != "" && !auth_target_ok(req, return_to, audience)) || !auth_plain(next) || !auth_plain(audience) {
         return html(status_bad_request(), "<p>That sign-in request is not one this keeper answers.</p>")
     }
-    let name: string = trim(form_value(body, "name"))
-    let supplied: string = auth_clean(form_value(body, "token"))
+    let name: string = str_trim(form_field(body, "name"))
+    let supplied: string = auth_clean(form_field(body, "token"))
     // The access token in ~/.rho/auth/master.token is the admin's: it proves the
     // person is at this machine. It is the whole first run, and the admin's way
     // in afterwards; named accounts with passwords are for other people.
@@ -610,7 +609,7 @@ fn auth_login_post(req: Request) Response {
         return auth_page(req, status_ok(), return_to, audience, next,
             "Too many wrong attempts. Try again in " + rho_int_to_str((wait + 59) / 60) + " minutes.")
     }
-    let role: string = people_verify(name, form_value(body, "password"))
+    let role: string = people_verify(name, form_field(body, "password"))
     if role == "" {
         auth_failed(name)
         warn("keeper", "sign-in refused for " + name)
@@ -688,9 +687,9 @@ fn auth_token_post(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let current: string = auth_clean(form_value(body, "current"))
-    let token: string = auth_clean(form_value(body, "token"))
-    let confirm: string = auth_clean(form_value(body, "confirm"))
+    let current: string = auth_clean(form_field(body, "current"))
+    let token: string = auth_clean(form_field(body, "token"))
+    let confirm: string = auth_clean(form_field(body, "confirm"))
     // Changing the token proves the old one, so a session left open on a
     // borrowed screen cannot lock its owner out.
     if !auth_same(current, auth_clean(rho_read_text(auth_master_file()))) {
@@ -756,10 +755,10 @@ fn auth_service_denied() Response {
 // sent is interpreted on the way: every argument goes one per line.
 fn auth_service_token(req: Request) Response {
     let body: string = request_body(req)
-    let id: string = trim(form_value(body, "client_id"))
-    let secret: string = auth_clean(form_value(body, "client_secret"))
-    let audience: string = trim(form_value(body, "audience"))
-    let scopes: string = trim(form_value(body, "scopes"))
+    let id: string = str_trim(form_field(body, "client_id"))
+    let secret: string = auth_clean(form_field(body, "client_secret"))
+    let audience: string = str_trim(form_field(body, "audience"))
+    let scopes: string = str_trim(form_field(body, "scopes"))
     if !auth_safe_name(id) || !auth_safe_name(audience) || secret == "" ||
         rho_strlen(secret) > 256 || !auth_plain(secret) {
         return auth_service_denied()

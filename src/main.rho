@@ -225,7 +225,7 @@ fn install_page(req: Request) Response {
         return keeper_refused(req)
     }
     let title: string = i18n_t(req, "page.install")
-    let name: string = trim(form_value(request_body(req), "module"))
+    let name: string = str_trim(form_field(request_body(req), "module"))
     let entry: string = registry_entry(name)
     if entry == "" {
         return registry_back(req, status_not_found(), title, "Unknown module: " + name)
@@ -254,7 +254,7 @@ fn uninstall_page(req: Request) Response {
         return keeper_refused(req)
     }
     let title: string = i18n_t(req, "page.uninstall")
-    let name: string = trim(form_value(request_body(req), "module"))
+    let name: string = str_trim(form_field(request_body(req), "module"))
     let entry: string = registry_entry(name)
     if entry == "" {
         return registry_back(req, status_not_found(), title, "Unknown module: " + name)

@@ -98,7 +98,7 @@ fn keeper_nodes_revoke(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let device: string = trim(form_value(body, "device"))
+    let device: string = str_trim(form_field(body, "device"))
     if node_record(device) == "" {
         return keeper_nodes_page_message(req, "That node is not enrolled.")
     }
@@ -112,7 +112,7 @@ fn keeper_nodes_rotate(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let device: string = trim(form_value(body, "device"))
+    let device: string = str_trim(form_field(body, "device"))
     let record: string = node_record(device)
     if record == "" {
         return keeper_nodes_page_message(req, "That node is not enrolled.")
@@ -134,8 +134,8 @@ fn keeper_nodes_rotate(req: Request) Response {
 // accepts a node frame. It is authenticated by the credential itself.
 fn keeper_node_verify(req: Request) Response {
     let body: string = request_body(req)
-    let device: string = trim(form_value(body, "device_id"))
-    let credential: string = trim(form_value(body, "credential"))
+    let device: string = str_trim(form_field(body, "device_id"))
+    let credential: string = str_trim(form_field(body, "credential"))
     let record: string = node_record(device)
     if record == "" || !auth_same(credential, field(record, 5)) {
         return Response{ 403, "{\"ok\":false,\"error\":\"unknown node or credential\"}", "application/json", "" }

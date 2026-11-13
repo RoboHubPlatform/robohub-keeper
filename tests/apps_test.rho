@@ -86,21 +86,18 @@ test fn the_menu_holds_one_entry_per_line() void {
 }
 
 test fn a_form_body_is_decoded_once() void {
-    check(rho_str_eq(url_decode("a%20b%2Fc"), "a b/c"), "percent escapes")
-    check(rho_str_eq(url_decode("two+words"), "two words"), "plus as space")
-    check(rho_str_eq(form_value("name=mesh&pinned=1", "name"), "mesh"), "a field")
-    check(rho_str_eq(form_value("name=mesh&name=other", "name"), "mesh"), "the first duplicate")
-    check(rho_str_eq(form_value("name=mesh", "missing"), ""), "a missing field")
+    check(rho_str_eq(str_url_decode("a%20b%2Fc"), "a b/c"), "percent escapes")
+    check(rho_str_eq(str_url_decode("two+words"), "two words"), "plus as space")
+    check(rho_str_eq(form_field("name=mesh&pinned=1", "name"), "mesh"), "a field")
+    check(rho_str_eq(form_field("name=mesh&name=other", "name"), "mesh"), "the first duplicate")
+    check(rho_str_eq(form_field("name=mesh", "missing"), ""), "a missing field")
     print("[PASS] a_form_body_is_decoded_once\n")
 }
 
 test fn whitespace_and_hex_are_values() void {
-    check(rho_str_eq(trim("  mesh  "), "mesh"), "surrounding spaces")
+    check(rho_str_eq(str_trim("  mesh  "), "mesh"), "surrounding spaces")
     check(rho_str_eq(first_line("mesh\nkeeper"), "mesh"), "the first line")
-    check(decode_hex("0") == 0, "zero")
-    check(decode_hex("9") == 9, "nine")
-    check(decode_hex("A") == 10, "upper a")
-    check(decode_hex("f") == 15, "lower f")
+    check(rho_str_eq(str_url_decode("a%2Fb%3d+c"), "a/b= c"), "escapes of either case")
     print("[PASS] whitespace_and_hex_are_values\n")
 }
 

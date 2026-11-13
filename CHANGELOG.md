@@ -320,3 +320,7 @@ An application's `app.env` quotes HOME and PATH, as systemd's environment file r
 ## [0.9.6] - 2026-11-13
 
 A mesh gateway's page can be signed in to. The gateway takes keeper's tickets for the audience `gateway` but is started by Mesh rather than hosted by the keeper, so its sign-in was refused as "not one this keeper signs in to". The keeper now signs in to the audience `gateway` when the ticket goes back to `/auth/callback` on this machine or on the host the keeper was reached on, on whatever port the mesh gave it, and nowhere else.
+
+## [0.9.7] - 2026-11-14
+
+Trimming, URL decoding and form fields come from the toolchain (rho 0.7.0) rather than the keeper's own copies; a `%` not followed by two hex digits in a form is kept as written instead of becoming a zero byte. Needs rho 0.7.0.

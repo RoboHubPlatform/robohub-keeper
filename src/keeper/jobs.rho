@@ -63,7 +63,7 @@ fn job_status_line(id: string, index: u32) string {
         rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         i = i + 1
     }
-    return trim(first_line(rest))
+    return str_trim(first_line(rest))
 }
 
 fn job_reason(id: string) string {

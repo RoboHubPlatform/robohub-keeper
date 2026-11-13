@@ -190,8 +190,8 @@ fn plugins_toggle(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    let enabled: string = form_value(body, "enabled")
+    let name: string = str_trim(form_field(body, "name"))
+    let enabled: string = form_field(body, "enabled")
     if keeper_alert_bound(name) {
         var value: string = "true"
         if enabled == "0" {
@@ -229,7 +229,7 @@ fn plugins_test(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
+    let name: string = str_trim(form_field(body, "name"))
     if !keeper_alert_bound(name) {
         return plugins_page_message(req, "No such alert channel: " + name)
     }
@@ -286,8 +286,8 @@ fn plugins_install(req: Request) Response {
     if !forms_csrf_ok(body) {
         return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
     }
-    var name: string = trim(form_value(body, "name"))
-    let source: string = trim(form_value(body, "source"))
+    var name: string = str_trim(form_field(body, "name"))
+    let source: string = str_trim(form_field(body, "source"))
     if source == "" {
         return plugins_page_message(req, "Name a plugin to install.")
     }
@@ -333,7 +333,7 @@ fn plugins_uninstall(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
+    let name: string = str_trim(form_field(body, "name"))
     if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
         return plugins_page_message(req, "No such plugin: " + name)
     }

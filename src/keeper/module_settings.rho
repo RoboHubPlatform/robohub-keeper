@@ -20,7 +20,7 @@ fn app_module_settings_prefix(name: string) string {
 }
 
 fn app_module_settings_page_message(req: Request, message: string) Response {
-    let name: string = trim(request_query_param(req, "name"))
+    let name: string = str_trim(request_query_param(req, "name"))
     if name == "" {
         return app_modules_page_message(req, i18n_t(req, "app_modules.settings_no_name"))
     }
@@ -82,7 +82,7 @@ fn app_module_settings_save(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let name: string = trim(request_query_param(req, "name"))
+    let name: string = str_trim(request_query_param(req, "name"))
     if !forms_csrf_ok(body) {
         return app_module_settings_page_message(req, i18n_t(req, "settings.csrf_refused"))
     }
@@ -102,14 +102,14 @@ fn app_module_settings_save(req: Request) Response {
         let equals: i32 = rho_str_index_of(line, "=")
         if equals > 0 {
             let key: string = rho_str_slice(line, 0, u32(equals))
-            let value: string = trim(form_value(body, "value" + rho_int_to_str(index)))
+            let value: string = str_trim(form_field(body, "value" + rho_int_to_str(index)))
             settings_set(key, value)
         }
         index = index + 1
     }
     // A new key belongs to this module: it is written under the module's own
     // prefix, so the form cannot change another module's settings.
-    var new_key: string = trim(form_value(body, "new_key"))
+    var new_key: string = str_trim(form_field(body, "new_key"))
     if new_key != "" {
         if !rho_str_starts_with(new_key, prefix) {
             new_key = prefix + new_key
@@ -117,7 +117,7 @@ fn app_module_settings_save(req: Request) Response {
         if !settings_key_ok(rho_str_slice(new_key, u32(rho_strlen(prefix)), u32(rho_strlen(new_key)) - u32(rho_strlen(prefix)))) {
             return app_module_settings_page_message(req, "A setting's name uses letters, digits, '_', '-' and '.' only.")
         }
-        settings_set(new_key, trim(form_value(body, "new_value")))
+        settings_set(new_key, str_trim(form_field(body, "new_value")))
     }
     return redirect("/app-modules/settings?name=" + name)
 }

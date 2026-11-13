@@ -236,7 +236,7 @@ fn people_scopes_for(name: string, audience: string) string {
         let at: i32 = rho_str_index_of(rest, ",")
         var grant: string = rest
         if at < 0 { rest = "" } else { grant = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        grant = trim(grant)
+        grant = str_trim(grant)
         if rho_str_starts_with(grant, audience + ":") {
             if out != "" {
                 out = out + ","
@@ -306,7 +306,7 @@ fn people_grant_chips(name: string) string {
         let at: i32 = rho_str_index_of(rest, ",")
         var grant: string = rest
         if at < 0 { rest = "" } else { grant = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        grant = trim(grant)
+        grant = str_trim(grant)
         if grant != "" {
             out = out + "<span class=\"rh-tag\">" + escape_html(grant) + "</span>"
         }
@@ -345,7 +345,7 @@ fn people_app_grants(name: string, app: string) string {
         let at: i32 = rho_str_index_of(rest, ",")
         var grant: string = rest
         if at < 0 { rest = "" } else { grant = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        grant = trim(grant)
+        grant = str_trim(grant)
         if rho_str_starts_with(grant, app + ":") {
             if out != "" { out = out + "," }
             out = out + grant
@@ -452,11 +452,11 @@ fn people_grants_from(body: string) string {
         var app: string = rest
         if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
         if app == "" { continue }
-        let choice: string = form_value(body, "app_" + app)
+        let choice: string = form_field(body, "app_" + app)
         var add: string = ""
         if rho_str_eq(choice, "read") { add = app + ":read" }
         if rho_str_eq(choice, "all") { add = app + ":*" }
-        if rho_str_eq(choice, "custom") { add = trim(form_value(body, "custom_" + app)) }
+        if rho_str_eq(choice, "custom") { add = str_trim(form_field(body, "custom_" + app)) }
         if add != "" {
             if out != "" { out = out + "," }
             out = out + add
@@ -570,9 +570,9 @@ fn people_add_post(req: Request) Response {
     if !forms_csrf_ok(body) {
         return people_page_message(req, "That form was not drawn by this keeper.")
     }
-    let name: string = trim(form_value(body, "name"))
-    let failure: string = people_add(name, trim(form_value(body, "display")), trim(form_value(body, "role")),
-        trim(form_value(body, "grants")), form_value(body, "password"))
+    let name: string = str_trim(form_field(body, "name"))
+    let failure: string = people_add(name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")),
+        str_trim(form_field(body, "grants")), form_field(body, "password"))
     if failure != "" {
         return people_page_message(req, failure)
     }
@@ -596,12 +596,12 @@ fn people_action_post(req: Request) Response {
     var failure: string = ""
     var done: string = ""
     if rho_str_eq(action, "save") {
-        var grants: string = trim(form_value(body, "grants"))
+        var grants: string = str_trim(form_field(body, "grants"))
         if rho_str_index_of(body, "app_") >= 0 {
             grants = people_grants_from(body)
         }
-        failure = people_set(name, trim(form_value(body, "display")), trim(form_value(body, "role")), grants)
-        let password: string = form_value(body, "password")
+        failure = people_set(name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")), grants)
+        let password: string = form_field(body, "password")
         if failure == "" && password != "" {
             failure = people_passwd(name, password)
         }
@@ -662,13 +662,13 @@ fn account_post(req: Request) Response {
     if !people_has(name) || !forms_csrf_ok(body) {
         return account_page_message(req, "That form was not drawn by this keeper.")
     }
-    if people_verify(name, form_value(body, "current")) == "" {
+    if people_verify(name, form_field(body, "current")) == "" {
         return account_page_message(req, "The current password is not right.")
     }
-    if !rho_str_eq(form_value(body, "password"), form_value(body, "confirm")) {
+    if !rho_str_eq(form_field(body, "password"), form_field(body, "confirm")) {
         return account_page_message(req, "The two new passwords are not the same.")
     }
-    let failure: string = people_passwd(name, form_value(body, "password"))
+    let failure: string = people_passwd(name, form_field(body, "password"))
     if failure != "" {
         return account_page_message(req, failure)
     }
@@ -688,12 +688,12 @@ fn people_claim(req: Request) Response {
     if people_has(people_subject(req)) {
         return people_page_message(req, "You already have an account.")
     }
-    let name: string = trim(form_value(body, "name"))
-    if !rho_str_eq(form_value(body, "password"), form_value(body, "confirm")) {
+    let name: string = str_trim(form_field(body, "name"))
+    if !rho_str_eq(form_field(body, "password"), form_field(body, "confirm")) {
         return people_page_message(req, "The two passwords are not the same.")
     }
     auth_keys_ensure()
-    let failure: string = people_add(name, trim(form_value(body, "display")), "admin", "", form_value(body, "password"))
+    let failure: string = people_add(name, str_trim(form_field(body, "display")), "admin", "", form_field(body, "password"))
     if failure != "" {
         return people_page_message(req, failure)
     }

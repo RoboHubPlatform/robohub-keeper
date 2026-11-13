@@ -72,12 +72,12 @@ fn record_field_ok(value: string) bool {
 
 fn keeper_enroll(req: Request) Response {
     let body: string = request_body(req)
-    let token: string = trim(form_value(body, "token"))
-    let device: string = trim(form_value(body, "device_id"))
-    let public: string = trim(form_value(body, "public_key"))
-    let project: string = trim(form_value(body, "project"))
-    let area: string = trim(form_value(body, "area"))
-    let node: string = trim(form_value(body, "node"))
+    let token: string = str_trim(form_field(body, "token"))
+    let device: string = str_trim(form_field(body, "device_id"))
+    let public: string = str_trim(form_field(body, "public_key"))
+    let project: string = str_trim(form_field(body, "project"))
+    let area: string = str_trim(form_field(body, "area"))
+    let node: string = str_trim(form_field(body, "node"))
     if token == "" || device == "" || public == "" {
         return Response{ 400, "{\"ok\":false,\"error\":\"missing enrollment fields\"}", "application/json", "" }
     }

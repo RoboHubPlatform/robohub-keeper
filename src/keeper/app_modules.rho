@@ -97,7 +97,7 @@ fn app_module_remove_entry(name: string) bool {
             line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        let trimmed: string = trim(line)
+        let trimmed: string = str_trim(line)
         if rho_str_index_of(trimmed, "- name:") == 0 {
             let found: string = unquote(rho_str_slice(trimmed, 7,
                 u32(rho_strlen(trimmed)) - 7))
@@ -174,7 +174,6 @@ fn app_module_row_line(line: string) string {
         vars("actions", app_module_actions(name, location, enabled)))
 }
 
-
 fn app_module_rows() string {
     var out: string = ""
     var rest: string = app_module_entries()
@@ -230,8 +229,8 @@ fn app_modules_install(req: Request) Response {
     if !forms_csrf_ok(body) {
         return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
     }
-    var name: string = trim(form_value(body, "name"))
-    let source: string = trim(form_value(body, "source"))
+    var name: string = str_trim(form_field(body, "name"))
+    let source: string = str_trim(form_field(body, "source"))
     if source == "" {
         return app_modules_page_message(req, "Name a module to install.")
     }
@@ -277,7 +276,7 @@ fn app_modules_uninstall(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
+    let name: string = str_trim(form_field(body, "name"))
     if !valid_name(name) {
         return app_modules_page_message(req, "No such module: " + name)
     }

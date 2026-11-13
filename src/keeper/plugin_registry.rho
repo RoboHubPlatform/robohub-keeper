@@ -18,20 +18,8 @@ module keeper.plugin_registry
 // plugin, because an application reaches what it uses through its declared
 // dependencies and its bindings.
 
-fn plugin_trim(text: string) string {
-    var out: string = text
-    while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, 0, 1), " ") {
-        out = rho_str_slice(out, 1, u32(rho_strlen(out)) - 1)
-    }
-    while rho_strlen(out) > 0 &&
-        rho_str_eq(rho_str_slice(out, u32(rho_strlen(out)) - 1, 1), " ") {
-        out = rho_str_slice(out, 0, u32(rho_strlen(out)) - 1)
-    }
-    return out
-}
-
 fn plugin_unquote(text: string) string {
-    let value: string = plugin_trim(text)
+    let value: string = str_trim(text)
     if rho_strlen(value) >= 2 &&
         (rho_str_eq(rho_str_slice(value, 0, 1), "\"") ||
          rho_str_eq(rho_str_slice(value, 0, 1), "'")) {
@@ -216,7 +204,7 @@ fn plugin_db_entries(root: string) string {
             end = i + u32(at)
         }
         let line: string = rho_str_slice(text, i, end - i)
-        let trimmed: string = plugin_trim(line)
+        let trimmed: string = str_trim(line)
         if rho_str_index_of(trimmed, "- name:") == 0 {
             if name != "" {
                 out = out + name + "|" + location + "\n"
@@ -266,7 +254,7 @@ fn plugin_db_remove(root: string, name: string) bool {
             line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        let trimmed: string = plugin_trim(line)
+        let trimmed: string = str_trim(line)
         if rho_str_index_of(trimmed, "- name:") == 0 {
             let found: string = plugin_unquote(rho_str_slice(trimmed, 7,
                 u32(rho_strlen(trimmed)) - 7))

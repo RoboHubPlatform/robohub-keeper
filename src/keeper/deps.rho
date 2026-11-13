@@ -286,9 +286,9 @@ fn deps_optional_missing(name: string) string {
 // the three levels. A git URL is checked once it is cloned, so it goes straight
 // to Install, which does not start what lacks a required program.
 fn deps_preview_page(req: Request) Response {
-    let add: string = trim(query_str(req, "add"))
-    let source: string = trim(query_str(req, "source"))
-    var name: string = trim(query_str(req, "name"))
+    let add: string = str_trim(query_str(req, "add"))
+    let source: string = str_trim(query_str(req, "source"))
+    var name: string = str_trim(query_str(req, "name"))
     var path: string = ""
     var hidden: string = ""
     if add != "" {
@@ -322,7 +322,7 @@ fn deps_preview_page(req: Request) Response {
     }
     var impact: string = "Installing writes its unit and its environment and starts it. Nothing else restarts."
     if blocked != "" {
-        impact = "It is recorded and given its unit, but it does not start until the machine has: " + trim(blocked) + ". Its Dependencies can install them."
+        impact = "It is recorded and given its unit, but it does not start until the machine has: " + str_trim(blocked) + ". Its Dependencies can install them."
     }
     var kind_note: string = ""
     if app_kind(path) != "keeper-hosted" {

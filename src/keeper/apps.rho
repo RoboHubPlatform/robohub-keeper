@@ -53,7 +53,6 @@ fn record(name: string, path: string, origin: string) string {
     return name + "\t" + path + "\t" + origin + "\n"
 }
 
-
 fn records_in(dir: string, origin: string, report_name: string) string {
     if !rho_path_exists(dir) {
         return ""
@@ -338,7 +337,6 @@ fn app_title(name: string, path: string) string {
     return title
 }
 
-
 // app_depends returns the list of applications this app requires to be running
 // before it can start, as declared in its module.yml deploy block.
 fn app_depends(name: string, path: string) string {
@@ -396,7 +394,7 @@ fn app_provision_client_with(name: string, path: string, rotate: bool) string {
     let secret_file: string = app_client_secret_file(name)
     let wanted: string = app_client_wanted(path)
     let record: string = keeper_state_dir() + "/workspaces/" + name + "/auth/client.wanted"
-    if !rotate && rho_path_exists(secret_file) && rho_str_eq(trim(rho_read_text(record)), wanted) {
+    if !rotate && rho_path_exists(secret_file) && rho_str_eq(str_trim(rho_read_text(record)), wanted) {
         return secret_file
     }
     let store: string = auth_dir() + "/clients"
@@ -455,7 +453,7 @@ fn app_manifest_list(path: string, key: string) string {
         let at: i32 = rho_str_index_of(rest, ",")
         var token: string = rest
         if at < 0 { rest = "" } else { token = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        token = trim(token)
+        token = str_trim(token)
         if rho_str_starts_with(token, "\"") && rho_str_slice(token, u32(rho_strlen(token)) - 1, 1) == "\"" {
             token = rho_str_slice(token, 1, u32(rho_strlen(token)) - 2)
         }
@@ -543,8 +541,6 @@ fn unpin(name: string) void {
     ignore_bool(rho_write_text(menu_state_file(),
         list_remove(rho_read_text(menu_state_file()), name)))
 }
-
-
 
 /* -------------------------------------------------------------------------- */
 /*  Pages                                                                     */
@@ -822,11 +818,10 @@ fn keeper_app_log_path(name: string) string {
         "/data/settings.conf", name)
 }
 
-
 // applications_log is what systemd recorded of an application: its output and
 // systemd's own lines about starting, failing and restarting it.
 fn applications_log(req: Request) Response {
-    let name: string = trim(request_query_param(req, "name"))
+    let name: string = str_trim(request_query_param(req, "name"))
     if !catalog_has(name) {
         return page(req, "Log", "<h1>Log</h1><p>Unknown application.</p>")
     }
@@ -834,7 +829,7 @@ fn applications_log(req: Request) Response {
     let text: string = app_journal(name, 300)
     var body: string = "<h1>Log · " + escape_html(app_title(name, path)) +
         "</h1><p>From the journal of <code>" + escape_html(app_unit_name(name)) + ".service</code>.</p>"
-    if trim(text) == "" || rho_str_index_of(text, "No entries") >= 0 {
+    if str_trim(text) == "" || rho_str_index_of(text, "No entries") >= 0 {
         body = body + "<p>Nothing recorded yet.</p>"
     }
     let file: string = keeper_app_log_path(name)
@@ -894,16 +889,13 @@ fn applications_page(req: Request) Response {
 /*  Actions                                                                   */
 /* -------------------------------------------------------------------------- */
 
-
-
-
 fn applications_menu(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    let wanted: string = form_value(body, "pinned")
+    let name: string = str_trim(form_field(body, "name"))
+    let wanted: string = form_field(body, "pinned")
     if name == "" || app_path(name) == "" {
         return applications_page_message(req, "No such application: " + name)
     }
@@ -1072,8 +1064,6 @@ fn app_artifact_dir(name: string) string {
 fn app_artifact_incoming_dir() string {
     return keeper_state_dir() + "/incoming"
 }
-
-
 
 // app_artifact_incoming finds the newest staged archive for an application.
 fn app_artifact_incoming(name: string) string {
@@ -1294,7 +1284,7 @@ fn applications_start(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
-    let name: string = trim(form_value(request_body(req), "name"))
+    let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_start(name))
 }
 
@@ -1302,7 +1292,7 @@ fn applications_stop(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
-    let name: string = trim(form_value(request_body(req), "name"))
+    let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_stop(name))
 }
 
@@ -1310,7 +1300,7 @@ fn applications_redeploy(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
-    let name: string = trim(form_value(request_body(req), "name"))
+    let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_redeploy(name))
 }
 
@@ -1318,7 +1308,7 @@ fn applications_build(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
-    let name: string = trim(form_value(request_body(req), "name"))
+    let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_build_job(name))
 }
 
@@ -1326,7 +1316,7 @@ fn applications_restart(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
-    let name: string = trim(form_value(request_body(req), "name"))
+    let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_restart(name))
 }
 
@@ -1338,7 +1328,7 @@ fn applications_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
     }
-    let name: string = trim(form_value(request_body(req), "name"))
+    let name: string = str_trim(form_field(request_body(req), "name"))
     if !catalog_has(name) {
         return applications_page_message(req, "No such application: " + name)
     }
@@ -1380,11 +1370,11 @@ fn applications_install(req: Request) Response {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
-    var name: string = trim(form_value(body, "name"))
-    let source: string = trim(form_value(body, "source"))
-    let add: string = trim(form_value(body, "add"))
-    let from_registry: string = trim(form_value(body, "package"))
-    let add_to_menu: string = form_value(body, "menu")
+    var name: string = str_trim(form_field(body, "name"))
+    let source: string = str_trim(form_field(body, "source"))
+    let add: string = str_trim(form_field(body, "add"))
+    let from_registry: string = str_trim(form_field(body, "package"))
+    let add_to_menu: string = form_field(body, "menu")
     // The form carries the forms module's token: an install builds and runs what
     // it names, so it is accepted only from a page this keeper drew.
     if !forms_csrf_ok(body) {

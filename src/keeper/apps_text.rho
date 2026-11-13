@@ -108,23 +108,12 @@ fn field(line: string, index: u32) string {
     return rho_str_slice(rest, 0, u32(at))
 }
 
-fn trim(text: string) string {
-    var out: string = text
-    while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, 0, 1), " ") {
-        out = rho_str_slice(out, 1, u32(rho_strlen(out)) - 1)
-    }
-    while rho_strlen(out) > 0 && rho_str_eq(rho_str_slice(out, u32(rho_strlen(out)) - 1, 1), " ") {
-        out = rho_str_slice(out, 0, u32(rho_strlen(out)) - 1)
-    }
-    return out
-}
-
 /* -------------------------------------------------------------------------- */
 /*  Names and paths                                                           */
 /* -------------------------------------------------------------------------- */
 
 fn unquote(text: string) string {
-    let value: string = trim(text)
+    let value: string = str_trim(text)
     if rho_strlen(value) >= 2 {
         let first: string = rho_str_slice(value, 0, 1)
         let last: string = rho_str_slice(value, u32(rho_strlen(value)) - 1, 1)
@@ -209,129 +198,6 @@ fn source_is_git(source: string) bool {
 /* -------------------------------------------------------------------------- */
 /*  Forms                                                                     */
 /* -------------------------------------------------------------------------- */
-
-fn form_value(body: string, name: string) string {
-    var rest: string = body + "&"
-    while rho_strlen(rest) > 0 {
-        let amp: i32 = rho_str_index_of(rest, "&")
-        if amp < 0 {
-            break
-        }
-        let pair: string = rho_str_slice(rest, 0, u32(amp))
-        rest = rho_str_slice(rest, u32(amp) + 1, u32(rho_strlen(rest)) - u32(amp) - 1)
-        if rho_strlen(pair) == 0 {
-            continue
-        }
-        let equals: i32 = rho_str_index_of(pair, "=")
-        if equals < 0 {
-            continue
-        }
-        let key: string = url_decode(rho_str_slice(pair, 0, u32(equals)))
-        if rho_str_eq(key, name) {
-            return url_decode(rho_str_slice(pair, u32(equals) + 1,
-                u32(rho_strlen(pair)) - u32(equals) - 1))
-        }
-    }
-    return ""
-}
-
-fn url_decode(value: string) string {
-    // A form body is percent-encoded. The registry only needs the characters a
-    // path or a name can contain, so the decoder keeps the ones it knows and
-    // leaves the rest as written.
-    var out: string = ""
-    var i: u32 = 0
-    let length: u32 = u32(rho_strlen(value))
-    while i < length {
-        let ch: string = rho_str_slice(value, i, 1)
-        if rho_str_eq(ch, "+") {
-            out = out + " "
-            i = i + 1
-            continue
-        }
-        if rho_str_eq(ch, "%") && i + 2 < length {
-            let high: u32 = decode_hex(rho_str_slice(value, i + 1, 1))
-            let low: u32 = decode_hex(rho_str_slice(value, i + 2, 1))
-            out = out + rho_str_from_byte(u8(high * 16 + low))
-            i = i + 3
-            continue
-        }
-        out = out + ch
-        i = i + 1
-    }
-    return out
-}
-
-fn decode_hex(ch: string) u32 {
-    if is_digit(ch) {
-        if rho_str_eq(ch, "0") {
-            return 0
-        }
-        if rho_str_eq(ch, "1") {
-            return 1
-        }
-        if rho_str_eq(ch, "2") {
-            return 2
-        }
-        if rho_str_eq(ch, "3") {
-            return 3
-        }
-        if rho_str_eq(ch, "4") {
-            return 4
-        }
-        if rho_str_eq(ch, "5") {
-            return 5
-        }
-        if rho_str_eq(ch, "6") {
-            return 6
-        }
-        if rho_str_eq(ch, "7") {
-            return 7
-        }
-        if rho_str_eq(ch, "8") {
-            return 8
-        }
-        return 9
-    }
-    if is_lower(ch) {
-        if rho_str_eq(ch, "a") {
-            return 10
-        }
-        if rho_str_eq(ch, "b") {
-            return 11
-        }
-        if rho_str_eq(ch, "c") {
-            return 12
-        }
-        if rho_str_eq(ch, "d") {
-            return 13
-        }
-        if rho_str_eq(ch, "e") {
-            return 14
-        }
-        return 15
-    }
-    if is_upper(ch) {
-        if rho_str_eq(ch, "A") {
-            return 10
-        }
-        if rho_str_eq(ch, "B") {
-            return 11
-        }
-        if rho_str_eq(ch, "C") {
-            return 12
-        }
-        if rho_str_eq(ch, "D") {
-            return 13
-        }
-        if rho_str_eq(ch, "E") {
-            return 14
-        }
-        return 15
-    }
-    return 0
-}
-
 
 fn app_artifact_value(text: string, key: string) string {
     let prefix: string = key + "="
