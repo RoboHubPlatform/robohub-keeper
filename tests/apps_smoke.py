@@ -315,6 +315,16 @@ def main() -> int:
             status, location, body = sign_in(base, "keeper", base + "/auth/callback", True)
             if status not in (302, 303) or not location.startswith(base + "/auth/callback?ticket="):
                 raise AssertionError(f"the keeper's own sign-in did not return to it ({status}, {location!r}): {body[:200]}")
+            # A mesh gateway is started by Mesh, not hosted by the keeper, and its
+            # page is signed in to at its callback on this machine — whatever
+            # port its mesh gave it — and nowhere else.
+            status, location, body = sign_in(base, "gateway", "http://127.0.0.1:8080/auth/callback", True)
+            if status not in (302, 303) or not location.startswith("http://127.0.0.1:8080/auth/callback?ticket="):
+                raise AssertionError(f"a gateway's sign-in did not return to it ({status}, {location!r}): {body[:200]}")
+            for wrong in ("http://127.0.0.1:8080/elsewhere", "http://evil.example:8080/auth/callback"):
+                status, _, _ = sign_in(base, "gateway", wrong, True)
+                if status != 400:
+                    raise AssertionError(f"a gateway sign-in returning to {wrong} was not refused ({status})")
 
             # Nobody has an account yet, so signing in is the first run; and an
             # application can ask whether a keeper session still stands.

@@ -316,3 +316,7 @@ Built on provider-email 0.2.1, provider-webhook 0.2.1, provider-log 0.2.1 and no
 ## [0.9.5] - 2026-11-13
 
 An application's `app.env` quotes HOME and PATH, as systemd's environment file reads a value whole: unquoted, WSL's PATH stopped at `/mnt/c/Program` and the Windows directories after it — powershell.exe among them — were lost, so Mesh could not reach a board through Windows to flash it.
+
+## [0.9.6] - 2026-11-13
+
+A mesh gateway's page can be signed in to. The gateway takes keeper's tickets for the audience `gateway` but is started by Mesh rather than hosted by the keeper, so its sign-in was refused as "not one this keeper signs in to". The keeper now signs in to the audience `gateway` when the ticket goes back to `/auth/callback` on this machine or on the host the keeper was reached on, on whatever port the mesh gave it, and nowhere else.

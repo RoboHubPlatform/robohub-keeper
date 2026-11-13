@@ -292,7 +292,12 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
         return false
     }
     let path: string = app_path(audience)
-    if path == "" {
+    // A mesh gateway is not an application keeper hosts — Mesh starts one per
+    // mesh, on a port of its plan — but it takes keeper's tickets for the
+    // audience `gateway`. Its page is signed in to when the ticket goes back to
+    // its callback on this machine or on the host keeper was reached on.
+    let gateway: bool = path == "" && rho_str_eq(audience, "gateway")
+    if path == "" && !gateway {
         return false
     }
     var rest: string = ""
@@ -316,6 +321,9 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
     let keeper_host: string = auth_host(header_str(req, "Host"))
     if host == "" || (!auth_loopback(host) && !rho_str_eq(host, keeper_host)) {
         return false
+    }
+    if gateway {
+        return rho_str_eq(address, "/auth/callback")
     }
     // The keeper's own manifest names the port a build serves on by default; the
     // port it was started on is the one its pages are reached at.
