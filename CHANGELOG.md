@@ -303,3 +303,7 @@ Correctness fixes from the 2026-11 review.
 - A rollback goes to the release made before the one in use, by the time in its name; a second rollback goes further back instead of returning to where the first started. Pruning never removes the release in use or the one before it.
 - A job that says it is running but holds no lock after half a minute (killed, a restart, a lost race for the lock) is marked failed, so the application is not busy for ever.
 - The smoke test binds to 127.0.0.1, and covers a release that answers, one that does not, two rollbacks and a stale job.
+
+## [0.9.3] - 2026-11-13
+
+Built on provider-email 0.2.1, provider-webhook 0.2.1, provider-log 0.2.1 and notifications 0.1.6.
