@@ -1,0 +1,180 @@
+//
+// @file packages.rho
+// @brief Applications published to the Rho registry: installing one, and updating it when a newer version is out.
+//
+// @module keeper.packages
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.packages
+
+// A published application is a package: `rho module install` puts it under
+// ~/.rho/modules/installed/module/<name>@<version> with its program, and the
+// keeper runs it from there (origin `registry`). Updating is installing the newer
+// version, pointing the catalogue at it, writing the unit again and restarting.
+// What the registry has is asked with `rho module search --format tsv`, at most
+// once an hour per application.
+
+import std.web.http
+
+/// How long, in seconds, the newest version the registry offers is kept.
+const PACKAGES_FRESH_SECONDS: u32 = 3600
+
+fn packages_dir() string {
+    return keeper_state_dir() + "/packages"
+}
+
+// packages_search is `rho module search --format tsv <name>`: local and remote
+// versions of a module, one per line.
+fn packages_search(name: string) string {
+    let report: string = apps_report("packages-search")
+    ignore_u32(rho_exec_args("timeout", "20\nrho\nmodule\nsearch\n--format\ntsv\n" + name + "\n", report))
+    return rho_read_text(report)
+}
+
+// version_part is the numeric part `index` of a version, 0 when there is none.
+fn version_part(version: string, index: u32) u32 {
+    var rest: string = version
+    let dash: i32 = rho_str_index_of(rest, "-")
+    if dash >= 0 {
+        rest = rho_str_slice(rest, 0, u32(dash))
+    }
+    var i: u32 = 0
+    while i < index {
+        let at: i32 = rho_str_index_of(rest, ".")
+        if at < 0 {
+            return 0
+        }
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        i = i + 1
+    }
+    let end: i32 = rho_str_index_of(rest, ".")
+    if end >= 0 {
+        rest = rho_str_slice(rest, 0, u32(end))
+    }
+    return rho_int_from_str(rest)
+}
+
+// version_newer is whether version a is newer than b.
+fn version_newer(a: string, b: string) bool {
+    var i: u32 = 0
+    while i < 3 {
+        let x: u32 = version_part(a, i)
+        let y: u32 = version_part(b, i)
+        if x != y {
+            return x > y
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// packages_latest is the newest version of a published application, local or
+// remote, from a search report.
+fn packages_latest_in(report: string, name: string) string {
+    var best: string = ""
+    var rest: string = report
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if !rho_str_eq(tsv_field(line, 2), name) {
+            continue
+        }
+        let version: string = tsv_field(line, 3)
+        if version != "" && (best == "" || version_newer(version, best)) {
+            best = version
+        }
+    }
+    return best
+}
+
+// package_update is the newer version a published application could update to,
+// or "". The registry is asked at most once an hour.
+fn package_update(name: string) string {
+    if !rho_str_eq(catalog_get(name, "origin"), "registry") {
+        return ""
+    }
+    let file: string = packages_dir() + "/" + name
+    let line: string = first_line(rho_read_text(file))
+    let now: u32 = auth_now()
+    var latest: string = field(line, 1)
+    if line == "" || now >= u32(rho_int_from_str(field(line, 0))) + PACKAGES_FRESH_SECONDS {
+        latest = packages_latest_in(packages_search(name), name)
+        ignore_u32(rho_exec_args("mkdir", "-p\n" + packages_dir() + "\n", apps_report("mkdir-packages")))
+        ignore_bool(rho_write_text(file, rho_int_to_str(now) + "|" + latest + "\n"))
+    }
+    let current: string = catalog_get(name, "version")
+    if latest != "" && version_newer(latest, current) {
+        return latest
+    }
+    return ""
+}
+
+// package_path is where an installed version of a package is, or "".
+fn package_path(name: string, version: string) string {
+    var rest: string = packages_search(name)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(tsv_field(line, 0), "local") && rho_str_eq(tsv_field(line, 2), name) && rho_str_eq(tsv_field(line, 3), version) {
+            return tsv_field(line, 4)
+        }
+    }
+    return ""
+}
+
+// package_fetch installs a version of a published application into the local
+// registry when it is not there, selects it, and answers where it is, or "!" and
+// why not. An empty version is the newest the registry has.
+fn package_fetch(name: string, wanted: string) string {
+    if !valid_name(name) || (wanted != "" && !arg_ok(wanted)) {
+        return "!That is not a package name."
+    }
+    var version: string = wanted
+    if version == "" {
+        version = packages_latest_in(packages_search(name), name)
+        if version == "" {
+            return "!The Rho registry has no package called " + name + "."
+        }
+    }
+    var path: string = package_path(name, version)
+    if path == "" {
+        let report: string = apps_report("packages-install-" + name)
+        if rho_exec_args("rho", "module\ninstall\n" + name + "@" + version + "\n", report) != 0 {
+            return "!" + name + "@" + version + " could not be installed: " + first_line(rho_read_text(report))
+        }
+        path = package_path(name, version)
+        if path == "" {
+            return "!" + name + "@" + version + " was installed but is not where the registry said."
+        }
+    }
+    ignore_u32(rho_exec_args("rho", "module\nactivate\n" + name + "@" + version + "\n", apps_report("packages-activate-" + name)))
+    info("keeper", "package " + name + "@" + version + " is at " + path)
+    return path
+}
+
+// package_apply_update updates a published application to a newer version: the
+// catalogue points at it, the unit is written again and the application
+// restarted. The old version stays installed, so going back is selecting it.
+fn package_apply_update(name: string) string {
+    let latest: string = package_update(name)
+    if latest == "" {
+        return name + " is the newest version there is."
+    }
+    let path: string = package_fetch(name, latest)
+    if rho_str_starts_with(path, "!") {
+        return rho_str_slice(path, 1, u32(rho_strlen(path)) - 1)
+    }
+    ignore_bool(catalog_write(catalog_flat(name, catalog_record_lines(name, "registry", path, latest,
+        catalog_get(name, "port"), catalog_get(name, "unit")))))
+    ignore_u32(rho_exec_args("rm", "-f\n" + packages_dir() + "/" + name + "\n", apps_report("packages-forget")))
+    info("keeper", name + " was updated to " + latest)
+    keeper_event("app.updated", name, name + " is now " + latest + ".")
+    return name + " is now " + latest + ". " + app_restart(name)
+}

@@ -1,0 +1,349 @@
+//
+// @file api.rho
+// @brief The keeper's interface for programs.
+//
+// @module keeper.api
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.api
+
+// The keeper's interface for programs: what is installed and in what state, and
+// the same start, stop, restart and redeploy the pages offer. Answers are JSON.
+// The routes are behind the keeper's sign-in like its pages.
+//
+//   GET  /api/v1/apps                    every application in the catalogue
+//   GET  /api/v1/apps/{name}             one of them
+//   POST /api/v1/apps/{name}/{action}    start | stop | restart | redeploy | build
+//   GET  /api/v1/jobs                    the recent jobs
+//   GET  /api/v1/jobs/{id}               one job, with its log
+
+import std.web.http
+
+fn api_app_url(name: string) string {
+    let port: string = app_port_of(name)
+    if port == "" {
+        return ""
+    }
+    return "http://127.0.0.1:" + port + app_route(catalog_get(name, "location"))
+}
+
+fn api_app_json(name: string) string {
+    let location: string = catalog_get(name, "location")
+    return "{\"name\":" + json_string(name) +
+        ",\"title\":" + json_string(app_title(name, location)) +
+        ",\"kind\":" + json_string(app_kind(location)) +
+        ",\"version\":" + json_string(app_version(location)) +
+        ",\"origin\":" + json_string(catalog_get(name, "origin")) +
+        ",\"location\":" + json_string(location) +
+        ",\"port\":" + json_string(app_port_of(name)) +
+        ",\"route\":" + json_string(app_route(location)) +
+        ",\"unit\":" + json_string(app_unit_name(name)) +
+        ",\"url\":" + json_string(api_app_url(name)) +
+        ",\"state\":" + json_string(app_state(name)) +
+        ",\"job\":" + json_string(job_running_for(name)) + "}"
+}
+
+fn api_error(status: u32, message: string) Response {
+    return json(status, "{\"ok\":false,\"error\":" + json_string(message) + "}")
+}
+
+fn api_apps(req: Request) Response {
+    var out: string = ""
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if name == "" {
+            continue
+        }
+        if out != "" {
+            out = out + ","
+        }
+        out = out + api_app_json(name)
+    }
+    return json(status_ok(), "{\"apps\":[" + out + "]}")
+}
+
+fn api_app(req: Request) Response {
+    let name: string = param(req, "name")
+    if !catalog_has(name) {
+        return api_error(status_not_found(), "no such application")
+    }
+    return json(status_ok(), api_app_json(name))
+}
+
+// api_app_action does what a page button does and says what came of it: a
+// message, and the job when the work goes on in the background.
+fn api_app_action(req: Request) Response {
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
+    }
+    let name: string = param(req, "name")
+    let action: string = param(req, "action")
+    if !catalog_has(name) {
+        return api_error(status_not_found(), "no such application")
+    }
+    var message: string = ""
+    if rho_str_eq(action, "start") {
+        message = app_start(name)
+    } else if rho_str_eq(action, "stop") {
+        message = app_stop(name)
+    } else if rho_str_eq(action, "restart") {
+        message = app_restart(name)
+    } else if rho_str_eq(action, "redeploy") {
+        message = app_redeploy(name)
+    } else if rho_str_eq(action, "build") {
+        message = app_build_job(name)
+    } else {
+        return api_error(status_bad_request(), "the actions are start, stop, restart, redeploy and build")
+    }
+    return json(status_ok(), "{\"ok\":true,\"message\":" + json_string(message) +
+        ",\"job\":" + json_string(job_running_for(name)) + ",\"app\":" + api_app_json(name) + "}")
+}
+
+fn api_job_json(id: string) string {
+    return "{\"id\":" + json_string(id) +
+        ",\"app\":" + json_string(job_meta(id, 0)) +
+        ",\"action\":" + json_string(job_meta(id, 1)) +
+        ",\"started\":" + json_string(job_meta(id, 2)) +
+        ",\"status\":" + json_string(job_status(id)) +
+        ",\"reason\":" + json_string(job_reason(id)) +
+        ",\"ended\":" + json_string(job_status_line(id, 2)) + "}"
+}
+
+fn api_jobs(req: Request) Response {
+    var out: string = ""
+    var rest: string = job_ids()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var id: string = rest
+        if at < 0 { rest = "" } else { id = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if id == "" {
+            continue
+        }
+        if out != "" {
+            out = out + ","
+        }
+        out = out + api_job_json(id)
+    }
+    return json(status_ok(), "{\"jobs\":[" + out + "]}")
+}
+
+fn api_job(req: Request) Response {
+    let id: string = param(req, "id")
+    if !job_id_ok(id) || !rho_path_exists(job_dir(id) + "/meta") {
+        return api_error(status_not_found(), "no such job")
+    }
+    let one: string = api_job_json(id)
+    return json(status_ok(), rho_str_slice(one, 0, u32(rho_strlen(one)) - 1) +
+        ",\"log\":" + json_string(job_log(id)) + "}")
+}
+
+// api_switcher is what the app switcher of every RoboHub application lists: the
+// keeper and the applications it hosts, with where each listens and one word for
+// its state. It is public and asked for across ports, so it says nothing more
+// than a look at the machine's open ports would.
+fn api_switcher(req: Request) Response {
+    var out: string = "{\"name\":\"keeper\",\"title\":\"Keeper\",\"port\":" + json_string(keeper_listen_port()) +
+        ",\"route\":\"/\",\"state\":\"keeper\"}"
+    var rest: string = keeper_switcher_apps()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let name: string = field(line, 0)
+        if name == "" || rho_str_eq(name, "keeper") {
+            continue
+        }
+        out = out + ",{\"name\":" + json_string(name) + ",\"title\":" + json_string(field(line, 1)) +
+            ",\"port\":" + json_string(field(line, 2)) + ",\"route\":" + json_string(field(line, 3)) +
+            ",\"state\":" + json_string(field(line, 4)) + "}"
+    }
+    return Response{ 200, "{\"apps\":[" + out + "]}", "application/json",
+        "Access-Control-Allow-Origin: *\nCache-Control: no-store" }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The orchestrator, for applications                                        */
+/* -------------------------------------------------------------------------- */
+
+// api_registry is the orchestrator's registry of modules — what each is, where it
+// is on this machine, where it comes from — so an application asks the keeper
+// instead of reading the orchestrator's checkout. `?format=tsv` answers lines a
+// Rho program reads without a JSON parser:
+//
+//   workspace<TAB><the folder that holds the checkouts>
+//   module<TAB>name<TAB>role<TAB>path<TAB>git<TAB>summary
+fn api_registry(req: Request) Response {
+    let root: string = robohub_root()
+    let dir: string = root + "/registry/modules"
+    let report: string = apps_report("api-registry")
+    ignore_u32(rho_exec_args("ls", dir + "\n", report))
+    let canonical: string = app_canonical(root)
+    var tsv: string = "workspace\t" + dir_of(canonical) + "\n"
+    var items: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var file: string = rest
+        if at < 0 { rest = "" } else { file = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_index_of(file, ".yml") < 0 {
+            continue
+        }
+        let entry: string = dir + "/" + file
+        let name: string = yaml.value(entry, "name")
+        if !valid_name(name) {
+            continue
+        }
+        let path: string = app_canonical(resolve_path(yaml.value(entry, "path")))
+        let role: string = yaml.value(entry, "role")
+        let git: string = yaml.value(entry, "git")
+        let summary: string = yaml.value(entry, "summary")
+        tsv = tsv + "module\t" + name + "\t" + role + "\t" + path + "\t" + git + "\t" + summary + "\n"
+        if items != "" {
+            items = items + ","
+        }
+        items = items + "{\"name\":" + json_string(name) + ",\"role\":" + json_string(role) + ",\"path\":" + json_string(path) +
+            ",\"git\":" + json_string(git) + ",\"summary\":" + json_string(summary) +
+            ",\"installed\":" + json_string(yaml.value(path + "/module.yml", "module.version")) + "}"
+    }
+    if rho_str_eq(query_str(req, "format"), "tsv") {
+        return text(status_ok(), tsv)
+    }
+    return json(status_ok(), "{\"workspace\":" + json_string(dir_of(canonical)) + ",\"modules\":[" + items + "]}")
+}
+
+// api_client is the application a service token was minted for — its subject is
+// `client:<name>` — or "".
+fn api_client(req: Request) string {
+    let subject: string = people_subject(req)
+    if rho_str_starts_with(subject, "client:") {
+        let name: string = rho_str_slice(subject, 7, u32(rho_strlen(subject)) - 7)
+        if catalog_has(name) {
+            return name
+        }
+    }
+    return ""
+}
+
+// api_me is who is asking: a person, with their role and grants, or an
+// application, by its client id.
+fn api_me(req: Request) Response {
+    let subject: string = people_subject(req)
+    if people_has(subject) {
+        return json(status_ok(), "{\"kind\":\"person\",\"name\":" + json_string(subject) +
+            ",\"display\":" + json_string(people_get(subject, "display")) +
+            ",\"role\":" + json_string(people_get(subject, "role")) +
+            ",\"grants\":" + json_string(people_get(subject, "grants")) + "}")
+    }
+    var kind: string = "other"
+    var name: string = subject
+    if api_client(req) != "" {
+        kind = "application"
+        name = api_client(req)
+    }
+    return json(status_ok(), "{\"kind\":" + json_string(kind) + ",\"name\":" + json_string(name) +
+        ",\"scopes\":" + json_string(header_str(req, "X-Rho-Scopes")) + "}")
+}
+
+// api_services is where the services an application calls are, and what it asks
+// for them: what replaces RHO_SERVICE_<NAME>_URL.
+fn api_services(req: Request) Response {
+    let subject: string = api_client(req)
+    if subject == "" {
+        return api_error(status_bad_request(), "services are asked for by an application, with its own token")
+    }
+    var out: string = ""
+    var rest: string = app_calls(app_path(subject))
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var call: string = rest
+        if at < 0 { rest = "" } else { call = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let colon: i32 = rho_str_index_of(call, ":")
+        var service: string = call
+        if colon >= 0 { service = rho_str_slice(call, 0, u32(colon)) }
+        if service == "" {
+            continue
+        }
+        var address: string = ""
+        if catalog_has(service) {
+            address = api_app_url(service)
+        }
+        if out != "" {
+            out = out + ","
+        }
+        out = out + "{\"name\":" + json_string(service) + ",\"audience\":" + json_string(call) + ",\"scopes\":" +
+            json_string(service + ":*") + ",\"url\":" + json_string(address) + "}"
+    }
+    return json(status_ok(), "{\"services\":[" + out + "]}")
+}
+
+// api_config is what the keeper keeps for an application: its record and the
+// environment it is started with, secrets left out. An application asks for its
+// own; an admin for any.
+fn api_config(req: Request) Response {
+    let name: string = param(req, "app")
+    if !catalog_has(name) {
+        return api_error(status_not_found(), "no such application")
+    }
+    if !rho_str_eq(api_client(req), name) && !keeper_allowed(req, "admin") {
+        return api_error(status_forbidden(), "an application reads its own configuration")
+    }
+    var env: string = ""
+    var rest: string = rho_read_text(app_env_path(name))
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let eq: i32 = rho_str_index_of(line, "=")
+        if eq <= 0 {
+            continue
+        }
+        let key: string = rho_str_slice(line, 0, u32(eq))
+        if rho_str_index_of(key, "SECRET") >= 0 && rho_str_index_of(key, "_FILE") < 0 {
+            continue
+        }
+        if env != "" {
+            env = env + ","
+        }
+        env = env + json_string(key) + ":" + json_string(rho_str_slice(line, u32(eq) + 1, u32(rho_strlen(line)) - u32(eq) - 1))
+    }
+    return json(status_ok(), "{\"app\":" + api_app_json(name) + ",\"environment\":{" + env + "}}")
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Events                                                                    */
+/* -------------------------------------------------------------------------- */
+
+// The keeper's events: one JSON object per line in its state folder, streamed to
+// whoever follows /api/v1/events — an application that wants to hear an install,
+// a start, a failure or a sign-out rather than ask every few seconds.
+//
+//   {"at":1794560000,"kind":"app.started","app":"mesh","message":"mesh is starting on port 8478."}
+
+/// The size the event file reaches before it starts again.
+const EVENTS_LIMIT: u32 = 524288
+
+fn events_file() string {
+    return keeper_state_dir() + "/events.log"
+}
+
+fn keeper_event(kind: string, app: string, message: string) void {
+    let file: string = events_file()
+    if u32(rho_strlen(rho_read_text(file))) > EVENTS_LIMIT {
+        ignore_bool(rho_write_text(file, ""))
+    }
+    ignore_bool(rho_append_text(file, "{\"at\":" + rho_int_to_str(auth_now()) + ",\"kind\":" + json_string(kind) +
+        ",\"app\":" + json_string(app) + ",\"message\":" + json_string(message) + "}\n"))
+}
+
+fn api_events(req: Request) Response {
+    ignore_bool(rho_append_text(events_file(), ""))
+    return sse_file(events_file(), 1000)
+}

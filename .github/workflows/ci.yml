@@ -1,0 +1,23 @@
+# CI for this repository: the RoboHub workflow every repository in the
+# ecosystem calls, so the steps are written once (robohub/.github/workflows).
+#
+# The keeper builds beside robohub, which carries the shared modules it declares
+# under `deps: robohub:`, the alert contract and its providers, and the
+# orchestrator's registry the keeper reads.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: RoboHubPlatform/robohub/.github/workflows/robohub-ci.yml@main
+    secrets: inherit
+    with:
+      siblings: robohub
+      components: rho-auth rho-log
+      build: .

@@ -1,3 +1,15 @@
+//
+// @file plugin_registry.rho
+// @brief The keeper's plugin and provider registries.
+//
+// @module keeper.plugin_registry
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-12
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.plugin_registry
 
 // The keeper's plugin and provider registries: plugins/registry.yml and
@@ -42,7 +54,7 @@ fn plugin_home() string {
 
 fn plugin_state_dir() string {
     let dir: string = plugin_home() + "/.rho/plugins"
-    ignore_u32(rho_exec("mkdir", "-p " + dir, dir + "/mkdir.txt"))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "\n", dir + "/mkdir.txt"))
     return dir
 }
 
@@ -130,8 +142,8 @@ fn plugin_rows(root: string) string {
     // A checkout that has never had a registry file uses the folder as the
     // database. The first install writes the file.
     let report: string = plugin_state_dir() + "/find.txt"
-    ignore_u32(rho_exec("mkdir", "-p " + plugin_state_dir(), report))
-    let code: u32 = rho_exec("find", root + " -maxdepth 2 -type f -name module.yml", report)
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + plugin_state_dir() + "\n", report))
+    let code: u32 = rho_exec_args("find", root + "\n-maxdepth\n2\n-type\nf\n-name\nmodule.yml\n", report)
     if code != 0 {
         return ""
     }

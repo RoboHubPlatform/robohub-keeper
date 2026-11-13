@@ -1,8 +1,6 @@
-<tr>
-  <td><strong>{{ name }}</strong></td>
-  <td>{{ contract }}</td>
-  <td>{{ transport }}</td>
-  <td>{{ summary }}</td>
-  <td>{{{ status }}}</td>
-  <td><div class="app-actions">{{{ actions }}}</div></td>
-</tr>
+<div class="rh-card svc">
+  <span class="r"><span class="nm">{{ name }}</span>{{{ status }}}</span>
+  <span class="sb">implements {{ contract }} · {{ transport }}</span>
+  <span class="sb" title="{{ summary }}">{{ summary }}</span>
+  <div class="app-actions">{{{ actions }}}</div>
+</div>

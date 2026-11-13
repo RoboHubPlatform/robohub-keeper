@@ -1,6 +1,5 @@
-<tr>
-  <td><strong>{{ name }}</strong></td>
-  <td>{{ threshold }}</td>
-  <td>{{{ status }}}</td>
-  <td><div class="app-actions">{{{ actions }}}</div></td>
-</tr>
+<div class="rh-card svc">
+  <span class="r"><span class="nm">{{ name }}</span>{{{ status }}}</span>
+  <span class="sb">from {{ threshold }} up</span>
+  <div class="app-actions">{{{ actions }}}</div>
+</div>

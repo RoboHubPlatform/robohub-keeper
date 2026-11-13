@@ -1,3 +1,15 @@
+//
+// @file providers.rho
+// @brief The keeper's provider registry.
+//
+// @module keeper.providers
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-04
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.providers
 
 // The keeper's provider registry.
@@ -83,8 +95,8 @@ fn provider_rows(root: string) string {
         return out
     }
     let report: string = plugin_state_dir() + "/find-providers.txt"
-    ignore_u32(rho_exec("mkdir", "-p " + plugin_state_dir(), report))
-    let code: u32 = rho_exec("find", root + " -maxdepth 2 -type f -name module.yml", report)
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + plugin_state_dir() + "\n", report))
+    let code: u32 = rho_exec_args("find", root + "\n-maxdepth\n2\n-type\nf\n-name\nmodule.yml\n", report)
     if code != 0 {
         return ""
     }
@@ -156,23 +168,6 @@ fn provider_row_line(line: string) string {
         vars("actions", template_fill(template_get("provider-actions"), vars("name", name))))
 }
 
-fn provider_row_html(name: string) string {
-    var rest: string = provider_rows(provider_root())
-    while rho_strlen(rest) > 0 {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        var line: string = rest
-        if at < 0 {
-            rest = ""
-        } else {
-            line = rho_str_slice(rest, 0, u32(at))
-            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        }
-        if field(line, 0) == name {
-            return provider_row_line(line)
-        }
-    }
-    return ""
-}
 
 fn provider_rows_html() string {
     var out: string = ""
@@ -213,7 +208,7 @@ fn providers_page_message(req: Request, message: string) Response {
     }
     let body: string = template_fill(template_get("providers"),
         vars("notice", notice) + vars("rows", provider_rows_html()) +
-        vars("root", provider_root()))
+        vars("root", provider_root()) + vars("install_form", keeper_install_form("/providers/install", "robohub-provider-mesh", "https://github.com/RoboHubPlatform/robohub-provider-mesh or /path/to/provider", "A git URL, or a folder with a provider module.yml.")))
     return page(req, i18n_t(req, "page.providers"), body)
 }
 
@@ -222,7 +217,13 @@ fn providers_page(req: Request) Response {
 }
 
 fn providers_install(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
+    }
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
@@ -238,24 +239,24 @@ fn providers_install(req: Request) Response {
     if rho_path_exists(target) {
         return providers_page_message(req, name + " is already installed.")
     }
-    ignore_u32(rho_exec("mkdir", "-p " + provider_root(), apps_report("mkdir-providers")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + provider_root() + "\n", apps_report("mkdir-providers")))
     var code: u32 = 0
     if source_is_git(source) {
-        code = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(target),
+        code = rho_exec_args("git", "clone\n--\n" + source + "\n" + target + "\n",
             apps_report("install-provider-" + name))
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
             return providers_page_message(req, "No provider module.yml at " + path + ".")
         }
-        code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
+        code = rho_exec_args("cp", "-r\n" + path + "\n" + target + "\n",
             apps_report("install-provider-" + name))
     }
     if code != 0 {
         return providers_page_message(req, "Could not install " + source + ".")
     }
     if provider_contract(target + "/module.yml") == "" {
-        ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-provider")))
+        ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n", apps_report("remove-not-provider")))
         return providers_page_message(req, source + " is not a provider module.")
     }
     ignore_bool(provider_db_add(provider_root(), name))
@@ -264,6 +265,9 @@ fn providers_install(req: Request) Response {
 }
 
 fn providers_uninstall(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) || !rho_path_exists(plugin_manifest(provider_root(), name)) {
@@ -273,7 +277,7 @@ fn providers_uninstall(req: Request) Response {
     // lives in `log`. Read before the entry is removed.
     let target: string = provider_root() + "/" + plugin_location(provider_root(), name)
     ignore_bool(plugin_db_remove(provider_root(), name))
-    ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-provider-" + name)))
+    ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n", apps_report("uninstall-provider-" + name)))
     info("keeper", "uninstalled provider " + name)
     if htmx_is_request(req) {
         return html(status_ok(), "")

@@ -1,3 +1,15 @@
+//
+// @file app_modules.rho
+// @brief The keeper's application module registry.
+//
+// @module keeper.app_modules
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-02
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.app_modules
 
 // The keeper's application module registry.
@@ -31,7 +43,7 @@ fn app_module_entries() string {
         return ""
     }
     let report: string = apps_report("list-modules")
-    ignore_u32(rho_exec("ls", dir, report))
+    ignore_u32(rho_exec_args("ls", dir + "\n", report))
     var out: string = ""
     var rest: string = rho_read_text(report)
     while rest != "" {
@@ -162,23 +174,6 @@ fn app_module_row_line(line: string) string {
         vars("actions", app_module_actions(name, location, enabled)))
 }
 
-fn app_module_row_html(name: string) string {
-    var rest: string = app_module_entries()
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        var line: string = rest
-        if at < 0 {
-            rest = ""
-        } else {
-            line = rho_str_slice(rest, 0, u32(at))
-            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        }
-        if field(line, 0) == name {
-            return app_module_row_line(line)
-        }
-    }
-    return ""
-}
 
 fn app_module_rows() string {
     var out: string = ""
@@ -218,7 +213,8 @@ fn app_modules_page_message(req: Request, message: string) Response {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("app-modules"),
-        vars("notice", notice) + vars("rows", app_module_rows()))
+        vars("notice", notice) + vars("rows", app_module_rows()) +
+        vars("install_form", keeper_install_form("/app-modules/install", "inventory", "https://github.com/RoboHubPlatform/robohub-inventory or /path/to/module", "A git URL, or a folder with a module.yml.")))
     return page(req, i18n_t(req, "page.modules"), body)
 }
 
@@ -227,7 +223,13 @@ fn app_modules_page(req: Request) Response {
 }
 
 fn app_modules_install(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
+    }
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
@@ -243,17 +245,17 @@ fn app_modules_install(req: Request) Response {
     if rho_path_exists(target) {
         return app_modules_page_message(req, name + " is already installed.")
     }
-    ignore_u32(rho_exec("mkdir", "-p " + app_modules_root(), apps_report("mkdir-micro-apps")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + app_modules_root() + "\n", apps_report("mkdir-micro-apps")))
     var code: u32 = 0
     if source_is_git(source) {
-        code = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(target),
+        code = rho_exec_args("git", "clone\n--\n" + source + "\n" + target + "\n",
             apps_report("install-module-" + name))
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
             return app_modules_page_message(req, "No module.yml at " + path + ".")
         }
-        code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
+        code = rho_exec_args("cp", "-r\n" + path + "\n" + target + "\n",
             apps_report("install-module-" + name))
     }
     if code != 0 {
@@ -261,7 +263,7 @@ fn app_modules_install(req: Request) Response {
     }
     // A module says it is one: `module.type: module`.
     if yaml.value(target + "/module.yml", "module.type") != "module" {
-        ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
+        ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n",
             apps_report("remove-not-module")))
         return app_modules_page_message(req, source + " is not a module.")
     }
@@ -271,6 +273,9 @@ fn app_modules_install(req: Request) Response {
 }
 
 fn app_modules_uninstall(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) {
@@ -294,7 +299,7 @@ fn app_modules_uninstall(req: Request) Response {
     }
     let target: string = app_modules_root() + "/" + location
     ignore_bool(app_module_remove_entry(name))
-    ignore_u32(rho_exec("rm", "-rf " + arg_quote(target),
+    ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n",
         apps_report("uninstall-module-" + name)))
     info("keeper", "uninstalled module " + name)
     if htmx_is_request(req) {

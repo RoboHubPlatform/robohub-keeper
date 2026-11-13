@@ -1,7 +1,5 @@
-<tr>
-  <td><a href='/module/{{ name }}'>{{ name }}</a></td>
-  <td>{{ role }}</td>
-  <td>{{ version }}</td>
-  <td>{{ installed }}</td>
-  <td>{{{ badge }}}</td>
-</tr>
+<div class="rh-card">
+  <span class="r"><span class="nm">{{ name }}</span><span class="rh-pill">{{ role }}</span></span>
+  <span class="sb">{{ version }} · installed: {{ installed }}</span>
+  <div class="app-actions"><a class="button quiet small" href="/module/{{ name }}">Details</a>{{{ badge }}}</div>
+</div>

@@ -1,0 +1,2 @@
+-- The keeper's own database. It keeps no tables of its own yet: the
+-- notifications module creates the table it needs when it first opens it.

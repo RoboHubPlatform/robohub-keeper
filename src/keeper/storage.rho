@@ -1,3 +1,15 @@
+//
+// @file storage.rho
+// @brief The host primitives the keeper calls, its state folder, and quoting for the programs it runs.
+//
+// @module keeper.storage
+// @project keeper
+// @author Aurel Miron
+// @date 2026-10-22
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.storage
 
 // The host primitives.
@@ -9,6 +21,8 @@ extern fn rho_asset(module: string, path: string) string
 extern fn rho_asset_dir(module: string) string
 extern fn rho_write_text(path: string, text: string) bool
 extern fn rho_write_secret(path: string, text: string) bool
+extern fn rho_append_text(path: string, text: string) bool
+extern fn rho_random_hex(bytes: u32) string
 extern fn rho_exec_args(program: string, arguments: string, output_path: string) u32
 extern fn rho_exec(program: string, arguments: string, output_path: string) u32
 extern fn rho_strlen(s: string) u64
@@ -48,9 +62,14 @@ fn apps_report(name: string) string {
     return keeper_state_dir() + "/" + name + ".txt"
 }
 
+// ensure_keeper_state makes the keeper's state folder, owner-only: it holds the
+// session list, the reports of the programs the keeper runs, and the private
+// folder where a secret is on disk for a moment.
 fn ensure_keeper_state() void {
-    ignore_u32(rho_exec("mkdir", "-p " + keeper_state_dir(), apps_report("mkdir")))
-    ignore_u32(rho_exec("mkdir", "-p build/reports", apps_report("mkdir-reports")))
+    let dir: string = keeper_state_dir()
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "\n", "build/reports/mkdir-state.txt"))
+    ignore_u32(rho_exec_args("chmod", "700\n" + dir + "\n", "build/reports/chmod-state.txt"))
+    ignore_u32(rho_exec_args("mkdir", "-p\nbuild/reports\n", apps_report("mkdir-reports")))
 }
 
 fn ignore_u32(value: u32) void {
@@ -62,10 +81,58 @@ fn ignore_bool(value: bool) void {
 fn ignore_string(value: string) void {
 }
 
+// shell_quote is a value as one word of a POSIX shell: single-quoted, with a
+// single quote inside it closed, escaped and reopened.
 fn shell_quote(value: string) string {
-    return "'" + value + "'"
+    var out: string = "'"
+    let length: u32 = u32(rho_strlen(value))
+    var i: u32 = 0
+    while i < length {
+        let ch: string = rho_str_slice(value, i, 1)
+        if rho_str_eq(ch, "'") {
+            out = out + "'\\''"
+        } else {
+            out = out + ch
+        }
+        i = i + 1
+    }
+    return out + "'"
 }
 
-fn arg_quote(value: string) string {
-    return "\"" + value + "\""
+// arg_ok is whether a value can be one argument of a program the keeper runs:
+// no line break, which would make it two, and no leading dash, which would make
+// it an option.
+fn arg_ok(value: string) bool {
+    if value == "" || rho_str_starts_with(value, "-") {
+        return false
+    }
+    return rho_str_index_of(value, "\n") < 0 && rho_str_index_of(value, "\r") < 0
 }
+
+
+// dir_of is the folder a path is in: everything before its last `/`.
+fn dir_of(path: string) string {
+    var cut: i32 = -1
+    var i: u32 = 0
+    let length: u32 = u32(rho_strlen(path))
+    while i < length {
+        if rho_str_eq(rho_str_slice(path, i, 1), "/") {
+            cut = i32(i)
+        }
+        i = i + 1
+    }
+    if cut <= 0 {
+        return "/"
+    }
+    return rho_str_slice(path, 0, u32(cut))
+}
+
+// The RoboHub platform's mqtt port: the keeper follows its broker to show what it
+// carries.
+extern fn mqtt_follow(broker: string, user: string, password_file: string, filter: string, events_path: string) bool
+extern fn mqtt_topics(prefix: string) string
+
+// A named lock held across the keeper's requests, for what two of them must not
+// write at once.
+extern fn rho_lock(name: string)
+extern fn rho_unlock(name: string)

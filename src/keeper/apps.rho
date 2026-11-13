@@ -1,3 +1,15 @@
+//
+// @file apps.rho
+// @brief The applications registry.
+//
+// @module keeper.apps
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-02
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.apps
 
 // The applications registry.
@@ -41,16 +53,13 @@ fn record(name: string, path: string, origin: string) string {
     return name + "\t" + path + "\t" + origin + "\n"
 }
 
-fn modules_dir() string {
-    return robohub_root() + "/modules"
-}
 
 fn records_in(dir: string, origin: string, report_name: string) string {
     if !rho_path_exists(dir) {
         return ""
     }
     let report: string = apps_report(report_name)
-    ignore_u32(rho_exec("ls", dir, report))
+    ignore_u32(rho_exec_args("ls", dir + "\n", report))
     var out: string = ""
     var rest: string = rho_read_text(report)
     while rest != "" {
@@ -195,7 +204,7 @@ fn workspace_records() string {
         return ""
     }
     let report: string = apps_report("list-workspace")
-    ignore_u32(rho_exec("ls", dir, report))
+    ignore_u32(rho_exec_args("ls", dir + "\n", report))
     var out: string = ""
     var rest: string = rho_read_text(report)
     while rest != "" {
@@ -222,16 +231,22 @@ fn workspace_records() string {
     return out
 }
 
-// application_records are what the keeper runs: what is published to the
-// registry first, then what the orchestrator's registry names in the workspace,
-// then a folder beside the keeper, which is how an application is run before it
-// is published, then what was registered by path.
-fn application_records() string {
+// discovered_records are the applications the keeper finds on the machine without
+// being told: the selected packages in the module registry, what the orchestrator's
+// registry names in the workspace, the folders in the orchestrator's applications/
+// and the folders registered by path before the catalogue. The catalogue adopts
+// them on its first start; after that they are what Install offers to add.
+fn discovered_records() string {
     ensure_keeper_state()
     var records: string = registry_records()
     records = records + records_without(workspace_records(), records)
     records = records + records_without(bundled_records(), records)
     return records + records_without(external_records(), records)
+}
+
+// application_records are what the keeper runs: the catalogue.
+fn application_records() string {
+    return catalog_records()
 }
 
 fn record_path(records: string, wanted: string) string {
@@ -301,7 +316,7 @@ fn record_origin(records: string, wanted: string) string {
 }
 
 fn app_path(name: string) string {
-    return record_path(application_records(), name)
+    return catalog_get(name, "location")
 }
 
 fn app_kind(path: string) string {
@@ -343,23 +358,15 @@ fn app_client_secret_file(name: string) string {
     return keeper_state_dir() + "/workspaces/" + name + "/auth/client.secret"
 }
 
-// app_provision_client registers an application that calls other services as a
-// client of keeper, once, and returns the file its secret is in; "" when it calls
-// nothing or could not be registered. The scope an audience grants is the
-// audience's own namespace: `mesh` grants `mesh:*`, `gateway:*` grants
+// app_client_wanted is what an application is a client for, as rho-auth reads
+// it: the audiences it may ask tokens for and the scopes they grant. Every
+// application may read the keeper (its API), and calls what deploy.calls names,
+// each in its own namespace: `mesh` grants `mesh:*`, `gateway:*` grants
 // `gateway:*`.
-fn app_provision_client(name: string, path: string) string {
-    let calls: string = app_calls(path)
-    if calls == "" || !auth_safe_name(name) {
-        return ""
-    }
-    let secret_file: string = app_client_secret_file(name)
-    if rho_path_exists(secret_file) {
-        return secret_file
-    }
-    var audiences: string = ""
-    var scopes: string = ""
-    var rest: string = calls
+fn app_client_wanted(path: string) string {
+    var audiences: string = "keeper"
+    var scopes: string = "keeper:read"
+    var rest: string = app_calls(path)
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
         var call: string = rest
@@ -368,21 +375,51 @@ fn app_provision_client(name: string, path: string) string {
         let colon: i32 = rho_str_index_of(call, ":")
         var namespace: string = call
         if colon >= 0 { namespace = rho_str_slice(call, 0, u32(colon)) }
-        if audiences != "" { audiences = audiences + ","; scopes = scopes + "," }
-        audiences = audiences + call
-        scopes = scopes + namespace + ":*"
+        audiences = audiences + "," + call
+        scopes = scopes + "," + namespace + ":*"
     }
-    if audiences == "" {
+    return audiences + "|" + scopes
+}
+
+// app_provision_client registers an application as a client of the keeper, and
+// registers it again — with a new secret — when what it is a client for changed
+// or `rotate` asks for a new secret. It answers the file the secret is in, or ""
+// when it could not be registered.
+fn app_provision_client(name: string, path: string) string {
+    return app_provision_client_with(name, path, false)
+}
+
+fn app_provision_client_with(name: string, path: string, rotate: bool) string {
+    if !auth_safe_name(name) {
         return ""
     }
-    let args: string = "auth\nclient\nadd\n--store\n" + auth_dir() + "/clients\n--id\n" + name +
-        "\n--audiences\n" + audiences + "\n--scopes\n" + scopes + "\n--secret-out\n" + secret_file + "\n"
+    let secret_file: string = app_client_secret_file(name)
+    let wanted: string = app_client_wanted(path)
+    let record: string = keeper_state_dir() + "/workspaces/" + name + "/auth/client.wanted"
+    if !rotate && rho_path_exists(secret_file) && rho_str_eq(trim(rho_read_text(record)), wanted) {
+        return secret_file
+    }
+    let store: string = auth_dir() + "/clients"
+    ignore_u32(rho_exec_args("rho", "auth\nclient\nremove\n--store\n" + store + "\n--id\n" + name + "\n", apps_report("client-remove-" + name)))
+    let args: string = "auth\nclient\nadd\n--store\n" + store + "\n--id\n" + name +
+        "\n--audiences\n" + field(wanted, 0) + "\n--scopes\n" + field(wanted, 1) + "\n--secret-out\n" + secret_file + "\n"
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + keeper_state_dir() + "/workspaces/" + name + "/auth\n", apps_report("mkdir-client")))
     if rho_exec_args("rho", args, apps_report("client-" + name)) != 0 || !rho_path_exists(secret_file) {
         ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be registered as a client", "app=" + name))
         return ""
     }
-    info("keeper", "registered application " + name + " as a client for " + audiences)
+    ignore_bool(rho_write_text(record, wanted + "\n"))
+    info("keeper", "registered application " + name + " as a client for " + field(wanted, 0))
     return secret_file
+}
+
+// app_remove_client takes an application's client away with it.
+fn app_remove_client(name: string) void {
+    if !auth_safe_name(name) {
+        return
+    }
+    ignore_u32(rho_exec_args("rho", "auth\nclient\nremove\n--store\n" + auth_dir() + "/clients\n--id\n" + name + "\n", apps_report("client-remove-" + name)))
+    ignore_u32(rho_exec_args("rm", "-f\n" + app_client_secret_file(name) + "\n" + keeper_state_dir() + "/workspaces/" + name + "/auth/client.wanted\n", apps_report("client-forget-" + name)))
 }
 
 // app_env_name is a service name as part of an environment variable's name:
@@ -401,56 +438,6 @@ fn app_env_name(name: string) string {
             out = out + c
         }
         i = i + 1
-    }
-    return out
-}
-
-// app_client_env_file is the environment keeper hands an application that calls
-// other services: who it is (its client id and where its secret is), where the
-// issuer is, and where each application it calls listens. One file, read by both
-// ways an application is started, so the two cannot drift.
-fn app_client_env_file(name: string) string {
-    return keeper_state_dir() + "/workspaces/" + name + "/auth/client.env"
-}
-
-fn app_write_client_env(name: string, path: string, secret_file: string) string {
-    if secret_file == "" {
-        return ""
-    }
-    var lines: string = "RHO_CLIENT_ID=" + name + "\nRHO_CLIENT_SECRET_FILE=" + secret_file +
-        "\nRHO_AUTH_URL=http://127.0.0.1:" + keeper_listen_port() + "\n"
-    var rest: string = app_calls(path)
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        var call: string = rest
-        if at < 0 { rest = "" } else { call = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        let callee: string = app_path(call)
-        if call != "" && callee != "" && auth_safe_name(call) && app_port(callee) != "" {
-            lines = lines + "RHO_SERVICE_" + app_env_name(call) + "_URL=http://127.0.0.1:" + app_port(callee) + "\n"
-        }
-    }
-    let file: string = app_client_env_file(name)
-    ignore_bool(rho_write_secret(file, lines))
-    return file
-}
-
-// app_client_env is that file as assignments for a shell command line.
-fn app_client_env(name: string, path: string, secret_file: string) string {
-    let file: string = app_write_client_env(name, path, secret_file)
-    if file == "" {
-        return ""
-    }
-    var out: string = ""
-    var rest: string = rho_read_text(file)
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        var line: string = rest
-        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        let eq: i32 = rho_str_index_of(line, "=")
-        if eq > 0 {
-            out = out + " " + rho_str_slice(line, 0, u32(eq)) + "=" +
-                shell_quote(rho_str_slice(line, u32(eq) + 1, u32(rho_strlen(line)) - u32(eq) - 1))
-        }
     }
     return out
 }
@@ -522,8 +509,7 @@ fn port_answers(port: string, path: string) bool {
         return false
     }
     let report: string = apps_report("probe-" + port)
-    let code: u32 = rho_exec("curl",
-        "-fsS -m 1 -o /dev/null http://127.0.0.1:" + port + path, report)
+    let code: u32 = rho_exec_args("curl", "-fsS\n-m\n1\n-o\n/dev/null\nhttp://127.0.0.1:" + port + path + "\n", report)
     return code == 0
 }
 
@@ -541,63 +527,7 @@ fn app_running(name: string, path: string) bool {
     if app_kind(path) == "keeper" {
         return true
     }
-    return port_answers(app_port(path), app_route(path))
-}
-
-fn app_unit_path(name: string) string {
-    let home: string = getenv("HOME")
-    return home + "/.config/systemd/user/" + name + ".service"
-}
-
-fn app_has_unit(name: string) bool {
-    return rho_path_exists(app_unit_path(name))
-}
-
-fn app_systemctl(verb: string, name: string) u32 {
-    return rho_exec("systemctl", "--user " + verb + " " + name,
-        apps_report("systemctl-" + verb + "-" + name))
-}
-
-fn app_remove_unit(name: string) void {
-    if !app_has_unit(name) {
-        return
-    }
-    ignore_u32(app_systemctl("disable", name))
-    ignore_u32(app_systemctl("stop", name))
-    ignore_u32(rho_exec("rm", "-f " + arg_quote(app_unit_path(name)),
-        apps_report("remove-unit-" + name)))
-    ignore_u32(rho_exec("systemctl", "--user daemon-reload",
-        apps_report("daemon-reload-" + name)))
-}
-
-// app_deploy_service installs an application as a user service with the
-// deploy script the keeper carries. The keeper says everything the script needs
-// — where the application is, its port and program, whether it is built from its
-// sources or is a published package, and the orchestrator it belongs to — so the
-// script reads no manifest and knows no repository layout.
-fn app_deploy_service(name: string, path: string) string {
-    let script: string = rho_asset_dir("keeper") + "/scripts/deploy-app.sh"
-    if !rho_path_exists(script) {
-        return "its deploy script is missing"
-    }
-    let log: string = apps_report("deploy-" + name)
-    // The credential is registered and the environment file written before the
-    // unit is, so the unit can name the file.
-    ignore_string(app_write_client_env(name, path, app_provision_client(name, path)))
-    var origin: string = record_origin(application_records(), name)
-    if origin == "" {
-        origin = "bundled"
-    }
-    let code: u32 = rho_exec_args("bash", script + "\n" + name + "\n" + path + "\n" +
-        app_port(path) + "\n" + app_command(name, path) + "\n" + origin + "\n" +
-        robohub_root() + "\n" + keeper_listen_port() + "\n", log)
-    if code != 0 {
-        if rho_str_index_of(rho_read_text(log), "BUILD FAILED") >= 0 {
-            return "the build failed; see " + log
-        }
-        return "its service did not start; see " + log
-    }
-    return ""
+    return app_healthy(name)
 }
 
 fn pinned(name: string) bool {
@@ -614,33 +544,7 @@ fn unpin(name: string) void {
         list_remove(rho_read_text(menu_state_file()), name)))
 }
 
-fn register_external(name: string, path: string) void {
-    let current: string = rho_read_text(applications_state_file())
-    ignore_bool(rho_write_text(applications_state_file(),
-        list_add(current, name + "\t" + path)))
-}
 
-fn unregister_external(name: string) void {
-    var out: string = ""
-    var rest: string = rho_read_text(applications_state_file()) + "\n"
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        if at < 0 {
-            break
-        }
-        let line: string = rho_str_slice(rest, 0, u32(at))
-        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        if line == "" {
-            continue
-        }
-        let tab: i32 = rho_str_index_of(line, "\t")
-        if tab >= 0 && rho_str_slice(line, 0, u32(tab)) == name {
-            continue
-        }
-        out = out + line + "\n"
-    }
-    ignore_bool(rho_write_text(applications_state_file(), out))
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Pages                                                                     */
@@ -650,89 +554,147 @@ fn page(req: Request, title: string, content: string) Response {
     return page_status(req, status_ok(), title, content)
 }
 
-fn page_status(req: Request, status: u32, title: string, content: string) Response {
-    let document: string = template_fill(template_get("layout"),
-        vars("title", title) + vars("htmx", htmx_head()) + i18n_vars(req) + vars("nav", keeper_nav(req)) + vars("body", content))
-    return html(status, document)
+// keeper_translate is a page in the request's language, from the keeper's catalog
+// of whole labels (locales/phrases.<locale>.txt), through the shared i18n module.
+// What arrives later through htmx is translated in the browser from the same
+// catalog, which a whole page carries.
+fn keeper_translate(req: Request, document: string) string {
+    return i18n_phrases(req, document, rho_asset_dir("keeper") + "/locales")
 }
 
-fn keeper_nav(req: Request) string {
-    var out: string = ""
-    out = out + "<li><a href=\"/\" data-nav=\"home\"><span class=\"ico\">◱</span>" + i18n_t(req, "nav.home") + "</a></li>"
-    out = out + "<li><a href=\"/modules\" data-nav=\"registry\"><span class=\"ico\">▤</span>" + i18n_t(req, "nav.registry") + "</a></li>"
-    // Applications is the one place an application, its modules and its
-    // plugins are found. The current application is the first sub-item; the
-    // pinned applications follow it.
-    out = out + "<li class=\"nav-group\"><a href=\"/applications\" data-nav=\"applications\">" +
-        "<span class=\"ico\">▩</span>" + i18n_t(req, "nav.applications") + "</a><ul class=\"subnav\">" +
-        "<li><a href=\"/\"><span class=\"ico\">▩</span>" + i18n_t(req, "nav.application") + "</a></li>" +
-        pinned_nav() +
-        "<li><a href=\"/app-modules\"><span class=\"ico\">▧</span>" + i18n_t(req, "nav.app_modules") + "</a></li>" +
-        "<li><a href=\"/plugins\"><span class=\"ico\">⚙</span>" + i18n_t(req, "nav.plugins") + "</a></li>" +
-        "<li><a href=\"/providers\"><span class=\"ico\">◇</span>" + i18n_t(req, "nav.providers") + "</a></li>" +
-        "</ul></li>"
-    out = out + "<li><a href=\"/nodes\" data-nav=\"nodes\"><span class=\"ico\">◉</span>" + i18n_t(req, "page.nodes") + "</a></li>"
-    out = out + "<li><a href=\"/auth/token\" data-nav=\"auth\"><span class=\"ico\">⚿</span>" + i18n_t(req, "nav.access_token") + "</a></li>"
-    out = out + "<li><a href=\"/docs\" data-nav=\"docs\"><span class=\"ico\">▦</span>" + i18n_t(req, "nav.docs") + "</a></li>"
-    out = out + "<li><a href=\"/settings\" data-nav=\"settings\"><span class=\"ico\">⚙</span>" + i18n_t(req, "nav.settings") + "</a></li>"
-    out = out + "<li><a href=\"/system\" data-nav=\"system\"><span class=\"ico\">⌘</span>" + i18n_t(req, "nav.system") + "</a></li>"
-    out = out + "<li><a href=\"/logout\" data-nav=\"logout\"><span class=\"ico\">⏻</span>" + i18n_t(req, "nav.logout") + "</a></li>"
+fn page_status(req: Request, status: u32, title: string, content: string) Response {
+    let document: string = template_fill(template_get("layout"),
+        vars("title", title) + vars("htmx", htmx_head()) + vars("ui_head", ui_head()) +
+        vars("theme", ui_theme(req)) + i18n_vars(req) + vars("topbar", keeper_topbar(req)) +
+        vars("nav", keeper_nav(req)) + vars("notifications", notification_embed()) + vars("body", content))
+    return html(status, keeper_translate(req, document))
+}
+
+// keeper_switcher_apps are the applications for the top bar's switcher, as
+// robohub.ui reads them: name|title|port|route|state, the keeper first. The state
+// is systemd's word, which is cheap; the health probe is for the pages.
+fn keeper_switcher_apps() string {
+    var out: string = "keeper|Keeper||/|keeper\n"
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let path: string = app_path(name)
+        if name == "" || app_kind(path) != "keeper-hosted" {
+            continue
+        }
+        var state: string = app_active(name)
+        if rho_str_eq(state, "active") {
+            state = "running"
+        } else if rho_str_eq(state, "none") || rho_str_eq(state, "inactive") {
+            state = "stopped"
+        }
+        out = out + name + "|" + app_title(name, path) + "|" + app_port_of(name) + "|" + app_route(path) + "|" + state + "\n"
+    }
     return out
 }
 
-fn pinned_nav() string {
+fn keeper_topbar(req: Request) string {
+    let subject: string = people_subject(req)
+    var who: string = subject
+    if people_has(subject) {
+        who = people_get(subject, "display")
+    }
+    if rho_str_eq(subject, "access-token") || rho_str_eq(subject, "operator") {
+        who = "Admin"
+    }
+    if who == "" {
+        who = "Signed in"
+    }
+    var links: string = "<h6>You</h6><a href=\"/account\">Account and password</a>"
+    if keeper_allowed(req, "admin") {
+        links = links + "<a href=\"/people\">Users &amp; access</a><a href=\"/settings\">Settings</a>"
+    }
+    links = links + ui_language(i18n_locale(req), request_path(req))
+    return ui_topbar("keeper", keeper_switcher_apps(), "",
+        ui_person(req, who, people_role(req), links, "<a href=\"/logout\">Sign out</a>", true))
+}
+
+// keeper_rail_link is one place in the rail, marked when the page is it or under it.
+fn keeper_rail_link(req: Request, href: string, icon: string, label: string, extra: string) string {
+    let path: string = request_path(req)
+    var on: string = ""
+    if rho_str_eq(path, href) || (href != "/" && rho_str_starts_with(path, href + "/")) {
+        on = " class=\"on\""
+    }
+    // A phone has room for four places in its bottom bar.
+    var phone: string = ""
+    if rho_str_eq(href, "/") || rho_str_eq(href, "/applications") || rho_str_eq(href, "/jobs") || rho_str_eq(href, "/settings") {
+        phone = " data-phone"
+    }
+    return "<a" + on + phone + " href=\"" + href + "\"><i>" + icon + "</i>" + label + extra + "</a>"
+}
+
+// keeper_nav is the rail: places only. Applications are reached through the
+// switcher; the ones added to the menu are listed under Applications too.
+fn keeper_nav(req: Request) string {
+    return keeper_rail_link(req, "/", "◉", i18n_t(req, "nav.home"), "") +
+        keeper_rail_link(req, "/applications", "▦", i18n_t(req, "nav.applications"), "") +
+        pinned_nav(req) +
+        keeper_rail_link(req, "/plugins", "⛁", i18n_t(req, "nav.plugins"), "") +
+        "<a class=\"sub more\" href=\"/providers\">" + i18n_t(req, "nav.providers") + "</a>" +
+        "<a class=\"sub more\" href=\"/app-modules\">" + i18n_t(req, "nav.app_modules") + "</a>" +
+        keeper_rail_link(req, "/jobs", "☰", "Jobs", "") +
+        "<h6>People</h6>" +
+        keeper_rail_link(req, "/people", "☺", "Users &amp; access", "") +
+        keeper_rail_link(req, "/auth/token", "✦", "Recovery token", "") +
+        keeper_rail_link(req, "/nodes", "◎", i18n_t(req, "page.nodes"), "") +
+        "<h6>Machine</h6>" +
+        keeper_rail_link(req, "/system", "⚙", i18n_t(req, "nav.system"), "") +
+        keeper_rail_link(req, "/docs", "▧", i18n_t(req, "nav.docs"), "") +
+        keeper_rail_link(req, "/settings", "⚑", i18n_t(req, "nav.settings"), "")
+}
+
+// pinned_nav is the applications added to the menu, as sub-links of
+// Applications that lead to their pages.
+fn pinned_nav(req: Request) string {
     var out: string = ""
     var rest: string = rho_read_text(menu_state_file())
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let name: string = ""
-        if at < 0 {
-            name = rest
-            rest = ""
-        } else {
-            name = rho_str_slice(rest, 0, u32(at))
-            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        }
-        if name == "" {
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if name == "" || !catalog_has(name) {
             continue
         }
         let path: string = app_path(name)
-        if path == "" {
+        if app_kind(path) == "keeper" {
             continue
         }
-        let title: string = app_title(name, path)
-        let icon: string = "<span class=\"ico\">▸</span>"
-        if app_kind(path) == "keeper" {
-            out = out + "<li><a href=\"/\">" + icon +
-                escape_html(title) + "</a></li>"
-        } else {
-            out = out + "<li><a href=\"#\" class=\"app-open\" data-app-port=\"" +
-                escape_html(app_port(path)) + "\" data-app-route=\"" +
-                escape_html(app_route(path)) + "\">" + icon +
-                escape_html(title) + "</a></li>"
+        // The keeper's page of the application, which opens it from there: a menu
+        // entry that left the keeper at once was a surprise.
+        var cls: string = "sub"
+        if rho_str_eq(request_path(req), "/apps/" + name) {
+            cls = "sub on"
         }
+        out = out + "<a class=\"" + cls + "\" href=\"/apps/" + escape_html(name) + "\">" + escape_html(app_title(name, path)) + "</a>"
     }
     return out
 }
 
-fn open_link(path: string) string {
+fn open_link(name: string, path: string) string {
     if app_kind(path) == "keeper" {
         return "<a class=\"button quiet\" href=\"/\">Open</a>"
     }
-    return "<a class=\"button app-open\" href=\"#\" data-app-port=\"" +
-        escape_html(app_port(path)) + "\" data-app-route=\"" +
-        escape_html(app_route(path)) + "\">Open</a>"
+    return "<a class=\"button app-open\" href=\"#\" target=\"_blank\" rel=\"noopener\" data-app-port=\"" +
+        escape_html(app_port_of(name)) + "\" data-app-route=\"" +
+        escape_html(app_route(path)) + "\">Open application ↗</a>"
 }
 
 fn app_actions(name: string, path: string, origin: string) string {
-    let hint: string = ""
-    if origin == "bundled" {
-        hint = "Delete this application's folder; a module you clone again is installed again."
-    } else if origin == "external" {
-        hint = "Remove it from the registry; the folder it lives in is left alone."
+    var hint: string = "Stop it, remove its service and take it out of the keeper; its folder is left alone."
+    if origin == "fetched" {
+        hint = "Stop it, remove its service and delete the folder the keeper cloned it into."
     }
     let running: string = ""
-    if app_running(name, path) {
+    let state: string = app_state(name)
+    if rho_str_eq(state, "running") || rho_str_eq(state, "starting") {
         running = "true"
     }
     let pinned_flag: string = ""
@@ -744,7 +706,7 @@ fn app_actions(name: string, path: string, origin: string) string {
         is_keeper = "true"
     }
     return template_fill(template_get("app-actions"),
-        vars("open", open_link(path)) +
+        vars("open", open_link(name, path)) +
         vars("name", name) +
         vars("origin", origin) +
         vars("hint", hint) +
@@ -757,16 +719,20 @@ fn app_status(tone: string, label: string) string {
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
 
+// application_status is the state word as the row shows it, with the job an
+// application is busy with in place of its state.
 fn application_status(name: string, path: string) string {
-    if app_kind(path) == "keeper" {
-        return app_status("running", "this keeper")
+    let job: string = job_running_for(name)
+    if job != "" {
+        return app_status("busy", job_action_words(job_meta(job, 1)) + "…")
     }
-    if !rho_path_exists(app_binary(name, path)) {
-        return app_status("not-built", "not built")
-    }
-    if app_running(name, path) {
-        return app_status("running", "running")
-    }
+    let state: string = app_state(name)
+    if rho_str_eq(state, "keeper") { return app_status("running", "this keeper") }
+    if rho_str_eq(state, "running") { return app_status("running", "running") }
+    if rho_str_eq(state, "starting") { return app_status("busy", "starting") }
+    if rho_str_eq(state, "failed") { return app_status("failed", "failed") }
+    if rho_str_eq(state, "not-built") { return app_status("not-built", "not built") }
+    if rho_str_eq(state, "not-deployed") { return app_status("stopped", "no service yet") }
     return app_status("stopped", "stopped")
 }
 
@@ -819,6 +785,34 @@ fn applications_rows() string {
     return out
 }
 
+// applications_candidates are the applications found on this machine that the
+// keeper does not run, each with a button that adds it.
+fn applications_candidates() string {
+    var out: string = ""
+    var rest: string = catalog_candidates()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let name: string = tsv_field(line, 0)
+        let path: string = tsv_field(line, 1)
+        if name == "" || app_kind(path) != "keeper-hosted" {
+            continue
+        }
+        out = out + "<tr><td>" + escape_html(app_title(name, path)) + "</td><td>" + escape_html(app_version(path)) +
+            "</td><td><code>" + escape_html(path) + "</code></td><td><a class=\"button\" href=\"/applications/preview?add=" +
+            escape_html(name) + "\">Add…</a></td></tr>"
+    }
+    if out == "" {
+        return "<tr><td colspan=\"4\">Every application found on this machine is in the keeper.</td></tr>"
+    }
+    return out
+}
+
+fn applications_candidates_endpoint(req: Request) Response {
+    return html(status_ok(), applications_candidates())
+}
+
 fn applications_rows_endpoint(req: Request) Response {
     return html(status_ok(), applications_rows())
 }
@@ -828,48 +822,25 @@ fn keeper_app_log_path(name: string) string {
         "/data/settings.conf", name)
 }
 
-fn agent_log_tail(text: string, limit: u32) string {
-    var total: u32 = 0
-    var i: u32 = 0
-    while i < u32(rho_strlen(text)) {
-        if rho_str_eq(rho_str_slice(text, i, 1), "\n") {
-            total = total + 1
-        }
-        i = i + 1
-    }
-    if total <= limit {
-        return text
-    }
-    let skip: u32 = total - limit
-    var seen: u32 = 0
-    i = 0
-    while i < u32(rho_strlen(text)) {
-        if rho_str_eq(rho_str_slice(text, i, 1), "\n") {
-            seen = seen + 1
-            if seen > skip {
-                return rho_str_slice(text, i + 1,
-                    u32(rho_strlen(text)) - i - 1)
-            }
-        }
-        i = i + 1
-    }
-    return text
-}
 
+// applications_log is what systemd recorded of an application: its output and
+// systemd's own lines about starting, failing and restarting it.
 fn applications_log(req: Request) Response {
     let name: string = trim(request_query_param(req, "name"))
-    let path: string = record_path(application_records(), name)
-    if name == "" || path == "" {
+    if !catalog_has(name) {
         return page(req, "Log", "<h1>Log</h1><p>Unknown application.</p>")
     }
-    let log_path: string = keeper_app_log_path(name)
-    let body: string = "<h1>Log · " + escape_html(app_title(name, path)) +
-        "</h1><p><code>" + escape_html(log_path) + "</code></p>"
-    if !rho_path_exists(log_path) {
-        return page(req, "Log · " + name, body +
-            "<p>No log file yet. Start the application and it writes to that path.</p>")
+    let path: string = app_path(name)
+    let text: string = app_journal(name, 300)
+    var body: string = "<h1>Log · " + escape_html(app_title(name, path)) +
+        "</h1><p>From the journal of <code>" + escape_html(app_unit_name(name)) + ".service</code>.</p>"
+    if trim(text) == "" || rho_str_index_of(text, "No entries") >= 0 {
+        body = body + "<p>Nothing recorded yet.</p>"
     }
-    let text: string = agent_log_tail(rho_read_text(log_path), 500)
+    let file: string = keeper_app_log_path(name)
+    if rho_path_exists(file) {
+        body = body + "<p>It also writes <code>" + escape_html(file) + "</code>.</p>"
+    }
     return page(req, "Log · " + name, body +
         "<pre class=\"log-tail\" style=\"white-space:pre-wrap;word-break:break-word;\">" +
         escape_html(text) + "</pre>")
@@ -881,8 +852,38 @@ fn applications_page_message(req: Request, message: string) Response {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
     let body: string = template_fill(template_get("applications"),
-        vars("notice", notice) + vars("rows", applications_rows()))
+        vars("notice", notice) + vars("rows", applications_rows()) + vars("install_form", applications_install_form()) + vars("registry", integrations_section() + registry_section()))
     return page(req, i18n_t(req, "page.applications"), body)
+}
+
+// applications_install_form is the form an application is installed from, drawn
+// by the shared forms module with its CSRF token. "Check what it needs" shows
+// the preview first; Install goes straight on.
+// keeper_install_form is an install form for a plugin, a provider or a module,
+// drawn by the shared forms module with its CSRF token.
+fn keeper_install_form(action: string, name_hint: string, source_hint: string, source_help: string) string {
+    var fields: FormField[2]
+    fields[0] = FormField{ "source", "text", "Source", source_help, source_hint, true, "", "", "", "", "" }
+    fields[1] = FormField{ "name", "text", "Name", "Empty uses the repository or folder name.", name_hint, false, "", "", "", "", "" }
+    return "<form class=\"panel-form app-install\" method=\"post\" action=\"" + action + "\">" + forms_csrf_field() +
+        forms_body(fields, 2) + "<div class=\"form-actions\"><button type=\"submit\">Install</button></div></form>"
+}
+
+fn applications_install_form() string {
+    var fields: FormField[3]
+    fields[0] = FormField{ "source", "text", "Source", "A git URL, or a folder with a module.yml.",
+        "https://github.com/RoboHubPlatform/robohub-mesh or /path/to/app", false, "", "", "", "", "" }
+    fields[1] = FormField{ "name", "text", "Name", "Empty uses the repository's or the manifest's name.",
+        "mesh", false, "", "", "", "", "" }
+    fields[2] = FormField{ "menu", "toggle", "Add to the keeper menu", "", "", false, "", "", "", "", "" }
+    var package_fields: FormField[1]
+    package_fields[0] = FormField{ "package", "text", "From the Rho registry", "A published application, by name or name@version; it is installed with rho module install and runs as it was published.", "aquarium", true, "", "", "", "", "" }
+    return "<form class=\"panel-form app-install\" method=\"post\" action=\"/applications/install\">" + forms_csrf_field() +
+        forms_body(fields, 3) + "<div class=\"form-actions\">" +
+        "<button type=\"submit\" class=\"quiet\" formaction=\"/applications/preview\" formmethod=\"get\">Check what it needs</button>" +
+        "<button type=\"submit\">Install</button></div></form>" +
+        "<form class=\"panel-form app-install\" method=\"post\" action=\"/applications/install\">" + forms_csrf_field() +
+        forms_body(package_fields, 1) + "<div class=\"form-actions\"><button type=\"submit\">Install from the registry</button></div></form>"
 }
 
 fn applications_page(req: Request) Response {
@@ -897,6 +898,9 @@ fn applications_page(req: Request) Response {
 
 
 fn applications_menu(req: Request) Response {
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     let wanted: string = form_value(body, "pinned")
@@ -948,152 +952,110 @@ fn keeper_listen_port() string {
 }
 
 fn app_start(name: string) string {
-    let path: string = app_path(name)
-    if path == "" {
+    return app_start_chain(name, "\n")
+}
+
+// app_start_chain starts an application after the ones it depends on. `chain`
+// is the applications already being started on the way here, one per line, so
+// two applications that depend on each other stop at the second rather than
+// starting each other for ever. The unit is written first when it is missing or
+// no longer describes the application; an application that was never built is
+// built and started by a job.
+fn app_start_chain(name: string, chain: string) string {
+    if !catalog_has(name) {
         return "No such application: " + name
     }
+    let path: string = app_path(name)
     if app_kind(path) == "keeper" {
         return "The keeper cannot start itself."
     }
-    let binary: string = app_binary(name, path)
-    if !rho_path_exists(binary) {
-        let built: string = app_build(name, path)
-        if built != "" {
-            return name + " is not built, and " + built
-        }
-    }
-    let port: string = app_port(path)
+    let port: string = app_port_of(name)
     if port == "" {
-        return name + " does not declare an application.port."
+        return name + " does not declare a port."
     }
-    // Deploy dependencies first.
-    let plan: string = app_depends(name, path)
-    var plan_rest: string = plan
+    // What it needs from the machine comes first: a program that is not there is
+    // a start that fails in a way the journal says badly.
+    let missing: string = deps_missing(name, true)
+    if missing != "" {
+        return name + " needs " + first_line(missing) + ", which this machine does not have; its Dependencies can install it."
+    }
+    var plan_rest: string = app_depends(name, path)
     while plan_rest != "" {
         let plan_at: i32 = rho_str_index_of(plan_rest, "\n")
         var dep_name: string = plan_rest
         if plan_at < 0 { plan_rest = "" } else { dep_name = rho_str_slice(plan_rest, 0, u32(plan_at)); plan_rest = rho_str_slice(plan_rest, u32(plan_at) + 1, u32(rho_strlen(plan_rest)) - u32(plan_at) - 1) }
-        if dep_name == "" || dep_name == name { continue }
-        let dep_path: string = app_path(dep_name)
-        if dep_path == "" { continue }
-        if !app_running(dep_name, dep_path) {
-            let dep_msg: string = app_start(dep_name)
-            if rho_str_index_of(dep_msg, "already on") < 0 && rho_str_index_of(dep_msg, "started") < 0 {
+        if dep_name == "" || dep_name == name || !catalog_has(dep_name) { continue }
+        if rho_str_index_of(chain, "\n" + dep_name + "\n") >= 0 {
+            return name + " and " + dep_name + " depend on each other; start one of them by hand."
+        }
+        if !app_running(dep_name, app_path(dep_name)) {
+            let dep_msg: string = app_start_chain(dep_name, chain + name + "\n")
+            if rho_str_index_of(dep_msg, " on port ") < 0 {
                 return "dependency " + dep_name + " did not start: " + dep_msg
             }
         }
     }
-    if port_answers(port, app_route(path)) {
-        return name + " is already running on port " + port + "."
+    if job_running_for(name) != "" {
+        return name + " is busy with a job; it starts when that ends."
     }
-    if !app_has_unit(name) {
-        // A bundled application is already on disk but may never have been
-        // deployed as a service. Starting it installs the unit first, so the
-        // keeper controls, the Log link and systemd all act on one service.
-        let deploy_error: string = app_deploy_service(name, path)
-        if deploy_error == "" {
-            info("keeper", "installed application " + name + " as a service")
-            return name + " is running as a service on port " + port + "."
+    let changed: bool = app_install_unit(name)
+    if !rho_path_exists(app_program(name)) {
+        if job_start_built(name) == "" {
+            return name + " is busy with a job."
         }
+        return name + " is being built and started on port " + port + "."
     }
-    let redeployed: string = app_redeploy_stale(name, path)
-    if redeployed != "" {
-        return redeployed
+    var verb: string = "start"
+    if changed && rho_str_eq(app_active(name), "active") {
+        verb = "restart"
     }
-    if app_has_unit(name) {
-        let code: u32 = app_systemctl("start", name)
-        if code != 0 {
-            ignore_u32(keeper_alert("ERROR", "Application " + name + " could not start",
-                "app=" + name))
-            return "Could not start " + name + ". See " + apps_report("systemctl-start-" + name) + "."
-        }
-        info("keeper", "started application " + name + " through systemd")
-        return name + " is starting on port " + port + "."
+    if app_systemd(verb + "\n" + app_unit_name(name) + "\n", verb + "-" + name) != 0 {
+        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not start", "app=" + name))
+        return "Could not start " + name + ". See its log."
     }
-    ignore_u32(rho_exec("mkdir", "-p " + path + "/build", apps_report("mkdir-app")))
-    // The paths after `cd` are relative to the application folder, not to the
-    // keeper's own working directory. The workspace is captured before the
-    // move, so a hosted application reads the same registry the keeper does.
-    // The value of an assignment is not field-split, so a path with spaces is
-    // still one workspace. The subshell execs the application, so the pid the
-    // keeper records is the application's, not a short-lived wrapper's, and the
-    // stop action can end it.
-    let pid_file: string = path + "/build/app.pid"
-    let app_workspace: string = keeper_state_dir() + "/workspaces/" + name
-    let app_manifest: string = path + "/module.yml"
-    let script: string = "workspace=$(cd " + shell_quote(robohub_root()) + " && pwd); (cd " + shell_quote(path) +
-        " && ROBOHUB_ROOT=$workspace ROBOHUB_WORKSPACE=${workspace%/*} RHO_APP_WORKSPACE=" +
-        shell_quote(app_workspace) + " ROBOHUB_APP_WORKSPACE=" +
-        shell_quote(app_workspace) + " ROBOHUB_APP_MANIFEST=" +
-        shell_quote(app_manifest) + " RHO_KEEPER_PORT=" + keeper_listen_port() +
-        app_client_env(name, path, app_provision_client(name, path)) +
-        " RHO_HTTP_ADDR=:" + port +
-        " exec nohup " + shell_quote(app_binary(name, path)) +
-        " > build/app.log 2>&1 < /dev/null) & echo $! > " + shell_quote(pid_file)
-    let code: u32 = rho_exec("sh", "-c \"" + script + "\"", apps_report("start-" + name))
-    if code != 0 {
-        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not start",
-            "app=" + name))
-        return "Could not start " + name + ". See " + apps_report("start-" + name) + "."
-    }
-    info("keeper", "started application " + name + " on port " + port)
+    info("keeper", "started application " + name)
+    keeper_event("app.started", name, name + " is starting on port " + port + ".")
     return name + " is starting on port " + port + "."
 }
 
 fn app_stop(name: string) string {
-    let path: string = app_path(name)
-    if path == "" {
+    if !catalog_has(name) {
         return "No such application: " + name
     }
-    if app_kind(path) == "keeper" {
+    if app_kind(app_path(name)) == "keeper" {
         return "The keeper cannot stop itself."
     }
-    if app_has_unit(name) {
-        let code: u32 = app_systemctl("stop", name)
-        if code != 0 {
-            return "Could not stop " + name + ". See " + apps_report("systemctl-stop-" + name) + "."
-        }
-        info("keeper", "stopped application " + name + " through systemd")
-        return name + " was stopped."
+    if !rho_path_exists(app_unit_file(name)) {
+        return name + " has no service to stop."
     }
-    let pid: string = first_line(rho_read_text(path + "/build/app.pid"))
-    if pid == "" {
-        return name + " has no pid; start it from this page so the keeper can stop it."
-    }
-    let code: u32 = rho_exec("kill", pid, apps_report("stop-" + name))
-    ignore_bool(rho_write_text(path + "/build/app.pid", ""))
-    if code != 0 {
-        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not stop",
-            "app=" + name))
-        return "Could not stop " + name + " (pid " + pid + "). See " + apps_report("stop-" + name) + "."
+    if app_systemd("stop\n" + app_unit_name(name) + "\n", "stop-" + name) != 0 {
+        return "Could not stop " + name + ". See its log."
     }
     info("keeper", "stopped application " + name)
+    keeper_event("app.stopped", name, name + " was stopped.")
     return name + " was stopped."
 }
 
-// app_build runs "rho build" on the application's folder and answers "" when it
-// built, or why it did not. A published application carries its program and has
-// nothing to build.
-fn app_build(name: string, path: string) string {
-    if rho_str_eq(record_origin(application_records(), name), "registry") {
-        return name + " is a published package; it is run as it was published."
+// app_build_job builds an application in the background; what runs is not
+// touched, and Restart runs the new build.
+fn app_build_job(name: string) string {
+    if !catalog_has(name) {
+        return "No such application: " + name
     }
-    let report: string = apps_report("build-" + name)
-    ignore_u32(rho_exec("rm", "-rf " + arg_quote(path + "/build/generated"), report))
-    if rho_exec("rho", "build " + arg_quote(path), report) != 0 {
-        return "the build failed; see " + report
+    if rho_str_eq(catalog_get(name, "origin"), "registry") {
+        return name + " is a published package; it runs as it was published."
     }
-    if !rho_path_exists(app_binary(name, path)) {
-        return "the build made no " + app_binary(name, path) + "; see " + report
+    if job_build(name) == "" {
+        return name + " is busy with a job."
     }
-    return ""
+    return name + " is being built; Restart runs the new build."
 }
 
 // app_canonical is a folder's path with no `..` and no symbolic link in it,
 // which is how a service unit names it.
 fn app_canonical(path: string) string {
     let report: string = apps_report("realpath")
-    if rho_exec("realpath", "-e " + arg_quote(path), report) != 0 {
+    if rho_exec_args("realpath", "-e\n" + path + "\n", report) != 0 {
         return path
     }
     let resolved: string = first_line(rho_read_text(report))
@@ -1101,38 +1063,6 @@ fn app_canonical(path: string) string {
         return path
     }
     return resolved
-}
-
-// app_unit_current says whether an application's service unit still describes
-// it: its folder, its manifest, its program and its port. A unit written before
-// the application moved, or before its port changed, runs something that is no
-// longer there, and systemd restarts it forever.
-fn app_unit_current(name: string, path: string) bool {
-    let unit: string = rho_read_text(app_unit_path(name))
-    let dir: string = app_canonical(path)
-    var program: string = dir + "/build/" + app_command(name, path)
-    if rho_str_eq(record_origin(application_records(), name), "registry") {
-        program = dir + "/" + app_command(name, path)
-    }
-    return line_in_list(unit, "WorkingDirectory=" + dir) &&
-        line_in_list(unit, "Environment=ROBOHUB_APP_MANIFEST=" + dir + "/module.yml") &&
-        line_in_list(unit, "Environment=RHO_HTTP_ADDR=:" + app_port(path)) &&
-        line_in_list(unit, "ExecStart=" + program)
-}
-
-// app_redeploy_stale writes an application's unit again when it no longer
-// describes the application, which builds it from where it is now and starts
-// it. It answers "" when the unit was current and nothing was done.
-fn app_redeploy_stale(name: string, path: string) string {
-    if !app_has_unit(name) || app_unit_current(name, path) {
-        return ""
-    }
-    info("keeper", "the service unit of " + name + " is out of date; deploying it again")
-    let failure: string = app_deploy_service(name, path)
-    if failure != "" {
-        return "Could not deploy " + name + " again: " + failure
-    }
-    return name + " was deployed again from " + app_canonical(path) + " and is running on port " + app_port(path) + "."
 }
 
 fn app_artifact_dir(name: string) string {
@@ -1148,7 +1078,7 @@ fn app_artifact_incoming_dir() string {
 // app_artifact_incoming finds the newest staged archive for an application.
 fn app_artifact_incoming(name: string) string {
     let report: string = apps_report("incoming-" + name)
-    ignore_u32(rho_exec("ls", "-t " + app_artifact_incoming_dir(), report))
+    ignore_u32(rho_exec_args("ls", "-t\n" + app_artifact_incoming_dir() + "\n", report))
     var rest: string = rho_read_text(report)
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
@@ -1168,22 +1098,22 @@ fn app_artifact_verify(archive: string) u32 {
     let report: string = apps_report("artifact-verify")
     let key: string = getenv("ROBOHUB_ARTIFACT_PUBKEY")
     if key != "" {
-        return rho_exec("rho", "artifact verify -pub " + arg_quote(key) + " " + arg_quote(archive), report)
+        return rho_exec_args("rho", "artifact\nverify\n-pub\n" + key + "\n" + archive + "\n", report)
     }
     // Checksum verification is always performed. Signature verification needs
     // the build key a deployment trusts; without it an unsigned artifact is
     // accepted only when the operator explicitly allows it.
     if rho_str_eq(getenv("ROBOHUB_ARTIFACT_ALLOW_UNSIGNED"), "1") {
-        return rho_exec("rho", "artifact verify -allow-unsigned " + arg_quote(archive), report)
+        return rho_exec_args("rho", "artifact\nverify\n-allow-unsigned\n" + archive + "\n", report)
     }
-    return rho_exec("rho", "artifact verify " + arg_quote(archive), report)
+    return rho_exec_args("rho", "artifact\nverify\n" + archive + "\n", report)
 }
 
 fn app_artifact_link(binary: string, target: string) void {
     let next: string = binary + ".next"
-    ignore_u32(rho_exec("ln", "-sfn " + arg_quote(target) + " " + arg_quote(next),
+    ignore_u32(rho_exec_args("ln", "-sfn\n" + target + "\n" + next + "\n",
         apps_report("artifact-link")))
-    ignore_u32(rho_exec("mv", "-Tf " + arg_quote(next) + " " + arg_quote(binary),
+    ignore_u32(rho_exec_args("mv", "-Tf\n" + next + "\n" + binary + "\n",
         apps_report("artifact-swap")))
 }
 
@@ -1198,7 +1128,7 @@ fn app_update_artifact(name: string, path: string) string {
         return "artifact verification failed; see " + apps_report("artifact-verify")
     }
     let inspectReport: string = apps_report("artifact-inspect")
-    ignore_u32(rho_exec("rho", "artifact inspect " + arg_quote(archive), inspectReport))
+    ignore_u32(rho_exec_args("rho", "artifact\ninspect\n" + archive + "\n", inspectReport))
     let inspected: string = rho_read_text(inspectReport)
     let version: string = app_artifact_value(inspected, "version")
     let entrypoint: string = app_artifact_value(inspected, "entrypoint")
@@ -1211,27 +1141,27 @@ fn app_update_artifact(name: string, path: string) string {
         return "artifact is for service " + service + ", not " + name
     }
     let destination: string = app_artifact_dir(name) + "/" + version
-    ignore_u32(rho_exec("mkdir", "-p " + arg_quote(destination), apps_report("artifact-mkdir")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + destination + "\n", apps_report("artifact-mkdir")))
     let extractReport: string = apps_report("artifact-extract")
-    let extractArgs: string = "artifact verify -extract " + arg_quote(destination) + " "
+    var extractArgs: string = "artifact\nverify\n-extract\n" + destination + "\n"
     let pub: string = getenv("ROBOHUB_ARTIFACT_PUBKEY")
     if pub != "" {
-        extractArgs = extractArgs + "-pub " + arg_quote(pub) + " "
+        extractArgs = extractArgs + "-pub\n" + pub + "\n"
     } else if rho_str_eq(getenv("ROBOHUB_ARTIFACT_ALLOW_UNSIGNED"), "1") {
-        extractArgs = extractArgs + "-allow-unsigned "
+        extractArgs = extractArgs + "-allow-unsigned\n"
     }
-    if rho_exec("rho", extractArgs + arg_quote(archive), extractReport) != 0 {
+    if rho_exec_args("rho", extractArgs + archive + "\n", extractReport) != 0 {
         return "artifact could not be extracted; see " + extractReport
     }
     let binary: string = app_binary(name, path)
     var previous: string = ""
     if rho_path_exists(binary) {
         let linkReport: string = apps_report("artifact-readlink")
-        ignore_u32(rho_exec("readlink", "-f " + arg_quote(binary), linkReport))
+        ignore_u32(rho_exec_args("readlink", "-f\n" + binary + "\n", linkReport))
         previous = first_line(rho_read_text(linkReport))
         if previous == "" {
             previous = binary + ".pre-artifact"
-            ignore_u32(rho_exec("mv", "-f " + arg_quote(binary) + " " + arg_quote(previous),
+            ignore_u32(rho_exec_args("mv", "-f\n" + binary + "\n" + previous + "\n",
                 apps_report("artifact-previous")))
         }
     }
@@ -1243,7 +1173,7 @@ fn app_update_artifact(name: string, path: string) string {
     if previous != "" {
         ignore_bool(rho_write_text(app_artifact_dir(name) + "/previous", previous + "\n"))
     }
-    ignore_string(app_restart(name, path))
+    ignore_string(app_restart(name))
     let timeout: u32 = u32(rho_int_from_str(app_artifact_value(inspected, "health_timeout")))
     if timeout == 0 { timeout = 20 }
     let port: string = app_port(path)
@@ -1251,253 +1181,271 @@ fn app_update_artifact(name: string, path: string) string {
         var waited: u32 = 0
         var healthy: bool = false
         while waited < timeout {
-            if rho_exec("curl", "-fsS --max-time 2 http://127.0.0.1:" + port + health,
+            if rho_exec_args("curl", "-fsS\n--max-time\n2\nhttp://127.0.0.1:" + port + health + "\n",
                 apps_report("artifact-health")) == 0 {
                 healthy = true
                 break
             }
-            ignore_u32(rho_exec("sleep", "1", apps_report("artifact-wait")))
+            ignore_u32(rho_exec_args("sleep", "1\n", apps_report("artifact-wait")))
             waited = waited + 1
         }
         if !healthy {
             if previous != "" {
                 app_artifact_link(binary, previous)
-                ignore_string(app_restart(name, path))
+                ignore_string(app_restart(name))
                 return "health check failed; " + name + " was rolled back"
             }
             return "health check failed; no previous artifact to restore"
         }
     }
-    ignore_u32(rho_exec("mv", "-f " + arg_quote(archive) + " " +
-        arg_quote(app_artifact_dir(name) + "/" + version + ".tar.gz"),
+    ignore_u32(rho_exec_args("mv", "-f\n" + archive + "\n" + app_artifact_dir(name) + "/" + version + ".tar.gz" + "\n",
         apps_report("artifact-archive")))
     info("keeper", "deployed artifact " + name + " " + version)
     return "ok"
 }
 
 // app_redeploy installs a staged artifact when there is one; otherwise it
-// builds the application from its folder, writes its service unit for where it
-// is now, and restarts it. A build that fails leaves the running program alone.
-fn app_redeploy(name: string, path: string) string {
+// writes the unit for where the application is now and starts a job that builds
+// it, restarts it and waits for it to answer. A build that fails leaves the
+// running program alone.
+fn app_redeploy(name: string) string {
+    if !catalog_has(name) {
+        return "No such application: " + name
+    }
+    let path: string = app_path(name)
+    if app_kind(path) == "keeper" {
+        return "The keeper cannot redeploy itself; run scripts/deploy-keeper.sh."
+    }
     let artifact: string = app_update_artifact(name, path)
     if rho_str_eq(artifact, "ok") {
+        catalog_refresh_version(name)
         return name + " was updated from a staged artifact."
     }
     if artifact != "" {
         return "artifact update failed: " + artifact
     }
-    if app_kind(path) == "keeper" {
-        return "The keeper cannot redeploy itself; run scripts/deploy-keeper.sh."
+    if app_port_of(name) == "" {
+        return app_build_job(name)
     }
-    if app_port(path) == "" {
-        // Nothing is served, so there is no service to write: a build is all a
-        // redeploy can be.
-        let failure: string = app_build(name, path)
-        if failure != "" {
-            return "build failed: " + failure
-        }
-        return name + " was built."
+    ignore_bool(app_install_unit(name))
+    if job_redeploy(name) == "" {
+        return name + " is busy with a job."
     }
-    let failure: string = app_deploy_service(name, path)
-    if failure != "" {
-        return failure
-    }
-    info("keeper", "redeployed application " + name)
-    return name + " was built and deployed; it is running on port " + app_port(path) + "."
+    return name + " is being built and redeployed."
 }
 
-// app_restart stops and starts the application without rebuilding.
-fn app_restart(name: string, path: string) string {
-    let redeployed: string = app_redeploy_stale(name, path)
-    if redeployed != "" {
-        return redeployed
+// app_restart restarts an application without building it, writing its unit
+// first when it no longer describes it.
+fn app_restart(name: string) string {
+    if !catalog_has(name) {
+        return "No such application: " + name
     }
-    if app_has_unit(name) {
-        let code: u32 = app_systemctl("restart", name)
-        if code != 0 {
-            return "Could not restart " + name + ". See " + apps_report("systemctl-restart-" + name) + "."
+    if app_kind(app_path(name)) == "keeper" {
+        return "The keeper cannot restart itself."
+    }
+    ignore_bool(app_install_unit(name))
+    if !rho_path_exists(app_program(name)) {
+        if job_start_built(name) == "" {
+            return name + " is busy with a job."
         }
-        info("keeper", "restarted application " + name + " through systemd")
-        return name + " was restarted."
+        return name + " is being built and started."
     }
-    ignore_string(app_stop(name))
-    return app_start(name)
+    if app_systemd("restart\n" + app_unit_name(name) + "\n", "restart-" + name) != 0 {
+        return "Could not restart " + name + ". See its log."
+    }
+    info("keeper", "restarted application " + name)
+    keeper_event("app.restarted", name, name + " was restarted.")
+    return name + " was restarted."
 }
 
 fn application_row_response(name: string) Response {
-    let path: string = app_path(name)
-    if path == "" {
+    if !catalog_has(name) {
         return html(status_ok(), "")
     }
-    let origin: string = record_origin(application_records(), name)
-    return html(status_ok(), application_row_html(name, path, origin))
+    return html(status_ok(), application_row_html(name, app_path(name), catalog_get(name, "origin")))
+}
+
+// application_action answers a row's button: the row again for htmx, the page
+// with the message otherwise.
+fn application_action(req: Request, name: string, message: string) Response {
+    if htmx_is_request(req) {
+        return application_row_response(name)
+    }
+    return applications_page_message(req, message)
 }
 
 fn applications_start(req: Request) Response {
-    let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    let message: string = app_start(name)
-    if htmx_is_request(req) {
-        return application_row_response(name)
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
     }
-    return applications_page_message(req, message)
+    let name: string = trim(form_value(request_body(req), "name"))
+    return application_action(req, name, app_start(name))
 }
 
 fn applications_stop(req: Request) Response {
-    let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    let message: string = app_stop(name)
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
+    }
+    let name: string = trim(form_value(request_body(req), "name"))
+    return application_action(req, name, app_stop(name))
+}
+
+fn applications_redeploy(req: Request) Response {
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
+    }
+    let name: string = trim(form_value(request_body(req), "name"))
+    return application_action(req, name, app_redeploy(name))
+}
+
+fn applications_build(req: Request) Response {
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
+    }
+    let name: string = trim(form_value(request_body(req), "name"))
+    return application_action(req, name, app_build_job(name))
+}
+
+fn applications_restart(req: Request) Response {
+    if !keeper_allowed(req, "operate") {
+        return keeper_refused(req)
+    }
+    let name: string = trim(form_value(request_body(req), "name"))
+    return application_action(req, name, app_restart(name))
+}
+
+// applications_uninstall takes an application out of the keeper: its service
+// goes, and its catalogue record. Its files go only when the keeper fetched them
+// itself; a checkout or a package is left where it is, and Install offers it
+// again.
+fn applications_uninstall(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let name: string = trim(form_value(request_body(req), "name"))
+    if !catalog_has(name) {
+        return applications_page_message(req, "No such application: " + name)
+    }
+    let path: string = app_path(name)
+    if app_kind(path) == "keeper" {
+        return applications_page_message(req, "The keeper cannot uninstall itself.")
+    }
+    let origin: string = catalog_get(name, "origin")
+    app_remove_unit_of(name)
+    app_remove_client(name)
+    unpin(name)
+    catalog_remove(name)
+    var message: string = name + " was taken out of the keeper; its folder " + path + " was left alone."
+    if rho_str_eq(origin, "fetched") && rho_str_starts_with(path, apps_home() + "/") {
+        ignore_u32(rho_exec_args("rm", "-rf\n--\n" + path + "\n", apps_report("uninstall-" + name)))
+        message = name + " was uninstalled and its folder removed."
+    }
+    info("keeper", "uninstalled application " + name)
+    keeper_event("app.uninstalled", name, message)
+    if mqtt_name() != "" {
+        ignore_string(mqtt_write_files())
+    }
     if htmx_is_request(req) {
-        return application_row_response(name)
+        return html(status_ok(), "")
     }
     return applications_page_message(req, message)
 }
 
-fn applications_redeploy(req: Request) Response {
-    let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    if name == "" { return applications_page_message(req, "No name given") }
-    let path: string = app_path(name)
-    if path == "" { return applications_page_message(req, "Unknown application") }
-    let result: string = app_redeploy(name, path)
-    if htmx_is_request(req) {
-        return application_row_response(name)
-    }
-    return applications_page_message(req, escape_html(result))
-}
-
-// applications_build builds an application without touching what runs; Restart
-// then runs the new build.
-fn applications_build(req: Request) Response {
-    let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    if name == "" { return applications_page_message(req, "No name given") }
-    let path: string = app_path(name)
-    if path == "" { return applications_page_message(req, "Unknown application") }
-    let failure: string = app_build(name, path)
-    var result: string = name + " was built; Restart runs the new build."
-    if failure != "" {
-        result = "build failed: " + failure
-    }
-    if htmx_is_request(req) {
-        return application_row_response(name)
-    }
-    return applications_page_message(req, escape_html(result))
-}
-
-fn applications_restart(req: Request) Response {
-    let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    if name == "" { return applications_page_message(req, "No name given") }
-    let path: string = app_path(name)
-    if path == "" { return applications_page_message(req, "Unknown application") }
-    let result: string = app_restart(name, path)
-    if htmx_is_request(req) {
-        return application_row_response(name)
-    }
-    return applications_page_message(req, escape_html(result))
-}
-
-fn applications_uninstall(req: Request) Response {
-    let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
-    let path: string = app_path(name)
-    if path == "" {
-        return applications_page_message(req, "No such application: " + name)
-    }
-    if app_kind(path) == "keeper" {
-        return applications_page_message(req, "The keeper cannot uninstall itself.")
-    }
-    let origin: string = record_origin(application_records(), name)
-    ignore_string(app_stop(name))
-    app_remove_unit(name)
-    unpin(name)
-    if origin == "external" {
-        unregister_external(name)
-        info("keeper", "unregistered application " + name)
-        if htmx_is_request(req) {
-            return html(status_ok(), "")
-        }
-        return applications_page_message(req, name + " was removed from the registry.")
-    }
-    let dir: string = applications_dir()
-    if rho_str_index_of(path, dir + "/") != 0 {
-        unregister_external(name)
-        if htmx_is_request(req) {
-            return html(status_ok(), "")
-        }
-        return applications_page_message(req, name + " was removed from the registry.")
-    }
-    ignore_u32(rho_exec("rm", "-rf " + arg_quote(path), apps_report("uninstall-" + name)))
-    info("keeper", "uninstalled application " + name)
-    if htmx_is_request(req) {
-        return html(status_ok(), "")
-    }
-    return applications_page_message(req, name + " was uninstalled.")
-}
-
+// applications_install adds an application: one found on the machine (`add`), a
+// git URL, which is cloned under apps_home(), or a folder, which stays where it
+// is. It is recorded in the catalogue, given a port and a unit, and started.
 fn applications_install(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
-    let name: string = trim(form_value(body, "name"))
+    var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
+    let add: string = trim(form_value(body, "add"))
+    let from_registry: string = trim(form_value(body, "package"))
     let add_to_menu: string = form_value(body, "menu")
-    if source == "" {
-        return applications_page_message(req, "Name a location to install from.")
+    // The form carries the forms module's token: an install builds and runs what
+    // it names, so it is accepted only from a page this keeper drew.
+    if !forms_csrf_ok(body) {
+        return applications_page_message(req, "That form was not drawn by this keeper; nothing was installed.")
     }
-    let is_git: bool = source_is_git(source)
     var path: string = ""
-    if is_git {
-        if name == "" {
-            name = source_name(source)
+    var origin: string = ""
+    if from_registry != "" {
+        // name or name@version, from the Rho registry
+        let at: i32 = rho_str_index_of(from_registry, "@")
+        var wanted: string = ""
+        name = from_registry
+        if at > 0 {
+            name = rho_str_slice(from_registry, 0, u32(at))
+            wanted = rho_str_slice(from_registry, u32(at) + 1, u32(rho_strlen(from_registry)) - u32(at) - 1)
         }
-        if !valid_name(name) {
-            return applications_page_message(req, "The application name can use letters, digits, '-', '_' and '.' only.")
+        path = package_fetch(name, wanted)
+        if rho_str_starts_with(path, "!") {
+            return applications_page_message(req, rho_str_slice(path, 1, u32(rho_strlen(path)) - 1))
         }
-        path = applications_dir() + "/" + name
-        if rho_path_exists(path) || app_path(name) != "" {
-            return applications_page_message(req, name + " is already installed at " + path + ".")
+        origin = "registry"
+    } else if add != "" {
+        let candidates: string = catalog_candidates()
+        path = record_path(candidates, add)
+        if path == "" {
+            return applications_page_message(req, add + " is not an application found on this machine.")
         }
-        ignore_u32(rho_exec("mkdir", "-p " + applications_dir(), apps_report("mkdir-apps")))
-        let log: string = apps_report("install-" + name)
-        let code: u32 = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(path), log)
-        if code != 0 {
-            ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be installed",
-                "app=" + name))
-            return applications_page_message(req, "Could not clone " + source + ". See " + log + ".")
-        }
+        name = add
+        origin = record_origin(candidates, add)
     } else {
-        path = resolve_path(source)
-        if !rho_path_exists(manifest_of(path)) {
-            return applications_page_message(req, "No module.yml at " + path + ".")
+        if source == "" {
+            return applications_page_message(req, "Name a location to install from.")
         }
-        if name == "" {
-            name = yaml.value(manifest_of(path), "module.name")
+        if !arg_ok(source) {
+            return applications_page_message(req, "A location to install from is one line and does not start with '-'.")
         }
-        if !valid_name(name) {
-            return applications_page_message(req, "The application name can use letters, digits, '-', '_' and '.' only.")
-        }
-        let existing: string = app_path(name)
-        if existing != "" && existing != path {
-            return applications_page_message(req, name + " is already registered at " + existing + ".")
-        }
-        register_external(name, path)
-    }
-    let kind: string = app_kind(path)
-    if kind != "keeper-hosted" {
-        if is_git {
-            ignore_u32(rho_exec("rm", "-rf " + arg_quote(path), apps_report("remove-not-hosted")))
+        if source_is_git(source) {
+            if name == "" {
+                name = source_name(source)
+            }
+            if !valid_name(name) {
+                return applications_page_message(req, "The application name can use letters, digits, '-', '_' and '.' only.")
+            }
+            path = apps_home() + "/" + name
+            if rho_path_exists(path) || catalog_has(name) {
+                return applications_page_message(req, name + " is already installed.")
+            }
+            ignore_u32(rho_exec_args("mkdir", "-p\n" + apps_home() + "\n", apps_report("mkdir-apps")))
+            let log: string = apps_report("install-" + name)
+            if rho_exec_args("git", "clone\n--\n" + source + "\n" + path + "\n", log) != 0 {
+                ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be installed", "app=" + name))
+                return applications_page_message(req, "Could not clone " + source + ". See " + log + ".")
+            }
+            origin = "fetched"
         } else {
-            unregister_external(name)
+            path = app_canonical(resolve_path(source))
+            if !rho_path_exists(manifest_of(path)) {
+                return applications_page_message(req, "No module.yml at " + path + ".")
+            }
+            if name == "" {
+                name = yaml.value(manifest_of(path), "module.name")
+            }
+            origin = "external"
+        }
+    }
+    if !valid_name(name) {
+        return applications_page_message(req, "The application name can use letters, digits, '-', '_' and '.' only.")
+    }
+    if catalog_has(name) {
+        return applications_page_message(req, name + " is already installed, at " + app_path(name) + ".")
+    }
+    if app_kind(path) != "keeper-hosted" {
+        if rho_str_eq(origin, "fetched") {
+            ignore_u32(rho_exec_args("rm", "-rf\n--\n" + path + "\n", apps_report("remove-not-hosted")))
         }
         return applications_page_message(req, path + " is not a keeper-hosted application.")
     }
-    if add_to_menu == "1" {
+    let port: string = catalog_put(name, origin, path)
+    if add_to_menu == "1" || add_to_menu == "on" {
         pin(name)
     }
-    let deploy_error: string = app_deploy_service(name, path)
-    if deploy_error != "" {
-        return applications_page_message(req, name + " was installed, but " + deploy_error + ".")
-    }
-    info("keeper", "installed application " + name + " from " + source)
-    return applications_page_message(req, name + " was installed and its service started.")
+    info("keeper", "installed application " + name + " (" + origin + ") at " + path + " on port " + port)
+    keeper_event("app.installed", name, name + " was installed from " + origin + ".")
+    return applications_page_message(req, name + " was installed. " + app_start(name))
 }

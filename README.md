@@ -3,22 +3,26 @@
 A local dashboard for the RoboHub ecosystem — its registry, what is installed,
 and what the machine needs to run it.
 
+This repository sits beside the orchestrator, `robohub`, whose registry and
+shared modules it reads; `ROBOHUB_ROOT` says where that is when it is somewhere
+else.
+
 ## Building
 
 ```sh
-rho build applications/keeper
+rho build .
 ```
 
 ## Running
 
 ```sh
-./applications/keeper/build/keeper
+ROBOHUB_ROOT=../robohub ./build/keeper
 ```
 
-The keeper listens on port 8080 by default. Set the port with:
+`RHO_HTTP_ADDR` sets the address (`127.0.0.1:19090`). As a user service:
 
 ```sh
-./applications/keeper/build/keeper 9090
+./scripts/deploy-keeper.sh
 ```
 
 ## What it does
@@ -70,7 +74,7 @@ the Mesh module's documentation.
 ## Tests
 
 ```sh
-rho test applications/keeper
+rho test .
 ```
 
 The Rho unit suite checks the registry's name and list helpers, and the smoke

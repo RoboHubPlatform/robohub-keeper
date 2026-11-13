@@ -1,8 +1,6 @@
-<tr>
-  <td><strong>{{ title }}</strong><br><small><code>{{ name }}</code></small></td>
-  <td>{{ category }}</td>
-  <td>{{ version }}</td>
-  <td>{{ description }}</td>
-  <td>{{{ status }}}</td>
-  <td><div class="app-actions">{{{ actions }}}</div></td>
-</tr>
+<div class="rh-card">
+  <span class="r"><span class="nm">{{ title }}</span>{{{ status }}}</span>
+  <span class="sb"><code>{{ name }}</code> · {{ category }} · {{ version }}</span>
+  <span class="sb" title="{{ description }}">{{ description }}</span>
+  <div class="app-actions">{{{ actions }}}</div>
+</div>

@@ -1,3 +1,15 @@
+//
+// @file apps_text.rho
+// @brief The parts of the applications registry that are only strings.
+//
+// @module keeper.apps_text
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-02
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.apps_text
 
 // The parts of the applications registry that are only strings: reading a form
@@ -320,12 +332,6 @@ fn decode_hex(ch: string) u32 {
     return 0
 }
 
-fn app_artifact_ends_with(value: string, suffix: string) bool {
-    let length: u32 = u32(rho_strlen(suffix))
-    if length == 0 { return true }
-    if u32(rho_strlen(value)) < length { return false }
-    return rho_str_eq(rho_str_slice(value, u32(rho_strlen(value)) - length, length), suffix)
-}
 
 fn app_artifact_value(text: string, key: string) string {
     let prefix: string = key + "="

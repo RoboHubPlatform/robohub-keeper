@@ -152,3 +152,129 @@ application row has **Build** and **Redeploy** (build, write the service unit fo
 where the application is now, restart); a unit left behind by a moved
 application is written again on Start and Restart. A failed build is reported
 as one.
+
+## [0.7.0] - 2026-11-13
+
+The keeper has a repository of its own, `robohub-keeper`, beside the
+orchestrator it reads through `ROBOHUB_ROOT`; `scripts/deploy-keeper.sh` deploys it
+from here, and listens on `127.0.0.1` unless `KEEPER_LISTEN` says otherwise.
+
+Safe by default:
+
+- A form posted from another origin, which includes every application on another
+  port of this host, is refused before a handler sees it.
+- Registry install and uninstall are POSTs, and uninstall removes only a checkout
+  the keeper cloned itself. Uninstalling an application the keeper did not fetch
+  stops it, removes its service and stops listing it, leaving its folder alone.
+- Every program the keeper runs takes its arguments one per line; values with a
+  line break or a leading `-` are refused. A node's enrollment can no longer name
+  a file outside the node folder.
+- The state folder is owner-only; random values come from the runtime and no
+  secret is written to a report file.
+- The token is compared without stopping at the first difference, five wrong
+  tokens close the sign-in for five minutes, and changing the token asks for the
+  current one and signs out every other session.
+- Application rows loaded later get their Open links; a dependency that starts is
+  no longer reported as one that did not, and two applications that depend on each
+  other no longer start each other for ever.
+
+## [0.8.0] - 2026-11-13
+
+A catalogue and a supervisor. What the keeper runs is `installed.yml`, adopted
+from what was on the machine the first time and changed only by Install and
+Uninstall, so pages no longer scan folders and run `rho module list` on every
+request. Each application gets a port of its own (the next free one from 8500
+when its manifest's is taken) and a systemd unit the keeper writes from its
+manifest — `After=`/`Wants=` for its dependencies, its environment in an
+owner-only `app.env` — instead of the deploy script. State comes from systemd and
+`/healthz`: running, starting, failed, stopped, not built. Logs come from the
+journal.
+
+Builds, redeploys and starts that need a build run as background jobs with a log,
+shown in a strip at the bottom of every page. Applications cloned from git go to
+`~/.rho/apps`, not into the orchestrator's checkout.
+
+`/api/v1/apps` and `/api/v1/jobs` answer programs in JSON, with the same actions
+the pages have, and the environment a started application is told is written down
+— including `RHO_APP_SECRET`, the seed its forms' CSRF tokens use.
+
+The keeper takes the RoboHub look from the new shared `robohub.ui` module: the
+top bar every application will draw (brand, app switcher, the person's menu with
+theme and language), a rail of places, and a strip of jobs at the bottom. Home is
+the machine at a glance — every application as a card with one pill, and an
+inspector beside them with its folder, port and unit, its journal, its
+environment, and start, stop, restart, build and redeploy. A light theme comes
+from the same tokens, chosen per person and shared by every application on the
+host. The old explanatory home page, the unused stylesheets and the deploy script
+are gone.
+
+What an application needs, at three levels: the machine (its manifest's
+`system_deps`, read with `rho doctor --path`), Rho (the modules it names) and
+RoboHub (the applications it depends on and the services it calls). A required
+program that is missing stops it from starting, its card says so, and its
+Dependencies tab installs it as a job through `rho keeper install`. Installing
+shows all of this first ("Check what it needs"), and the Dependencies page is the
+whole machine. The keeper, Mesh and the aquarium declare their `system_deps`.
+
+Each application has a page of its own in the keeper (`/apps/<name>`), which the
+menu leads to; opening the application itself is a button there, so a menu entry
+no longer leaves the keeper without warning. A job that ends says so on every open
+page through the shared notifications module, and the install form is drawn by
+the shared forms module with its CSRF token.
+
+People. Signing in is by name and password, kept by rho-auth (`rho auth user`,
+PBKDF2), with a role — admin, operator, viewer — and grants per application. The
+first run makes the first admin, proved by the access token on the machine; after
+that the token is only for recovery from the command line. A ticket for an
+application carries the person's own name and only their grants for it, so a
+person with no grant for Mesh is not signed in to Mesh; it also carries the keeper
+session, and `/auth/session/<id>` tells an application whether that still stands,
+so signing out — or being signed out from Users & access — ends every
+application's session within a minute. The keeper's own actions follow the role:
+installing, people, plugins and settings are an admin's; starting, stopping and
+redeploying an operator's. Users & access lists the people with their grants and
+sessions; Account changes one's own password. The sign-in page has the RoboHub
+look and names the application it signs in to.
+
+Users & access is a matrix — a row per person, a column per application — with
+the person in an inspector: their role, and for each application no access, read,
+everything or particular grants. An admin signed in with the access token is shown
+in it, and makes the account they are from there; their session becomes it.
+
+Every installed application is a client of the keeper, not only those that call
+other services: it may read the keeper's API (`keeper:read`), its client goes when
+it is uninstalled, and its Environment tab gives it a new secret. The signing key
+can be rotated from the recovery page; applications fetch the new public key when
+a ticket names it.
+
+Applications listen on this machine only (`127.0.0.1:<port>`) unless their
+manifest says `deploy.listen: lan` — which is also the address a Windows browser
+is forwarded to under WSL, where an application on every interface could not be
+reached. The orchestrator is asked rather than read: `/api/v1/registry`,
+`/api/v1/me`, `/api/v1/services` and `/api/v1/config/{app}` answer an application
+with its own service token.
+
+The first run asks for the access token and nothing else: the token in
+`~/.rho/auth/master.token` is the admin's, and it signs the admin in afterwards too.
+Accounts with passwords are for other people. Wrong attempts are counted per name
+and every sign-in is recorded, shown in the person's inspector. The forms module
+draws the plugin, provider and module install forms with their tokens; those pages
+and the registry are cards, and the registry is part of the Applications page. An
+application published to the Rho registry is installed by name (`name@version`),
+and updated when a newer version is out. Pages are in Romanian through the shared
+i18n module's catalog of whole labels.
+
+`/api/v1/events` streams what happens — installs, starts, stops, updates, jobs,
+sign-ins and sign-outs, key rotation — so an application listens rather than asks.
+
+Integrations: a plugin of `kind: integration` brings a service the keeper runs for
+the applications — its program, configuration, port and system dependencies — and
+the first is robohub-mqtt, a Mosquitto broker on port 1884. Every application that
+binds the bus is a broker user with the topics its manifest names, devices are
+broker users an admin adds, and the broker's inspector shows its clients and its
+live topics. The keeper reaches the broker through the RoboHub platform's mqtt port.
+The broker's users are hashed in a private file of their own and moved into place
+only when that worked (two writes take turns, empty lines are left out), so the
+broker keeps the users it had if anything goes wrong; and the broker does not log
+the connection the keeper's health check opens.
+

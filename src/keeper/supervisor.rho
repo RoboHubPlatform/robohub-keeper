@@ -1,0 +1,337 @@
+//
+// @file supervisor.rho
+// @brief Running what the catalogue holds, through systemd.
+//
+// @module keeper.supervisor
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.supervisor
+
+// Running what the catalogue holds, through systemd.
+//
+// Each application is a user unit the keeper writes from its manifest and its
+// catalogue record — no script in between — and reads back through systemd: is it
+// active, has it failed, what did it print. The environment an application is
+// started with is written once, to `app.env` in its workspace, and the unit names
+// that file, so the unit and what the keeper believes about the application
+// cannot disagree.
+//
+// The environment contract — what a started application is told:
+//
+//   RHO_APP_NAME            its name in the catalogue
+//   RHO_APP_WORKSPACE       the folder its state lives in (ROBOHUB_APP_WORKSPACE too, for now)
+//   RHO_HTTP_ADDR           where to listen: 127.0.0.1:<port>, or :<port> for deploy.listen: lan
+//   RHO_APP_SECRET          a random value of its own, the seed its forms' CSRF tokens use
+//   RHO_AUTH_URL            the issuer that signs people in
+//   ROBOHUB_KEEPER_URL      the keeper, for its API
+//   RHO_CLIENT_ID, RHO_CLIENT_SECRET_FILE, RHO_SERVICE_<NAME>_URL
+//                           when it calls other services (deploy.calls)
+//
+// ROBOHUB_ROOT, ROBOHUB_WORKSPACE, ROBOHUB_APP_MANIFEST and RHO_KEEPER_PORT are
+// still written for applications that read the orchestrator's files; they go when
+// every application asks the keeper's API instead.
+
+import std.web.http
+
+fn app_workspace(name: string) string {
+    return keeper_state_dir() + "/workspaces/" + name
+}
+
+fn app_env_path(name: string) string {
+    return app_workspace(name) + "/app.env"
+}
+
+fn app_unit_name(name: string) string {
+    let unit: string = catalog_get(name, "unit")
+    if unit == "" {
+        return name
+    }
+    return unit
+}
+
+fn app_unit_file(name: string) string {
+    return getenv("HOME") + "/.config/systemd/user/" + app_unit_name(name) + ".service"
+}
+
+// app_port_of is the port an application serves on: the one the catalogue gave
+// it, or its manifest's for one not in the catalogue.
+fn app_port_of(name: string) string {
+    if app_kind(catalog_get(name, "location")) == "keeper" {
+        return keeper_listen_port()
+    }
+    let port: string = catalog_get(name, "port")
+    if port != "" {
+        return port
+    }
+    let location: string = catalog_get(name, "location")
+    if location == "" {
+        return ""
+    }
+    return app_port(location)
+}
+
+// app_listen_host is where an application listens: this machine only, like the
+// keeper — which is also the address the machine's own browser is forwarded to
+// under WSL — unless its manifest says `deploy.listen: lan`, for an application
+// devices on the network have to reach.
+fn app_listen_host(location: string) string {
+    if rho_str_eq(yaml.value(manifest_of(location), "deploy.listen"), "lan") {
+        return ""
+    }
+    return "127.0.0.1"
+}
+
+fn keeper_url() string {
+    return "http://127.0.0.1:" + keeper_listen_port()
+}
+
+// app_secret is the application's own random value, made once and kept in its
+// workspace.
+fn app_secret(name: string) string {
+    let file: string = app_workspace(name) + "/auth/app.secret"
+    let existing: string = trim(rho_read_text(file))
+    if rho_strlen(existing) >= 32 {
+        return existing
+    }
+    let value: string = rho_random_hex(32)
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + app_workspace(name) + "/auth\n", apps_report("mkdir-workspace")))
+    ignore_bool(rho_write_secret(file, value + "\n"))
+    return value
+}
+
+// app_environment is the contract above for one application, as KEY=value lines.
+fn app_environment(name: string) string {
+    let location: string = catalog_get(name, "location")
+    let workspace: string = app_workspace(name)
+    var out: string = "RHO_APP_NAME=" + name + "\n" +
+        "RHO_APP_WORKSPACE=" + workspace + "\n" +
+        "ROBOHUB_APP_WORKSPACE=" + workspace + "\n" +
+        "RHO_HTTP_ADDR=" + app_listen_host(location) + ":" + app_port_of(name) + "\n" +
+        "RHO_APP_SECRET=" + app_secret(name) + "\n" +
+        "RHO_AUTH_URL=" + keeper_url() + "\n" +
+        "ROBOHUB_KEEPER_URL=" + keeper_url() + "\n" +
+        "RHO_KEEPER_PORT=" + keeper_listen_port() + "\n" +
+        "ROBOHUB_APP_MANIFEST=" + location + "/module.yml\n" +
+        "HOME=" + getenv("HOME") + "\n" +
+        "PATH=" + getenv("PATH") + "\n" + bus_environment(name)
+    let root: string = robohub_root()
+    if rho_path_exists(root + "/registry/modules") {
+        let canonical: string = app_canonical(root)
+        out = out + "ROBOHUB_ROOT=" + canonical + "\nROBOHUB_WORKSPACE=" + dir_of(canonical) + "\n"
+    }
+    // Every application is a client of the keeper — it may read the keeper's API
+    // — and of the services it calls; it is told who it is and where they are.
+    let secret_file: string = app_provision_client(name, location)
+    if secret_file != "" {
+        out = out + "RHO_CLIENT_ID=" + name + "\nRHO_CLIENT_SECRET_FILE=" + secret_file + "\n"
+        var rest: string = app_calls(location)
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "\n")
+            var call: string = rest
+            if at < 0 { rest = "" } else { call = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+            let colon: i32 = rho_str_index_of(call, ":")
+            var service: string = call
+            if colon >= 0 { service = rho_str_slice(call, 0, u32(colon)) }
+            if service != "" && auth_safe_name(service) && app_port_of(service) != "" {
+                out = out + "RHO_SERVICE_" + app_env_name(service) + "_URL=http://127.0.0.1:" + app_port_of(service) + "\n"
+            }
+        }
+    }
+    return out
+}
+
+fn app_write_environment(name: string) void {
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + app_workspace(name) + "\n", apps_report("mkdir-workspace")))
+    ignore_u32(rho_exec_args("chmod", "700\n" + app_workspace(name) + "\n", apps_report("chmod-workspace")))
+    ignore_bool(rho_write_secret(app_env_path(name), app_environment(name)))
+}
+
+// app_program is what the unit runs: a published package's own program, or what
+// a build of a folder made.
+fn app_program(name: string) string {
+    if integration_is(name) {
+        return integration_program(name)
+    }
+    let location: string = app_canonical(catalog_get(name, "location"))
+    let command: string = app_command(name, location)
+    if rho_str_eq(catalog_get(name, "origin"), "registry") {
+        return location + "/" + command
+    }
+    return location + "/build/" + command
+}
+
+// app_unit_description is the unit's description: the application's title,
+// named as RoboHub's once.
+fn app_unit_description(name: string, location: string) string {
+    let title: string = app_title(name, location)
+    if rho_str_starts_with(title, "RoboHub") {
+        return title
+    }
+    return "RoboHub " + title
+}
+
+// app_unit_text is the unit the keeper writes for an application. It starts after
+// the applications it depends on (deploy.depends), and wants them; systemd
+// restarts it when it fails.
+fn app_unit_text(name: string) string {
+    if integration_is(name) {
+        // An integration runs its service's own program with the configuration
+        // the keeper wrote, from its own folder; it is told nothing else.
+        let path: string = catalog_get(name, "location")
+        return "# Written by the RoboHub keeper for the integration " + name + " (" + path + ").\n" +
+            "# The keeper writes it again when the integration changes; edits here are lost.\n" +
+            "[Unit]\nDescription=" + app_unit_description(name, path) + "\nAfter=network-online.target\n\n" +
+            "[Service]\nType=simple\nWorkingDirectory=" + integration_dir(name) + "\n" +
+            "ExecStart=" + integration_command_line(name) + "\n" +
+            "ExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
+    }
+    let location: string = app_canonical(catalog_get(name, "location"))
+    var after: string = "network-online.target"
+    var wants: string = ""
+    var rest: string = app_depends(name, location)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var dep: string = rest
+        if at < 0 { rest = "" } else { dep = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if dep != "" && !rho_str_eq(dep, name) && catalog_has(dep) {
+            after = after + " " + app_unit_name(dep) + ".service"
+            wants = wants + " " + app_unit_name(dep) + ".service"
+        }
+    }
+    var unit: string = "# Written by the RoboHub keeper from " + location + "/module.yml.\n" +
+        "# The keeper writes it again when the application changes; edits here are lost.\n" +
+        "[Unit]\nDescription=" + app_unit_description(name, location) + "\nAfter=" + after + "\n"
+    if wants != "" {
+        unit = unit + "Wants=" + trim(wants) + "\n"
+    }
+    return unit + "\n[Service]\nType=simple\nWorkingDirectory=" + location + "\n" +
+        "EnvironmentFile=" + app_env_path(name) + "\n" +
+        "ExecStart=" + app_program(name) + "\n" +
+        "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
+}
+
+fn app_systemd(args: string, report: string) u32 {
+    return rho_exec_args("systemctl", "--user\n" + args, apps_report(report))
+}
+
+
+// app_install_unit writes the environment and the unit, and tells systemd. It
+// answers whether the unit changed, which is when a running application has to be
+// restarted to run as it now says.
+fn app_install_unit(name: string) bool {
+    if integration_is(name) {
+        if rho_str_eq(name, mqtt_name()) {
+            ignore_string(mqtt_write_files())
+        }
+    } else {
+        app_write_environment(name)
+        // An application that binds the bus is a broker user: the broker learns of
+        // it before it starts.
+        if mqtt_name() != "" && app_binds_bus(catalog_get(name, "location")) {
+            ignore_string(mqtt_write_files())
+        }
+    }
+    let text: string = app_unit_text(name)
+    if rho_str_eq(rho_read_text(app_unit_file(name)), text) {
+        return false
+    }
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + getenv("HOME") + "/.config/systemd/user\n", apps_report("mkdir-units")))
+    ignore_bool(rho_write_text(app_unit_file(name), text))
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+    ignore_u32(app_systemd("enable\n" + app_unit_name(name) + "\n", "enable-" + name))
+    ignore_u32(rho_exec_args("loginctl", "enable-linger\n" + getenv("USER") + "\n", apps_report("linger")))
+    info("keeper", "wrote the service unit of " + name)
+    return true
+}
+
+fn app_remove_unit_of(name: string) void {
+    if !rho_path_exists(app_unit_file(name)) {
+        return
+    }
+    ignore_u32(app_systemd("disable\n--now\n" + app_unit_name(name) + "\n", "disable-" + name))
+    ignore_u32(rho_exec_args("rm", "-f\n" + app_unit_file(name) + "\n", apps_report("remove-unit-" + name)))
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+}
+
+// app_active is what systemd says of the unit: active, activating, deactivating,
+// inactive, failed — or "none" when there is no unit.
+fn app_active(name: string) string {
+    if !rho_path_exists(app_unit_file(name)) {
+        return "none"
+    }
+    let report: string = "is-active-" + name
+    ignore_u32(app_systemd("is-active\n" + app_unit_name(name) + "\n", report))
+    let state: string = first_line(rho_read_text(apps_report(report)))
+    if state == "" {
+        return "inactive"
+    }
+    return state
+}
+
+// app_healthy is whether the application answers its health probe. Every Rho
+// server answers /healthz; one that does not is asked for its first page.
+fn app_healthy(name: string) bool {
+    let port: string = app_port_of(name)
+    if port == "" {
+        return false
+    }
+    if integration_is(name) {
+        return tcp_answers(port)
+    }
+    if port_answers(port, "/healthz") {
+        return true
+    }
+    return port_answers(port, app_route(catalog_get(name, "location")))
+}
+
+// app_state is one word for what an application is doing:
+//   running      active and answering
+//   starting     active or activating, not answering yet
+//   failed       systemd gave up on it, or it keeps restarting
+//   stopped      a unit that is not running
+//   not-built    a folder whose program has not been built
+//   not-deployed no unit yet
+//   keeper       the keeper itself
+fn app_state(name: string) string {
+    let location: string = catalog_get(name, "location")
+    if app_kind(location) == "keeper" {
+        return "keeper"
+    }
+    let active: string = app_active(name)
+    if rho_str_eq(active, "active") {
+        if app_healthy(name) {
+            return "running"
+        }
+        return "starting"
+    }
+    if rho_str_eq(active, "activating") || rho_str_eq(active, "reloading") {
+        return "starting"
+    }
+    if rho_str_eq(active, "failed") {
+        return "failed"
+    }
+    if !rho_path_exists(app_program(name)) {
+        return "not-built"
+    }
+    if rho_str_eq(active, "none") {
+        // Started some other way, by hand or by an older keeper.
+        if app_healthy(name) {
+            return "running"
+        }
+        return "not-deployed"
+    }
+    return "stopped"
+}
+
+// app_journal is the application's last lines from the journal.
+fn app_journal(name: string, lines: u32) string {
+    let report: string = apps_report("journal-" + name)
+    ignore_u32(rho_exec_args("journalctl", "--user\n-u\n" + app_unit_name(name) + ".service\n-n\n" +
+        rho_int_to_str(lines) + "\n--no-pager\n-o\nshort-iso\n", report))
+    return rho_read_text(report)
+}

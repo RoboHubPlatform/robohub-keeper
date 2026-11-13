@@ -5,40 +5,20 @@
 its <code>module.yml</code> binds. Switching one off, or changing its settings on
 the Settings page, changes this installation only. A channel is added by binding
 its provider and rebuilding the keeper.</p>
-<table>
-<thead>
-<tr><th>Channel</th><th>Threshold</th><th>State</th><th></th></tr>
-</thead>
-<tbody>
+<div class="rh-grid">
 {{{ channels }}}
-</tbody>
-</table>
+</div>
 
 <h2>Installed plugins</h2>
 <p>Plugins are Rho modules under <code>plugins/</code>. This page manages the
 keeper's own set. Enabling or disabling here changes only the keeper, leaving
 the manifest it was installed with intact.</p>
-<table>
-<thead>
-<tr><th>Plugin</th><th>Kind</th><th>Transport</th><th>Description</th><th>State</th><th></th></tr>
-</thead>
-<tbody>
+<div class="rh-grid">
 {{{ rows }}}
-</tbody>
-</table>
+</div>
 
 <h2 class="app-install">Install a plugin</h2>
 <p>Clone a plugin from a git URL, or install one that already exists on this
 machine. A plugin is a module whose manifest says <code>type: plugin</code>.</p>
-<form class="grid app-install" method="post" action="/plugins/install">
-  <label>Name
-    <input name="name" placeholder="robohub-auth">
-    <small>Empty uses the repository or folder name.</small>
-  </label>
-  <label>Source
-    <input name="source" placeholder="https://github.com/RoboHubPlatform/robohub-plugin or /path/to/plugin">
-    <small>A git URL, or a folder with a plugin module.yml.</small>
-  </label>
-  <button type="submit">Install</button>
-</form>
+{{{ install_form }}}
 <p><small>Installed into <code>{{ root }}</code>.</small></p>

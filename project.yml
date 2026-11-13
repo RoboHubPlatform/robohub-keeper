@@ -7,6 +7,11 @@ targets:
     api:
       public_paths: "/, /modules, /applications, /plugins, /providers, /app-modules, /auth/login, /docs"
     middleware:
+      # A form posted from another origin is refused before anything else:
+      # every application this keeper hosts is another port of the same host,
+      # which a SameSite cookie does not tell apart. Programs that post to the
+      # keeper send no browser headers and are not affected.
+      - name: same_origin
       - name: auth
         options:
           issuer: keeper
@@ -14,7 +19,7 @@ targets:
           cookie: keeper_session
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
-          skip_paths: /auth/login,/auth/service-token,/auth/public-key,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
+          skip_paths: /api/v1/switcher,/auth/session,/ui,/auth/login,/auth/service-token,/auth/public-key,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
     default_locale: en
     locales:
       - locale: en

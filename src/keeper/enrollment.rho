@@ -1,3 +1,15 @@
+//
+// @file enrollment.rho
+// @brief One-time enrollment.
+//
+// @module keeper.enrollment
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-09
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.enrollment
 
 // One-time enrollment: a token is placed on the keeper host before a node
@@ -14,7 +26,7 @@ fn enrollment_nodes_dir() string {
 
 fn enrollment_now() u32 {
     let report: string = apps_report("enrollment-now")
-    ignore_u32(rho_exec("date", "+%s", report))
+    ignore_u32(rho_exec_args("date", "+%s\n", report))
     return u32(rho_int_from_str(first_line(rho_read_text(report))))
 }
 
@@ -53,6 +65,13 @@ fn enrollment_mark_used(token: string) void {
     ignore_bool(rho_write_secret(enrollment_tokens_file(), out))
 }
 
+// record_field_ok is whether a value can be one field of a node record: no field
+// separator and no line break.
+fn record_field_ok(value: string) bool {
+    return rho_str_index_of(value, "|") < 0 && rho_str_index_of(value, "\n") < 0 &&
+        rho_str_index_of(value, "\r") < 0 && rho_strlen(value) <= 4096
+}
+
 fn keeper_enroll(req: Request) Response {
     let body: string = request_body(req)
     let token: string = trim(form_value(body, "token"))
@@ -63,6 +82,12 @@ fn keeper_enroll(req: Request) Response {
     let node: string = trim(form_value(body, "node"))
     if token == "" || device == "" || public == "" {
         return Response{ 400, "{\"ok\":false,\"error\":\"missing enrollment fields\"}", "application/json", "" }
+    }
+    // The device names the file its record is kept in, and every field is one
+    // field of a `|`-separated line: neither may say more than it is.
+    if !valid_name(device) || !record_field_ok(public) || !record_field_ok(project) ||
+        !record_field_ok(area) || !record_field_ok(node) {
+        return Response{ 400, "{\"ok\":false,\"error\":\"malformed enrollment fields\"}", "application/json", "" }
     }
     let line: string = enrollment_find_token(token)
     if line == "" {
@@ -79,17 +104,16 @@ fn keeper_enroll(req: Request) Response {
     if expected_device != "" && !rho_str_eq(expected_device, device) {
         return Response{ 403, "{\"ok\":false,\"error\":\"enrollment token is for another device\"}", "application/json", "" }
     }
-    let credentialReport: string = apps_report("enrollment-credential")
-    if rho_exec("openssl", "rand -hex 32", credentialReport) != 0 {
+    let credential: string = rho_random_hex(32)
+    if rho_strlen(credential) != 64 {
         return Response{ 500, "{\"ok\":false,\"error\":\"credential generation failed\"}", "application/json", "" }
     }
-    let credential: string = first_line(rho_read_text(credentialReport))
     let path: string = enrollment_nodes_dir() + "/" + device + ".txt"
     let record: string = device + "|" + public + "|" + project + "|" + area + "|" + node +
         "|" + credential + "|" + rho_int_to_str(enrollment_now()) + "\n"
-    ignore_u32(rho_exec("mkdir", "-p " + enrollment_nodes_dir(), apps_report("enrollment-mkdir")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + enrollment_nodes_dir() + "\n", apps_report("enrollment-mkdir")))
     ignore_bool(rho_write_secret(path, record))
-    ignore_u32(rho_exec("chmod", "600 " + path, apps_report("enrollment-chmod")))
+    ignore_u32(rho_exec_args("chmod", "600\n" + path + "\n", apps_report("enrollment-chmod")))
     enrollment_mark_used(token)
     info("keeper", "enrolled node " + device)
     return Response{ 200, "{\"ok\":true,\"credential\":" + json_string(credential) + "}",

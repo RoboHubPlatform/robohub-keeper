@@ -1,0 +1,261 @@
+//
+// @file catalog.rho
+// @brief What is installed on this machine, and where.
+//
+// @module keeper.catalog
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.catalog
+
+// What is installed on this machine, and where.
+//
+// The catalogue is one file, `installed.yml` in the keeper's state folder, with a
+// record per application: its version, where it came from, where it is, the
+// service unit that runs it, the port it was given and the client it calls other
+// services as. Pages and the API read it instead of scanning folders, so what the
+// keeper runs is what it was told to run and nothing appears on its own.
+//
+//   apps:
+//     mesh:
+//       origin: "workspace"        registry | workspace | bundled | external | fetched
+//       location: "/…/robohub-mesh"
+//       version: "0.15.0"
+//       port: "8478"
+//       unit: "mesh"
+//
+// On the first start there is no file, and the keeper adopts what it would have
+// found before: the selected packages in the module registry, the applications the
+// orchestrator's registry names, the folders in its applications/ and the folders
+// registered by path. After that, a new application is added through Install.
+
+import std.web.http
+
+extern fn rho_yaml_write_flat(path: string, flat: string, header: string) bool
+
+const CATALOG_HEADER: string = "The applications this keeper runs. Written by the keeper; edit with care."
+
+/// The first port the keeper hands out when an application's own is taken.
+const CATALOG_FIRST_PORT: u32 = 8500
+
+fn catalog_file() string {
+    return keeper_state_dir() + "/installed.yml"
+}
+
+// apps_home is where the keeper puts what it fetches itself: an application
+// cloned from git lives here, not inside the orchestrator's checkout, so the
+// keeper and its applications can be anywhere.
+fn apps_home() string {
+    let override: string = getenv("ROBOHUB_APPS_HOME")
+    if override != "" {
+        return override
+    }
+    return getenv("HOME") + "/.rho/apps"
+}
+
+fn catalog_names() string {
+    catalog_ensure()
+    return yaml.keys(catalog_file(), "apps")
+}
+
+fn catalog_has(name: string) bool {
+    return valid_name(name) && line_in_list(catalog_names(), name)
+}
+
+fn catalog_get(name: string, key: string) string {
+    if !valid_name(name) {
+        return ""
+    }
+    catalog_ensure()
+    return yaml.value(catalog_file(), "apps." + name + "." + key)
+}
+
+/// The fields a record carries, in the order they are written.
+const CATALOG_FIELDS: string = "origin\nlocation\nversion\nport\nunit\n"
+
+// catalog_flat is the whole catalogue as `apps.<name>.<field>=<value>` lines,
+// with one record replaced (`change` set to its new lines) or dropped (`change`
+// empty), and every other record as it was.
+fn catalog_flat(replace: string, change: string) string {
+    var out: string = ""
+    var names: string = ""
+    if rho_path_exists(catalog_file()) {
+        names = yaml.keys(catalog_file(), "apps")
+    }
+    var rest: string = names
+    var replaced: bool = false
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if name == "" {
+            continue
+        }
+        if rho_str_eq(name, replace) {
+            out = out + change
+            replaced = true
+            continue
+        }
+        var fields: string = CATALOG_FIELDS
+        while fields != "" {
+            let fat: i32 = rho_str_index_of(fields, "\n")
+            let f: string = rho_str_slice(fields, 0, u32(fat))
+            fields = rho_str_slice(fields, u32(fat) + 1, u32(rho_strlen(fields)) - u32(fat) - 1)
+            out = out + "apps." + name + "." + f + "=" + yaml.value(catalog_file(), "apps." + name + "." + f) + "\n"
+        }
+    }
+    if !replaced {
+        out = out + change
+    }
+    return out
+}
+
+fn catalog_record_lines(name: string, origin: string, location: string, version: string, port: string, unit: string) string {
+    let p: string = "apps." + name + "."
+    return p + "origin=" + origin + "\n" + p + "location=" + location + "\n" + p + "version=" + version + "\n" +
+        p + "port=" + port + "\n" + p + "unit=" + unit + "\n"
+}
+
+fn catalog_write(flat: string) bool {
+    if flat == "" {
+        // An empty catalogue is still a catalogue: the keeper adopted what there
+        // was, and everything was removed since.
+        return rho_write_text(catalog_file(), "# " + CATALOG_HEADER + "\napps: {}\n")
+    }
+    return rho_yaml_write_flat(catalog_file(), flat, CATALOG_HEADER)
+}
+
+// catalog_put records an application. The port is the one asked for when no other
+// application has it, the next free one otherwise.
+fn catalog_put(name: string, origin: string, where: string) string {
+    if !valid_name(name) || !rho_path_exists(manifest_of(where)) {
+        return ""
+    }
+    let location: string = app_canonical(where)
+    var port: string = catalog_get(name, "port")
+    if app_kind(location) == "keeper" {
+        // The keeper is reached where it was started, whatever its manifest says.
+        port = keeper_listen_port()
+    } else if port == "" {
+        port = catalog_allocate_port(name, app_port(location))
+    }
+    var unit: string = catalog_get(name, "unit")
+    if unit == "" {
+        unit = name
+    }
+    ignore_bool(catalog_write(catalog_flat(name,
+        catalog_record_lines(name, origin, location, app_version(location), port, unit))))
+    return port
+}
+
+// catalog_refresh_version records the version a location now declares, which is
+// what a rebuilt checkout or an updated package changes.
+fn catalog_refresh_version(name: string) void {
+    let location: string = catalog_get(name, "location")
+    if location == "" {
+        return
+    }
+    ignore_bool(catalog_write(catalog_flat(name,
+        catalog_record_lines(name, catalog_get(name, "origin"), location, app_version(location),
+            catalog_get(name, "port"), catalog_get(name, "unit")))))
+}
+
+fn catalog_remove(name: string) void {
+    if !catalog_has(name) {
+        return
+    }
+    ignore_bool(catalog_write(catalog_flat(name, "")))
+}
+
+// catalog_port_taken is whether another application in the catalogue has a port.
+fn catalog_port_taken(name: string, port: string) bool {
+    var rest: string = ""
+    if rho_path_exists(catalog_file()) {
+        rest = yaml.keys(catalog_file(), "apps")
+    }
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var other: string = rest
+        if at < 0 { rest = "" } else { other = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if other != "" && !rho_str_eq(other, name) &&
+            rho_str_eq(yaml.value(catalog_file(), "apps." + other + ".port"), port) {
+            return true
+        }
+    }
+    return rho_str_eq(port, keeper_listen_port())
+}
+
+// catalog_allocate_port is the port an application gets: its manifest's when that
+// is free, the first free one from CATALOG_FIRST_PORT otherwise. An application
+// that serves nothing gets none.
+fn catalog_allocate_port(name: string, wanted: string) string {
+    if wanted == "" {
+        return ""
+    }
+    if !catalog_port_taken(name, wanted) {
+        return wanted
+    }
+    var port: u32 = CATALOG_FIRST_PORT
+    while port < CATALOG_FIRST_PORT + 400 {
+        let candidate: string = rho_int_to_str(port)
+        if !catalog_port_taken(name, candidate) && !port_answers(candidate, "/") {
+            info("keeper", name + " asks for port " + wanted + ", which is taken; it is given " + candidate)
+            return candidate
+        }
+        port = port + 1
+    }
+    return wanted
+}
+
+// catalog_ensure adopts what is on the machine the first time the keeper starts
+// with a catalogue, so an upgrade changes nothing a person sees.
+fn catalog_ensure() void {
+    if rho_path_exists(catalog_file()) {
+        return
+    }
+    ensure_keeper_state()
+    ignore_bool(catalog_write(""))
+    var rest: string = discovered_records()
+    var dismissed: string = rho_read_text(keeper_state_dir() + "/dismissed.txt")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let name: string = tsv_field(line, 0)
+        if name == "" || line_in_list(dismissed, name) {
+            continue
+        }
+        ignore_string(catalog_put(name, tsv_field(line, 2), tsv_field(line, 1)))
+    }
+    info("keeper", "adopted the applications on this machine into " + catalog_file())
+}
+
+// catalog_records are the catalogue as the `name<TAB>location<TAB>origin` lines
+// the pages read.
+fn catalog_records() string {
+    var out: string = ""
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if name == "" {
+            continue
+        }
+        let location: string = catalog_get(name, "location")
+        if location != "" {
+            out = out + record(name, location, catalog_get(name, "origin"))
+        }
+    }
+    return out
+}
+
+// catalog_candidates are applications found on the machine that are not in the
+// catalogue: what Install offers to add without fetching anything.
+fn catalog_candidates() string {
+    return records_without(discovered_records(), catalog_records())
+}

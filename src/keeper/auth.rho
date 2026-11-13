@@ -1,3 +1,15 @@
+//
+// @file auth.rho
+// @brief The keeper's authorization-server half of SSO.
+//
+// @module keeper.auth
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-04
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.auth
 
 // The keeper's authorization-server half of SSO.
@@ -63,7 +75,7 @@ fn auth_report(name: string) string {
 // the login writes `now + ttl` rather than the duration.
 fn auth_now() u32 {
     let report: string = auth_report("auth-now")
-    if rho_exec("date", "+%s", report) == 0 {
+    if rho_exec_args("date", "+%s\n", report) == 0 {
         return rho_int_from_str(auth_clean(rho_read_text(report)))
     }
     return 0
@@ -71,18 +83,149 @@ fn auth_now() u32 {
 
 // auth_random is 128 random bits as hex, or "" when they cannot be had. A
 // session id or a token that falls back to something predictable is one anybody
-// can present, so a caller that gets "" refuses rather than continuing.
+// can present, so a caller that gets "" refuses rather than continuing. The bits
+// come from the runtime's own source and never pass through a file.
 fn auth_random() string {
-    let report: string = auth_report("auth-random")
-    ignore_u32(rho_exec("mkdir", "-p " + keeper_state_dir(), report))
-    if rho_exec("openssl", "rand -hex 16", report) != 0 {
-        return ""
-    }
-    let value: string = auth_clean(rho_read_text(report))
+    let value: string = rho_random_hex(16)
     if rho_strlen(value) != 32 {
         return ""
     }
     return value
+}
+
+// auth_same compares a presented secret with the stored one without stopping
+// at the first difference, so how long the answer takes says nothing about how
+// much of a guess was right.
+fn auth_same(a: string, b: string) bool {
+    let la: u32 = u32(rho_strlen(a))
+    let lb: u32 = u32(rho_strlen(b))
+    if la == 0 || lb == 0 {
+        return false
+    }
+    var differ: u32 = 0
+    if la != lb {
+        differ = 1
+    }
+    var i: u32 = 0
+    while i < lb {
+        var ca: string = ""
+        if i < la {
+            ca = rho_str_slice(a, i, 1)
+        }
+        if !rho_str_eq(ca, rho_str_slice(b, i, 1)) {
+            differ = differ + 1
+        }
+        i = i + 1
+    }
+    return differ == 0
+}
+
+/// How many wrong tokens in a row lock the sign-in, and for how long.
+const AUTH_LOCK_TRIES: u32 = 5
+const AUTH_LOCK_SECONDS: u32 = 300
+
+// The wrong attempts are counted per name, so someone guessing at one person's
+// password does not lock everyone else out. A name that is not a plain name is
+// counted as one, "-".
+fn auth_failures_file(name: string) string {
+    var who: string = name
+    if !valid_name(who) {
+        who = "-"
+    }
+    return keeper_state_dir() + "/auth-failures/" + who
+}
+
+// auth_locked is how many seconds the sign-in stays closed for a name after too
+// many wrong attempts, 0 when it is open. The file holds `count|time of the last`.
+fn auth_locked(name: string) u32 {
+    let line: string = auth_clean(rho_read_text(auth_failures_file(name)))
+    let bar: i32 = rho_str_index_of(line, "|")
+    if bar < 0 {
+        return 0
+    }
+    let count: u32 = rho_int_from_str(rho_str_slice(line, 0, u32(bar)))
+    let last: u32 = rho_int_from_str(rho_str_slice(line, u32(bar) + 1, u32(rho_strlen(line)) - u32(bar) - 1))
+    if count < AUTH_LOCK_TRIES {
+        return 0
+    }
+    let now: u32 = auth_now()
+    if now >= last + AUTH_LOCK_SECONDS {
+        return 0
+    }
+    return last + AUTH_LOCK_SECONDS - now
+}
+
+fn auth_failed(name: string) void {
+    let file: string = auth_failures_file(name)
+    let line: string = auth_clean(rho_read_text(file))
+    let bar: i32 = rho_str_index_of(line, "|")
+    var count: u32 = 0
+    if bar >= 0 {
+        count = rho_int_from_str(rho_str_slice(line, 0, u32(bar)))
+        let last: u32 = rho_int_from_str(rho_str_slice(line, u32(bar) + 1, u32(rho_strlen(line)) - u32(bar) - 1))
+        // A failure long after the last one starts the count again.
+        if auth_now() >= last + AUTH_LOCK_SECONDS {
+            count = 0
+        }
+    }
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + keeper_state_dir() + "/auth-failures\n", auth_report("auth-mkdir")))
+    ignore_bool(rho_write_secret(file, rho_int_to_str(count + 1) + "|" + rho_int_to_str(auth_now()) + "\n"))
+    auth_history(name, "wrong")
+}
+
+fn auth_succeeded(name: string) void {
+    ignore_u32(rho_exec_args("rm", "-f\n" + auth_failures_file(name) + "\n", auth_report("auth-rm")))
+    auth_history(name, "signed in")
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Sign-in history                                                           */
+/* -------------------------------------------------------------------------- */
+
+fn auth_history_file() string {
+    return keeper_state_dir() + "/signins.log"
+}
+
+// auth_history records one sign-in attempt: when, whose name, what came of it.
+// The browser's address is not known here, so it is not claimed.
+fn auth_history(name: string, outcome: string) void {
+    var who: string = name
+    if !valid_name(who) {
+        who = "-"
+    }
+    ignore_bool(rho_append_text(auth_history_file(), rho_int_to_str(auth_now()) + "|" + who + "|" + outcome + "\n"))
+}
+
+// auth_history_rows are a person's last sign-ins, newest first, as inspector rows.
+fn auth_history_rows(name: string, limit: u32) string {
+    var lines: string = ""
+    var rest: string = rho_read_text(auth_history_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(field(line, 1), name) {
+            lines = line + "\n" + lines
+        }
+    }
+    var out: string = ""
+    var count: u32 = 0
+    while lines != "" && count < limit {
+        let at: i32 = rho_str_index_of(lines, "\n")
+        let line: string = rho_str_slice(lines, 0, u32(at))
+        lines = rho_str_slice(lines, u32(at) + 1, u32(rho_strlen(lines)) - u32(at) - 1)
+        var tone: string = "ok"
+        if !rho_str_eq(field(line, 2), "signed in") {
+            tone = "bad"
+        }
+        out = out + "<div class=\"rh-row " + tone + "\"><b>" + escape_html(field(line, 2)) + "</b><span class=\"local-time\" data-ms=\"" +
+            escape_html(field(line, 0)) + "000\">" + escape_html(field(line, 0)) + "</span></div>"
+        count = count + 1
+    }
+    if out == "" {
+        return "<p class=\"rh-empty\">No sign-ins yet.</p>"
+    }
+    return out
 }
 
 // auth_safe_name is whether a value can name an audience, a client or a scope:
@@ -180,7 +323,7 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
     }
     // The keeper's own manifest names the port a build serves on by default; the
     // port it was started on is the one its pages are reached at.
-    var expected: string = app_port(path)
+    var expected: string = app_port_of(audience)
     if app_kind(path) == "keeper" {
         expected = keeper_listen_port()
     }
@@ -203,10 +346,12 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
 }
 
 fn auth_ensure_master() void {
+    ensure_keeper_state()
     if rho_path_exists(auth_master_file()) {
         return
     }
-    ignore_u32(rho_exec("mkdir", "-p " + auth_dir(), auth_report("auth-mkdir")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + auth_dir() + "\n", auth_report("auth-mkdir")))
+    ignore_u32(rho_exec_args("chmod", "700\n" + auth_dir() + "\n", auth_report("auth-chmod")))
     let token: string = auth_random()
     if token == "" {
         error("keeper", "no random source: the master token was not created")
@@ -238,19 +383,19 @@ fn auth_session_id(req: Request) string {
     return rho_str_slice(rest, 0, u32(end))
 }
 
-fn auth_session_valid(req: Request) bool {
-    let cookie: string = header_str(req, "Cookie")
-    let needle: string = AUTH_COOKIE + "="
-    let at: i32 = rho_str_index_of(cookie, needle)
-    if at < 0 {
-        return false
+// auth_session_line is the keeper session a request carries, as its line in the
+// session file (`sid|expiry|subject|scopes`), or "" when it has none that stands.
+fn auth_session_line(req: Request) string {
+    let sid: string = auth_session_id(req)
+    if sid == "" {
+        return ""
     }
-    let rest: string = rho_str_slice(cookie, u32(at) + u32(rho_strlen(needle)),
-        u32(rho_strlen(cookie)) - u32(at) - u32(rho_strlen(needle)))
-    let end: i32 = rho_str_index_of(rest, ";")
-    var sid: string = rest
-    if end >= 0 {
-        sid = rho_str_slice(rest, 0, u32(end))
+    return auth_session_line_of(sid)
+}
+
+fn auth_session_line_of(sid: string) string {
+    if sid == "" || !auth_plain(sid) {
+        return ""
     }
     var sessions: string = rho_read_text(auth_sessions_file())
     while sessions != "" {
@@ -260,50 +405,129 @@ fn auth_session_valid(req: Request) bool {
             sessions = ""
         } else {
             line = rho_str_slice(sessions, 0, u32(line_end))
-            sessions = rho_str_slice(sessions, u32(line_end) + 1,
-                u32(rho_strlen(sessions)) - u32(line_end) - 1)
+            sessions = rho_str_slice(sessions, u32(line_end) + 1, u32(rho_strlen(sessions)) - u32(line_end) - 1)
         }
-        let first: i32 = rho_str_index_of(line, "|")
-        if first >= 0 && rho_str_eq(rho_str_slice(line, 0, u32(first)), sid) {
-            let tail: string = rho_str_slice(line, u32(first) + 1,
-                u32(rho_strlen(line)) - u32(first) - 1)
-            let second: i32 = rho_str_index_of(tail, "|")
-            let expiry: string = tail
-            if second >= 0 {
-                expiry = rho_str_slice(tail, 0, u32(second))
+        if rho_str_eq(field(line, 0), sid) {
+            if auth_now() < rho_int_from_str(field(line, 1)) {
+                return line
             }
-            return auth_now() < rho_int_from_str(expiry)
+            return ""
         }
     }
-    return false
+    return ""
 }
 
-fn auth_login_form(return_to: string, audience: string, next: string, notice: string) Response {
-    let body: string = template_fill(template_get("auth-login"),
-        vars("notice", notice) +
-        vars("return_to", return_to) +
-        vars("audience", audience) +
-        vars("next", next))
-    return html(status_ok(), body)
+fn auth_session_valid(req: Request) bool {
+    return auth_session_line(req) != ""
 }
+
+// auth_session_check answers an application asking whether a keeper session it
+// was handed in a ticket still stands: 200 when it does, 404 when it ended. It
+// says nothing else, and the id is 128 random bits nobody can guess.
+fn auth_session_check(req: Request) Response {
+    let sid: string = param(req, "sid")
+    if auth_session_line_of(sid) == "" {
+        return text(status_not_found(), "ended\n")
+    }
+    return text(status_ok(), "stands\n")
+}
+
+// auth_open_session opens a keeper session for a person and answers the
+// redirect that sets its cookie: home, or back to the login endpoint for the
+// application that sent them, which mints its ticket.
+fn auth_open_session(name: string, role: string, return_to: string, audience: string, next: string) Response {
+    let sid: string = auth_random()
+    if sid == "" {
+        return html(status_internal(), "<p>No random source: a session could not be opened.</p>")
+    }
+    // The sessions that ended are dropped while the file is written anyway.
+    let now: u32 = auth_now()
+    var kept: string = ""
+    var rest: string = rho_read_text(auth_sessions_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line != "" && now < rho_int_from_str(field(line, 1)) {
+            kept = kept + line + "\n"
+        }
+    }
+    let sessions: string = kept + sid + "|" +
+        rho_int_to_str(now + AUTH_TTL_SECONDS) + "|" + name + "|" + people_keeper_scopes(role) + "\n"
+    ignore_bool(rho_write_secret(auth_sessions_file(), sessions))
+    info("keeper", name + " signed in")
+    keeper_event("person.signed-in", "", name + " signed in.")
+    var target: string = "/"
+    if return_to != "" {
+        target = "/auth/login?return_to=" + return_to + "&audience=" + audience + "&next=" + next
+    }
+    return Response{ status_found(), "", "text/plain; charset=utf-8",
+        "Location: " + target + "\nSet-Cookie: " + AUTH_COOKIE + "=" + sid +
+        "; Path=/; HttpOnly; SameSite=Lax" }
+}
+
+// auth_page is the sign-in page: setup when nobody has an account yet, the
+// sign-in form otherwise, on the RoboHub look.
+fn auth_page(req: Request, status: u32, return_to: string, audience: string, next: string, notice: string) Response {
+    var to: string = "the keeper on this machine"
+    if audience != "" && !rho_str_eq(audience, "keeper") {
+        let path: string = app_path(audience)
+        if path != "" {
+            to = app_title(audience, path) + " on this machine"
+        }
+    }
+    var message: string = ""
+    if notice != "" {
+        message = "<div class=\"notice bad\">" + escape_html(notice) + "</div>"
+    }
+    var setup: string = ""
+    if !people_any() {
+        setup = "true"
+    }
+    let body: string = template_fill(template_get("auth-login"),
+        vars("ui_head", ui_head()) + vars("theme", ui_theme(req)) + i18n_vars(req) +
+        vars("to", to) + vars("notice", message) + vars("setup", setup) +
+        vars("master_file", auth_master_file()) +
+        vars("return_to", return_to) + vars("audience", audience) + vars("next", next))
+    return html(status, keeper_translate(req, body))
+}
+
 
 // auth_ticket mints the one-use ticket an application exchanges for its own
-// session. The person signed in with the master token is the operator, so the
-// ticket carries every scope; an application narrows what a page may do. The
-// arguments go one per line, so nothing in them is interpreted.
+// session: the person's own name, their grants for that application, and the
+// keeper session it came from, so the application's session ends with it. It
+// answers "" when it could not be minted and "-" when the person has no access
+// to that application. The arguments go one per line, so nothing in them is
+// interpreted.
 fn auth_ticket(req: Request, return_to: string, audience: string) string {
     if !auth_target_ok(req, return_to, audience) {
         return ""
     }
-    let report: string = auth_report("auth-ticket")
+    let line: string = auth_session_line(req)
+    var subject: string = field(line, 2)
+    var scopes: string = people_scopes_for(subject, audience)
+    if !people_has(subject) && rho_str_eq(field(line, 3), "*") {
+        // A session opened with the access token before there were people.
+        scopes = "*"
+    }
+    if scopes == "" {
+        return "-"
+    }
+    // The ticket is a credential: it is read from the owner-only folder and the
+    // file is removed at once, so no copy is left behind.
+    let report: string = auth_private_dir() + "/ticket-" + auth_random() + ".txt"
     let private: string = auth_dir() + "/private.pem"
     let args: string = "auth\nticket\n--private\n" + private +
         "\n--issuer\nkeeper\n--audience\n" + audience +
-        "\n--subject\noperator\n--scopes\n*\n--ttl\n30s\n--redirect-uri\n" + return_to + "\n"
-    if rho_exec_args("rho", args, report) != 0 {
+        "\n--subject\n" + subject + "\n--scopes\n" + scopes + "\n--ttl\n30s\n--redirect-uri\n" + return_to +
+        "\n--sid\n" + field(line, 0) + "\n"
+    let code: u32 = rho_exec_args("rho", args, report)
+    let ticket: string = auth_clean(rho_read_text(report))
+    ignore_u32(rho_exec_args("rm", "-f\n" + report + "\n", auth_report("auth-rm")))
+    if code != 0 {
         return ""
     }
-    return auth_clean(rho_read_text(report))
+    return ticket
 }
 
 fn auth_login(req: Request) Response {
@@ -325,45 +549,71 @@ fn auth_login(req: Request) Response {
             return redirect("/")
         }
         let ticket: string = auth_ticket(req, return_to, audience)
+        if rho_str_eq(ticket, "-") {
+            return page_status(req, status_forbidden(), "No access",
+                "<h1>No access</h1><div class=\"notice warn\">You have no access to that application. An admin can grant it under Users &amp; access.</div>")
+        }
         if ticket != "" {
             return redirect(return_to + "?ticket=" + ticket + "&next=" + next)
         }
         return html(status_internal(), "<p>The ticket could not be minted.</p>")
     }
-    return auth_login_form(return_to, audience, next, "")
+    return auth_page(req, status_ok(), return_to, audience, next, "")
+}
+
+// auth_keys_ensure makes the keeper's signing key pair when it has none, which
+// is what a first run is.
+fn auth_keys_ensure() void {
+    if rho_path_exists(auth_dir() + "/private.pem") {
+        return
+    }
+    ignore_u32(rho_exec_args("rho", "auth\nkeygen\n--dir\n" + auth_dir() + "\n", auth_report("auth-keygen")))
+    info("keeper", "made the signing key pair in " + auth_dir())
 }
 
 fn auth_login_post(req: Request) Response {
     auth_ensure_master()
-    let return_to: string = form_value(request_body(req), "return_to")
-    let audience: string = form_value(request_body(req), "audience")
-    let next: string = form_value(request_body(req), "next")
+    let body: string = request_body(req)
+    let return_to: string = form_value(body, "return_to")
+    let audience: string = form_value(body, "audience")
+    let next: string = form_value(body, "next")
     if (return_to != "" && !auth_target_ok(req, return_to, audience)) || !auth_plain(next) || !auth_plain(audience) {
         return html(status_bad_request(), "<p>That sign-in request is not one this keeper answers.</p>")
     }
-    let supplied: string = auth_clean(form_value(request_body(req), "token"))
-    let expected: string = auth_clean(rho_read_text(auth_master_file()))
-    if supplied == "" || !rho_str_eq(supplied, expected) {
-        return auth_login_form(return_to, audience, next,
-            template_fill(template_get("notice"), vars("message", "That token is not the master token.")))
+    let name: string = trim(form_value(body, "name"))
+    let supplied: string = auth_clean(form_value(body, "token"))
+    // The access token in ~/.rho/auth/master.token is the admin's: it proves the
+    // person is at this machine. It is the whole first run, and the admin's way
+    // in afterwards; named accounts with passwords are for other people.
+    if supplied != "" || !people_any() {
+        let wait_token: u32 = auth_locked("-token")
+        if wait_token > 0 {
+            auth_history("-token", "locked")
+            return auth_page(req, status_ok(), return_to, audience, next,
+                "Too many wrong attempts. Try again in " + rho_int_to_str((wait_token + 59) / 60) + " minutes.")
+        }
+        if !auth_same(supplied, auth_clean(rho_read_text(auth_master_file()))) {
+            auth_failed("-token")
+            return auth_page(req, status_ok(), return_to, audience, next, "That is not the access token in " + auth_master_file() + ".")
+        }
+        auth_keys_ensure()
+        auth_succeeded("-token")
+        return auth_open_session("access-token", "admin", return_to, audience, next)
     }
-    let sid: string = auth_random()
-    if sid == "" {
-        return html(status_internal(), "<p>No random source: a session could not be opened.</p>")
+    let wait: u32 = auth_locked(name)
+    if wait > 0 {
+        auth_history(name, "locked")
+        return auth_page(req, status_ok(), return_to, audience, next,
+            "Too many wrong attempts. Try again in " + rho_int_to_str((wait + 59) / 60) + " minutes.")
     }
-    let sessions: string = rho_read_text(auth_sessions_file()) + sid + "|" +
-        rho_int_to_str(auth_now() + AUTH_TTL_SECONDS) + "|operator|*\n"
-    ignore_bool(rho_write_secret(auth_sessions_file(), sessions))
-    info("keeper", "master session opened")
-    // A direct keeper sign-in goes home. A sign-in started by an application
-    // returns to the login endpoint, which mints that application's ticket.
-    let target: string = "/"
-    if return_to != "" {
-        target = "/auth/login?return_to=" + return_to + "&audience=" + audience + "&next=" + next
+    let role: string = people_verify(name, form_value(body, "password"))
+    if role == "" {
+        auth_failed(name)
+        warn("keeper", "sign-in refused for " + name)
+        return auth_page(req, status_ok(), return_to, audience, next, "That name and password do not match.")
     }
-    return Response{ status_found(), "", "text/plain; charset=utf-8",
-        "Location: " + target + "\nSet-Cookie: " + AUTH_COOKIE + "=" + sid +
-        "; Path=/; HttpOnly; SameSite=Lax" }
+    auth_succeeded(name)
+    return auth_open_session(name, role, return_to, audience, next)
 }
 
 // auth_logout removes the current master session and clears its cookie. Every
@@ -398,6 +648,7 @@ fn auth_logout(req: Request) Response {
         ignore_bool(rho_write_secret(auth_sessions_file(), out))
     }
     info("keeper", "master session closed")
+    keeper_event("person.signed-out", "", "A session was signed out.")
     return Response{ status_found(), "", "text/plain; charset=utf-8",
         "Location: /auth/login?audience=keeper\nSet-Cookie: " + AUTH_COOKIE +
         "=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" }
@@ -429,19 +680,51 @@ fn auth_token_page(req: Request) Response {
 }
 
 fn auth_token_post(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
+    let current: string = auth_clean(form_value(body, "current"))
     let token: string = auth_clean(form_value(body, "token"))
     let confirm: string = auth_clean(form_value(body, "confirm"))
+    // Changing the token proves the old one, so a session left open on a
+    // borrowed screen cannot lock its owner out.
+    if !auth_same(current, auth_clean(rho_read_text(auth_master_file()))) {
+        return auth_token_page_message(req, "The current access token is not right.")
+    }
     if rho_strlen(token) < 16 {
         return auth_token_page_message(req, "Use an access token of at least 16 characters.")
     }
     if !rho_str_eq(token, confirm) {
         return auth_token_page_message(req, "The two tokens do not match.")
     }
-    ignore_u32(rho_exec("mkdir", "-p " + auth_dir(), auth_report("auth-mkdir")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + auth_dir() + "\n", auth_report("auth-mkdir")))
     ignore_bool(rho_write_secret(auth_master_file(), token + "\n"))
-    info("keeper", "access token updated")
-    return auth_token_render(req, "Access token updated. New sign-ins use the new token; this session stays valid.", token)
+    auth_keep_only_session(auth_session_id(req))
+    info("keeper", "access token updated; other sessions closed")
+    return auth_token_render(req, "Access token updated. Every other session was signed out; this one stays.", token)
+}
+
+// auth_keep_only_session closes every keeper session but the one named, which is
+// what a changed token means: whoever signed in with the old one is out.
+fn auth_keep_only_session(sid: string) void {
+    var out: string = ""
+    var rest: string = rho_read_text(auth_sessions_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let first: i32 = rho_str_index_of(line, "|")
+        if first > 0 && sid != "" && rho_str_eq(rho_str_slice(line, 0, u32(first)), sid) {
+            out = out + line + "\n"
+        }
+    }
+    ignore_bool(rho_write_secret(auth_sessions_file(), out))
 }
 
 // auth_private_dir is a directory under keeper's state only its owner can enter,
@@ -504,4 +787,20 @@ fn auth_service_token(req: Request) Response {
         return auth_service_denied()
     }
     return json(status_ok(), answer)
+}
+
+// auth_rotate_key makes a new signing key pair in place of the old. Applications
+// fetch the new public key when a ticket names it; nothing they keep depends on
+// the old one.
+fn auth_rotate_key(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let code: u32 = rho_exec_args("rho", "auth\nkeygen\n--dir\n" + auth_dir() + "\n--force\n", auth_report("auth-keygen"))
+    if code != 0 {
+        return auth_token_page_message(req, "A new key could not be made; see " + auth_report("auth-keygen") + ".")
+    }
+    info("keeper", "the signing key was rotated")
+    keeper_event("keys.rotated", "", "The signing key was rotated.")
+    return auth_token_page_message(req, "The signing key is new. Applications fetch it with the next ticket they see.")
 }

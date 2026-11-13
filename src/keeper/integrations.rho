@@ -1,0 +1,490 @@
+//
+// @file integrations.rho
+// @brief Integrations the keeper runs for the applications: a service from a plugin (Mosquitto for robohub-mqtt), its configuration, its users and their access.
+//
+// @module keeper.integrations
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.integrations
+
+// An integration is a plugin of `kind: integration` that brings a service — a
+// program, its arguments, a configuration template, a port — and what it gives
+// applications (an interface, through a provider). Run, it is a catalogue record
+// of origin `integration`, whose unit runs the service's own program with the
+// configuration the keeper wrote, from a folder of its own under
+// ~/.rho/keeper/services/<name>.
+//
+// robohub-mqtt is the first: Mosquitto. Its users are the applications that bind
+// the bus — each with a random password in its workspace and the topics its
+// manifest's `bus:` block names — the keeper, which reads everything to show it,
+// and the devices an admin adds, each allowed its own topic prefix.
+
+import std.web.http
+
+fn integration_dir(name: string) string {
+    return keeper_state_dir() + "/services/" + name
+}
+
+fn integration_is(name: string) bool {
+    return rho_str_eq(catalog_get(name, "origin"), "integration")
+}
+
+// integration_plugins are the plugins of kind integration under the
+// orchestrator's plugins/, one folder per line.
+fn integration_plugins() string {
+    let root: string = robohub_root() + "/plugins"
+    let report: string = apps_report("integration-plugins")
+    ignore_u32(rho_exec_args("ls", root + "\n", report))
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var folder: string = rest
+        if at < 0 { rest = "" } else { folder = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let path: string = root + "/" + folder
+        if folder != "" && rho_str_eq(yaml.value(manifest_of(path), "module.kind"), "integration") {
+            out = out + app_canonical(path) + "\n"
+        }
+    }
+    return out
+}
+
+fn integration_service(path: string, key: string) string {
+    return yaml.value(manifest_of(path), "integration.service." + key)
+}
+
+// integration_listen is where the service listens: "127.0.0.1", or "0.0.0.0"
+// when an admin opened it to the network for devices.
+fn integration_listen(name: string) string {
+    if rho_str_eq(trim(rho_read_text(integration_dir(name) + "/listen")), "lan") {
+        return "0.0.0.0"
+    }
+    return "127.0.0.1"
+}
+
+// integration_program is the service's program, as the unit names it: its
+// absolute path on this machine, or "" when it is not installed.
+fn integration_program(name: string) string {
+    let path: string = catalog_get(name, "location")
+    let command: string = integration_service(path, "command")
+    if command == "" || !arg_ok(command) {
+        return ""
+    }
+    let report: string = apps_report("which-" + name)
+    if rho_exec_args("sh", "-c\ncommand -v \"$0\"\n" + command + "\n", report) != 0 {
+        return ""
+    }
+    return first_line(rho_read_text(report))
+}
+
+// integration_command_line is the unit's ExecStart: the program and its
+// arguments, with {config} the configuration the keeper wrote.
+fn integration_command_line(name: string) string {
+    let path: string = catalog_get(name, "location")
+    var line: string = integration_program(name)
+    var rest: string = app_manifest_list(path, "integration.service.args")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var arg: string = rest
+        if at < 0 { rest = "" } else { arg = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(arg, "{config}") {
+            arg = integration_dir(name) + "/service.conf"
+        }
+        line = line + " " + arg
+    }
+    return line
+}
+
+// integration_install records an integration from its plugin folder, writes its
+// configuration and starts it. It answers what came of it.
+fn integration_install(path: string) string {
+    let name: string = integration_service(path, "name")
+    if !valid_name(name) || !rho_path_exists(manifest_of(path)) {
+        return "That is not an integration plugin."
+    }
+    if catalog_has(name) {
+        return name + " is already running here."
+    }
+    let unit: string = "robohub-" + name
+    let port: string = integration_service(path, "port")
+    ignore_bool(catalog_write(catalog_flat(name, catalog_record_lines(name, "integration", app_canonical(path),
+        app_version(path), port, unit))))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + integration_dir(name) + "/data\n", apps_report("mkdir-service")))
+    ignore_u32(rho_exec_args("chmod", "700\n" + integration_dir(name) + "\n", apps_report("chmod-service")))
+    info("keeper", "installed the integration " + name + " from " + path)
+    keeper_event("app.installed", name, name + " was installed as an integration.")
+    return name + " was installed. " + app_start(name)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  MQTT: users, topics and the broker's files                                */
+/* -------------------------------------------------------------------------- */
+
+// mqtt_name is the catalogue name of the MQTT integration, "" when it is not
+// installed.
+fn mqtt_name() string {
+    if catalog_has("mqtt") && integration_is("mqtt") {
+        return "mqtt"
+    }
+    return ""
+}
+
+// app_binds_bus is whether an application's manifest binds the bus interface.
+fn app_binds_bus(path: string) bool {
+    // The binding's key is `robohub.bus`, and a dotted key cannot be part of a
+    // lookup path, so it is looked for among bind's keys.
+    return line_in_list(yaml.keys(manifest_of(path), "bind"), "robohub.bus")
+}
+
+// bus_password_file is where an application's broker password is kept.
+fn bus_password_file(name: string) string {
+    return app_workspace(name) + "/auth/bus.secret"
+}
+
+// bus_password is a broker user's password, made once.
+fn bus_password(file: string) string {
+    let existing: string = trim(rho_read_text(file))
+    if rho_strlen(existing) >= 32 {
+        return existing
+    }
+    let value: string = rho_random_hex(24)
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir_of(file) + "\n", apps_report("mkdir-bus")))
+    ignore_bool(rho_write_secret(file, value + "\n"))
+    return value
+}
+
+// bus_environment is what an application that binds the bus is started with, ""
+// for one that does not or when the broker is not installed.
+fn bus_environment(name: string) string {
+    let broker: string = mqtt_name()
+    let path: string = catalog_get(name, "location")
+    if broker == "" || integration_is(name) || !app_binds_bus(path) {
+        return ""
+    }
+    ignore_string(bus_password(bus_password_file(name)))
+    return "ROBOHUB_BUS_URL=127.0.0.1:" + catalog_get(broker, "port") + "\n" +
+        "ROBOHUB_BUS_USER=" + name + "\n" +
+        "ROBOHUB_BUS_PASSWORD_FILE=" + bus_password_file(name) + "\n"
+}
+
+// mqtt_devices_file holds the devices an admin added: name|prefix, one per line.
+fn mqtt_devices_file() string {
+    return integration_dir("mqtt") + "/devices.txt"
+}
+
+fn mqtt_acl_lines(user: string, publish: string, subscribe: string) string {
+    var out: string = "user " + user + "\n"
+    var rest: string = publish
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var topic: string = rest
+        if at < 0 { rest = "" } else { topic = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if topic != "" && mqtt_topic_ok(topic) { out = out + "topic write " + topic + "\n" }
+    }
+    rest = subscribe
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var topic: string = rest
+        if at < 0 { rest = "" } else { topic = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if topic != "" && mqtt_topic_ok(topic) { out = out + "topic read " + topic + "\n" }
+    }
+    return out + "\n"
+}
+
+// mqtt_topic_ok is whether a topic pattern can be one line of the ACL file.
+fn mqtt_topic_ok(topic: string) bool {
+    return rho_str_index_of(topic, "\n") < 0 && rho_str_index_of(topic, " ") < 0 && rho_strlen(topic) <= 200
+}
+
+// mqtt_write_files writes the broker's configuration, its users (hashed by
+// mosquitto_passwd) and their topics, and asks a running broker to read them
+// again. It answers "" or what went wrong.
+fn mqtt_write_files() string {
+    let name: string = mqtt_name()
+    if name == "" {
+        return "MQTT is not installed."
+    }
+    let dir: string = integration_dir(name)
+    let path: string = catalog_get(name, "location")
+    // Two writes at once — the keeper starting, an application starting — would
+    // hash each other's half-written users; they take turns.
+    rho_lock("keeper.mqtt")
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "/data\n", apps_report("mkdir-service")))
+    var users: string = "keeper:" + bus_password(dir + "/keeper.secret") + "\n"
+    var acl: string = "# Written by the RoboHub keeper; edits are lost.\n\n" + mqtt_acl_lines("keeper", "", "#\n$SYS/#\n")
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let where: string = catalog_get(app, "location")
+        if app == "" || integration_is(app) || !app_binds_bus(where) {
+            continue
+        }
+        users = users + app + ":" + bus_password(bus_password_file(app)) + "\n"
+        acl = acl + mqtt_acl_lines(app, app_manifest_list(where, "bus.publish"), app_manifest_list(where, "bus.subscribe"))
+    }
+    var devices: string = rho_read_text(mqtt_devices_file())
+    while devices != "" {
+        let at: i32 = rho_str_index_of(devices, "\n")
+        var line: string = devices
+        if at < 0 { devices = "" } else { line = rho_str_slice(devices, 0, u32(at)); devices = rho_str_slice(devices, u32(at) + 1, u32(rho_strlen(devices)) - u32(at) - 1) }
+        let device: string = field(line, 0)
+        let prefix: string = field(line, 1)
+        if !valid_name(device) || prefix == "" {
+            continue
+        }
+        users = users + device + ":" + bus_password(dir + "/devices/" + device + ".secret") + "\n"
+        acl = acl + "user " + device + "\ntopic readwrite " + prefix + "/#\n\n"
+    }
+    // The passwords are written in the clear to an owner-only file of their own
+    // and hashed there, so none of them is ever on a command line; only a hashed
+    // file is moved into the broker's place, and when hashing fails the broker
+    // keeps the users it had.
+    let fresh: string = dir + "/passwd." + rho_random_hex(6)
+    ignore_bool(rho_write_secret(fresh, mqtt_lines_only(users)))
+    if rho_exec_args("mosquitto_passwd", "-U\n" + fresh + "\n", apps_report("mosquitto-passwd")) != 0 {
+        ignore_u32(rho_exec_args("rm", "-f\n" + fresh + "\n", apps_report("mqtt-rm")))
+        rho_unlock("keeper.mqtt")
+        return "the broker's users could not be hashed: " + first_line(rho_read_text(apps_report("mosquitto-passwd")))
+    }
+    ignore_u32(rho_exec_args("mv", "-f\n" + fresh + "\n" + dir + "/passwd\n", apps_report("mqtt-mv")))
+    ignore_bool(rho_write_secret(dir + "/acl", acl))
+    var conf: string = rho_read_text(path + "/" + integration_service(path, "config"))
+    conf = i18n_replace_all(conf, "{password_file}", dir + "/passwd")
+    conf = i18n_replace_all(conf, "{acl_file}", dir + "/acl")
+    conf = i18n_replace_all(conf, "{data}", dir + "/data")
+    conf = i18n_replace_all(conf, "{port}", catalog_get(name, "port"))
+    conf = i18n_replace_all(conf, "{listen}", integration_listen(name))
+    ignore_bool(rho_write_secret(dir + "/service.conf", conf))
+    // A broker that is running reads its users and rules again on SIGHUP and keeps
+    // its connections.
+    if rho_str_eq(app_active(name), "active") {
+        ignore_u32(app_systemd("kill\n-s\nHUP\n" + app_unit_name(name) + "\n", "reload-" + name))
+    }
+    rho_unlock("keeper.mqtt")
+    return ""
+}
+
+// mqtt_lines_only is text without its empty lines: mosquitto_passwd calls an
+// empty line a corrupt file.
+fn mqtt_lines_only(text: string) string {
+    var out: string = ""
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        line = trim(line)
+        if line != "" {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// mqtt_add_device adds a broker user for a device, allowed its own topic prefix,
+// and answers the password, or "!" and why not.
+fn mqtt_add_device(device: string, prefix: string) string {
+    if !valid_name(device) || prefix == "" || !mqtt_topic_ok(prefix) || rho_str_index_of(prefix, "#") >= 0 || rho_str_index_of(prefix, "+") >= 0 {
+        return "!A device has a plain name and a topic prefix without wildcards."
+    }
+    if line_in_list(rho_read_text(mqtt_devices_file()), device + "|" + prefix) {
+        return "!" + device + " is already a broker user."
+    }
+    ignore_bool(rho_append_text(mqtt_devices_file(), device + "|" + prefix + "\n"))
+    let password: string = bus_password(integration_dir("mqtt") + "/devices/" + device + ".secret")
+    let failure: string = mqtt_write_files()
+    if failure != "" {
+        return "!" + failure
+    }
+    keeper_event("bus.device-added", "mqtt", device + " may use " + prefix + "/#.")
+    return password
+}
+
+fn mqtt_remove_device(device: string) void {
+    var out: string = ""
+    var rest: string = rho_read_text(mqtt_devices_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line != "" && !rho_str_eq(field(line, 0), device) {
+            out = out + line + "\n"
+        }
+    }
+    ignore_bool(rho_write_text(mqtt_devices_file(), out))
+    ignore_u32(rho_exec_args("rm", "-f\n" + integration_dir("mqtt") + "/devices/" + device + ".secret\n", apps_report("mqtt-rm")))
+    ignore_string(mqtt_write_files())
+}
+
+// tcp_answers is whether something accepts connections on a local port.
+fn tcp_answers(port: string) bool {
+    if port == "" || !arg_ok(port) {
+        return false
+    }
+    return rho_exec_args("timeout", "2\nbash\n-c\nexec 3<>/dev/tcp/127.0.0.1/" + port + "\n", apps_report("tcp-" + port)) == 0
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The MQTT inspector                                                        */
+/* -------------------------------------------------------------------------- */
+
+// mqtt_clients_body is who may use the broker: the keeper, the applications that
+// bind the bus with their topics, and the devices, with adding and removing one.
+fn mqtt_clients_body(name: string) string {
+    var listen: string = "this machine only"
+    var other: string = "lan"
+    var other_label: string = "Open it to the network, for devices"
+    if rho_str_eq(integration_listen(name), "0.0.0.0") {
+        listen = "the network (every interface)"
+        other = "local"
+        other_label = "Back to this machine only"
+    }
+    var out: string = "<div class=\"rh-sec\">Listens on</div><div class=\"rh-row\"><b>" + escape_html(listen) + "</b><span>port " +
+        escape_html(catalog_get(name, "port")) + "</span></div>" +
+        "<div class=\"rh-actions\"><button type=\"button\" class=\"quiet small\" hx-post=\"/overview/app/" + escape_html(name) +
+        "/listen?to=" + other + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"" + escape_html(other_label) + "?\">" + escape_html(other_label) + "</button></div>" +
+        "<div class=\"rh-sec\">Applications</div><div class=\"rh-row ok\"><b>keeper</b><span>reads everything, to show it here</span></div>"
+    var apps: string = ""
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let where: string = catalog_get(app, "location")
+        if app == "" || integration_is(app) || !app_binds_bus(where) {
+            continue
+        }
+        apps = apps + "<div class=\"rh-row ok\"><b>" + escape_html(app) + "</b><span>writes " +
+            escape_html(i18n_replace_all(trim(app_manifest_list(where, "bus.publish")), "\n", ", ")) + " · reads " +
+            escape_html(i18n_replace_all(trim(app_manifest_list(where, "bus.subscribe")), "\n", ", ")) + "</span></div>"
+    }
+    if apps == "" {
+        apps = "<p class=\"rh-empty\">No application binds the bus yet.</p>"
+    }
+    var devices: string = ""
+    var list: string = rho_read_text(mqtt_devices_file())
+    while list != "" {
+        let at: i32 = rho_str_index_of(list, "\n")
+        var line: string = list
+        if at < 0 { list = "" } else { line = rho_str_slice(list, 0, u32(at)); list = rho_str_slice(list, u32(at) + 1, u32(rho_strlen(list)) - u32(at) - 1) }
+        if field(line, 0) == "" { continue }
+        devices = devices + "<div class=\"rh-row\"><b>" + escape_html(field(line, 0)) + "</b><span>" + escape_html(field(line, 1)) + "/#</span>" +
+            "<button type=\"button\" class=\"danger small\" hx-post=\"/overview/app/" + escape_html(name) + "/remove-device?device=" +
+            escape_html(field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"Remove " + escape_html(field(line, 0)) + "?\">Remove</button></div>"
+    }
+    if devices == "" {
+        devices = "<p class=\"rh-empty\">No device has a broker user yet.</p>"
+    }
+    return out + apps + "<div class=\"rh-sec\">Devices</div>" + devices +
+        "<form class=\"rh-body\" style=\"padding:0\" hx-post=\"/overview/app/" + escape_html(name) + "/add-device\" hx-target=\"#ins\" hx-swap=\"innerHTML\">" +
+        "<label>Device<input name=\"device\" placeholder=\"shellyplugmgen3-a1b2\"></label>" +
+        "<label>Its topics<input name=\"prefix\" placeholder=\"shellyplugmgen3-a1b2\"><small>It may write and read under this prefix.</small></label>" +
+        "<div class=\"rh-actions\"><button type=\"submit\" class=\"small\">Add the device</button></div></form>"
+}
+
+// mqtt_client_action adds or removes a device, or moves the listener.
+fn mqtt_client_action(req: Request, action: string) string {
+    if rho_str_eq(action, "add-device") {
+        let body: string = request_body(req)
+        let device: string = trim(form_value(body, "device"))
+        let answer: string = mqtt_add_device(device, trim(form_value(body, "prefix")))
+        if rho_str_starts_with(answer, "!") {
+            return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
+        }
+        return device + " may connect as " + device + " with the password " + answer + " — it is shown only now."
+    }
+    if rho_str_eq(action, "remove-device") {
+        let device: string = query_str(req, "device")
+        mqtt_remove_device(device)
+        return device + " was removed."
+    }
+    let to: string = query_str(req, "to")
+    var value: string = "local"
+    if rho_str_eq(to, "lan") {
+        value = "lan"
+    }
+    ignore_bool(rho_write_text(integration_dir("mqtt") + "/listen", value + "\n"))
+    let failure: string = mqtt_write_files()
+    if failure != "" {
+        return failure
+    }
+    ignore_bool(app_install_unit("mqtt"))
+    return "The broker listens on " + integration_listen("mqtt") + " now. " + app_restart("mqtt")
+}
+
+// mqtt_topics_body is what the broker carries now: every topic the keeper heard,
+// newest first, with its last message.
+fn mqtt_topics_body(name: string) string {
+    if !rho_str_eq(app_state(name), "running") {
+        return "<p class=\"rh-empty\">The broker is not running.</p>"
+    }
+    ignore_bool(mqtt_follow("127.0.0.1:" + catalog_get(name, "port"), "keeper", integration_dir(name) + "/keeper.secret", "#", ""))
+    var out: string = ""
+    var count: u32 = 0
+    var rest: string = mqtt_topics("")
+    while rest != "" && count < 60 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line == "" { continue }
+        out = out + "<div class=\"rh-row\" style=\"display:grid;gap:.1rem\"><b style=\"font-family:var(--mono);font-size:.74rem\">" + escape_html(tsv_field(line, 0)) +
+            "</b><span style=\"text-align:left;white-space:normal\">" + escape_html(tsv_field(line, 2)) + " · " + escape_html(tsv_field(line, 1)) + " s ago</span></div>"
+        count = count + 1
+    }
+    if out == "" {
+        out = "<p class=\"rh-empty\">Nothing heard yet. Messages appear here as they arrive.</p>"
+    }
+    return "<div class=\"rh-sec\">Live topics</div><div hx-get=\"/overview/app/" + escape_html(name) + "?tab=topics\" hx-trigger=\"every 5s\" hx-target=\"#ins\" hx-swap=\"innerHTML\"></div>" + out
+}
+
+// integrations_section is the integrations that can run here, for the
+// Applications page.
+fn integrations_section() string {
+    var cards: string = ""
+    var rest: string = integration_plugins()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var path: string = rest
+        if at < 0 { rest = "" } else { path = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if path == "" { continue }
+        let name: string = integration_service(path, "name")
+        var action: string = "<form method=\"post\" action=\"/integrations/install\">" + forms_csrf_field() +
+            "<input type=\"hidden\" name=\"plugin\" value=\"" + escape_html(path) + "\"><button type=\"submit\" class=\"small\">Run it</button></form>"
+        var pill: string = "<span class=\"rh-pill\">available</span>"
+        if catalog_has(name) {
+            action = "<a class=\"button quiet small\" href=\"/apps/" + escape_html(name) + "\">Its page</a>"
+            pill = "<span class=\"rh-pill ok\">installed</span>"
+        }
+        cards = cards + "<div class=\"rh-card int\"><span class=\"r\"><span class=\"nm\">" + escape_html(app_title(name, path)) + "</span>" + pill + "</span>" +
+            "<span class=\"sb\">" + escape_html(yaml.value(manifest_of(path), "description")) + "</span>" +
+            "<span class=\"sb\">provides " + escape_html(yaml.value(manifest_of(path), "integration.provides")) + " · port " + escape_html(integration_service(path, "port")) + "</span>" +
+            "<div class=\"app-actions\">" + action + "</div></div>"
+    }
+    if cards == "" {
+        return ""
+    }
+    return "<div class=\"rh-h\"><h2 id=\"integrations\" style=\"margin:1.6rem 0 0\">Integrations</h2><span>services the keeper runs for the applications</span></div>" +
+        "<div class=\"rh-grid\" style=\"margin-top:.6rem\">" + cards + "</div>"
+}
+
+fn integrations_install_post(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return applications_page_message(req, "That form was not drawn by this keeper.")
+    }
+    let path: string = trim(form_value(body, "plugin"))
+    if !line_in_list(integration_plugins(), path) {
+        return applications_page_message(req, "That is not an integration plugin here.")
+    }
+    return applications_page_message(req, integration_install(path))
+}

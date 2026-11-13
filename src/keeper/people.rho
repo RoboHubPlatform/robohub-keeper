@@ -1,0 +1,717 @@
+//
+// @file people.rho
+// @brief The people who sign in, and what each may do.
+//
+// @module keeper.people
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.people
+
+// The people who sign in, and what each may do.
+//
+// The store is `users.yml` in the keeper's owner-only state folder, kept by the
+// rho-auth component (`rho auth user`), which hashes passwords; the keeper never
+// holds a hash or keeps a password longer than one call. A password is handed to
+// the component in a file in the private folder, removed at once — never on a
+// command line, which every process on the machine can read.
+//
+// A person has a role and grants:
+//
+//   admin     everything, the people and the machine included
+//   operator  runs the applications: start, stop, restart, build, redeploy
+//   viewer    reads
+//
+// Grants are what a person may do in each application, as scopes: `mesh:*`,
+// `mesh:greenhouse`, `aquarium:read`. A ticket for an application carries the
+// person's own name and only their grants for it; an admin's carry `*`.
+
+import std.web.http
+
+fn people_file() string {
+    return keeper_state_dir() + "/users.yml"
+}
+
+fn people_names() string {
+    if !rho_path_exists(people_file()) {
+        return ""
+    }
+    return yaml.keys(people_file(), "users")
+}
+
+fn people_any() bool {
+    return people_names() != ""
+}
+
+fn people_has(name: string) bool {
+    return valid_name(name) && line_in_list(people_names(), name)
+}
+
+fn people_get(name: string, key: string) string {
+    if !valid_name(name) {
+        return ""
+    }
+    return yaml.value(people_file(), "users." + name + "." + key)
+}
+
+// people_run runs `rho auth user`, with the password in a private file when one
+// is given, and answers the first line it printed that is not a log line, or the
+// reason it failed after "!".
+fn people_run(args: string, password: string) string {
+    var file: string = ""
+    var extra: string = ""
+    if password != "" {
+        file = auth_private_dir() + "/password-" + auth_random()
+        ignore_bool(rho_write_secret(file, password + "\n"))
+        extra = "--password-file\n" + file + "\n"
+    }
+    let report: string = auth_private_dir() + "/people-" + auth_random() + ".txt"
+    let code: u32 = rho_exec_args("rho", "auth\nuser\n" + args + "--store\n" + people_file() + "\n" + extra, report)
+    let text: string = rho_read_text(report)
+    ignore_u32(rho_exec_args("rm", "-f\n" + report + "\n" + file + "\n", auth_report("people-rm")))
+    var answer: string = ""
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line == "" || rho_str_starts_with(line, "[") {
+            continue
+        }
+        if answer == "" {
+            answer = line
+        }
+    }
+    if code != 0 {
+        // "rho auth user add: <why>" — the why is what a person reads.
+        let colon: i32 = rho_str_index_of(answer, ": ")
+        if colon >= 0 {
+            return "!" + rho_str_slice(answer, u32(colon) + 2, u32(rho_strlen(answer)) - u32(colon) - 2)
+        }
+        return "!" + answer
+    }
+    return answer
+}
+
+// people_line_ok is whether a value can be one argument of `rho auth user`.
+fn people_value_ok(value: string) bool {
+    return rho_str_index_of(value, "\n") < 0 && rho_str_index_of(value, "\r") < 0 && !rho_str_starts_with(value, "-")
+}
+
+// people_verify answers the role of the person a name and password belong to,
+// or "" for a wrong name or password.
+fn people_verify(name: string, password: string) string {
+    if !valid_name(name) || password == "" {
+        return ""
+    }
+    let answer: string = people_run("verify\n--name\n" + name + "\n", password)
+    if rho_str_starts_with(answer, "!") {
+        return ""
+    }
+    return field_tab(answer, 2)
+}
+
+// field_tab is one tab-separated field.
+fn field_tab(line: string, index: u32) string {
+    return tsv_field(line, index)
+}
+
+// people_add adds a person and answers "" or why not.
+fn people_add(name: string, display: string, role: string, grants: string, password: string) string {
+    if !valid_name(name) || !people_value_ok(display) || !people_value_ok(grants) {
+        return "A name is lowercase letters, digits, '.', '_' or '-'."
+    }
+    var args: string = "add\n--name\n" + name + "\n--role\n" + role + "\n"
+    if display != "" {
+        args = args + "--display\n" + display + "\n"
+    }
+    if grants != "" {
+        args = args + "--grants\n" + grants + "\n"
+    }
+    let answer: string = people_run(args, password)
+    if rho_str_starts_with(answer, "!") {
+        return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
+    }
+    info("keeper", "added " + name + " (" + role + ")")
+    return ""
+}
+
+fn people_set(name: string, display: string, role: string, grants: string) string {
+    if !people_has(name) || !people_value_ok(display) || !people_value_ok(grants) {
+        return "That is not a person here."
+    }
+    var args: string = "set\n--name\n" + name + "\n"
+    if display != "" { args = args + "--display\n" + display + "\n" }
+    if role != "" { args = args + "--role\n" + role + "\n" }
+    var g: string = grants
+    if g == "" { g = "-" }
+    args = args + "--grants\n" + g + "\n"
+    let answer: string = people_run(args, "")
+    if rho_str_starts_with(answer, "!") {
+        return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
+    }
+    return ""
+}
+
+fn people_passwd(name: string, password: string) string {
+    if !people_has(name) {
+        return "That is not a person here."
+    }
+    let answer: string = people_run("passwd\n--name\n" + name + "\n", password)
+    if rho_str_starts_with(answer, "!") {
+        return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
+    }
+    return ""
+}
+
+fn people_remove(name: string) string {
+    if !people_has(name) {
+        return "That is not a person here."
+    }
+    let answer: string = people_run("remove\n--name\n" + name + "\n", "")
+    if rho_str_starts_with(answer, "!") {
+        return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
+    }
+    return ""
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Who is asking, and what they may do                                       */
+/* -------------------------------------------------------------------------- */
+
+fn people_subject(req: Request) string {
+    return header_str(req, "X-Rho-Subject")
+}
+
+// people_role is the role of whoever made a request: a person's own role, read
+// from the store on every request so a change takes effect at once; a program
+// holding a ticket with every scope is an admin; anybody else reads.
+fn people_role(req: Request) string {
+    let subject: string = people_subject(req)
+    if people_has(subject) {
+        return people_get(subject, "role")
+    }
+    let scopes: string = header_str(req, "X-Rho-Scopes")
+    if rho_str_eq(scopes, "*") || rho_str_starts_with(scopes, "*,") {
+        return "admin"
+    }
+    return "viewer"
+}
+
+// keeper_allowed is whether a request may do something that needs `need`:
+// "admin", "operate" or "read".
+fn keeper_allowed(req: Request, need: string) bool {
+    let role: string = people_role(req)
+    if rho_str_eq(role, "admin") {
+        return true
+    }
+    if rho_str_eq(need, "operate") {
+        return rho_str_eq(role, "operator")
+    }
+    return rho_str_eq(need, "read")
+}
+
+fn keeper_refused(req: Request) Response {
+    return page_status(req, status_forbidden(), "Not allowed",
+        "<h1>Not allowed</h1><div class=\"notice warn\">Your role (" + escape_html(people_role(req)) +
+        ") does not allow that. An admin can change it under Users &amp; access.</div>")
+}
+
+// people_scopes_for is what a person's ticket for an application carries: every
+// scope for an admin, their grants for that application otherwise ("" for none).
+fn people_scopes_for(name: string, audience: string) string {
+    if !people_has(name) {
+        return ""
+    }
+    if rho_str_eq(people_get(name, "role"), "admin") {
+        return "*"
+    }
+    var out: string = ""
+    var rest: string = people_get(name, "grants") + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var grant: string = rest
+        if at < 0 { rest = "" } else { grant = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        grant = trim(grant)
+        if rho_str_starts_with(grant, audience + ":") {
+            if out != "" {
+                out = out + ","
+            }
+            out = out + grant
+        }
+    }
+    return out
+}
+
+// people_keeper_scopes is what a keeper session records for a role.
+fn people_keeper_scopes(role: string) string {
+    if rho_str_eq(role, "admin") {
+        return "*"
+    }
+    if rho_str_eq(role, "operator") {
+        return "keeper:operate"
+    }
+    return "keeper:read"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Users & access                                                            */
+/* -------------------------------------------------------------------------- */
+
+// people_sessions is how many keeper sessions a person has open.
+fn people_sessions(name: string) u32 {
+    var count: u32 = 0
+    let now: u32 = auth_now()
+    var rest: string = rho_read_text(auth_sessions_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(field(line, 2), name) && now < rho_int_from_str(field(line, 1)) {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+// people_sign_out ends every keeper session of a person; each application's
+// session ends with it within a minute, when the application next asks.
+fn people_sign_out(name: string) void {
+    var out: string = ""
+    var rest: string = rho_read_text(auth_sessions_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line != "" && !rho_str_eq(field(line, 2), name) {
+            out = out + line + "\n"
+        }
+    }
+    ignore_bool(rho_write_secret(auth_sessions_file(), out))
+    info("keeper", name + " was signed out everywhere")
+    keeper_event("person.signed-out", "", name + " was signed out everywhere.")
+}
+
+fn people_grant_chips(name: string) string {
+    if rho_str_eq(people_get(name, "role"), "admin") {
+        return "<span class=\"rh-tag ok\">every application</span>"
+    }
+    var out: string = ""
+    var rest: string = people_get(name, "grants") + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var grant: string = rest
+        if at < 0 { rest = "" } else { grant = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        grant = trim(grant)
+        if grant != "" {
+            out = out + "<span class=\"rh-tag\">" + escape_html(grant) + "</span>"
+        }
+    }
+    if out == "" {
+        return "<span class=\"rh-tag miss\">no application</span>"
+    }
+    return "<span class=\"rh-tags\">" + out + "</span>"
+}
+
+fn people_role_options(selected: string) string {
+    return "admin|Admin — everything,operator|Operator — runs the applications,viewer|Viewer — reads"
+}
+
+// people_apps are the applications a person can be granted, one per line: the
+// keeper-hosted applications in the catalogue.
+fn people_apps() string {
+    var out: string = ""
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if name != "" && app_kind(app_path(name)) == "keeper-hosted" {
+            out = out + name + "\n"
+        }
+    }
+    return out
+}
+
+// people_app_grants is a person's grants for one application, comma separated.
+fn people_app_grants(name: string, app: string) string {
+    var out: string = ""
+    var rest: string = people_get(name, "grants") + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var grant: string = rest
+        if at < 0 { rest = "" } else { grant = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        grant = trim(grant)
+        if rho_str_starts_with(grant, app + ":") {
+            if out != "" { out = out + "," }
+            out = out + grant
+        }
+    }
+    return out
+}
+
+// people_cell is one cell of the matrix: what a person may do in one application.
+fn people_cell(name: string, app: string) string {
+    if rho_str_eq(people_get(name, "role"), "admin") {
+        return "<span class=\"rh-tag ok\">all</span>"
+    }
+    let grants: string = people_app_grants(name, app)
+    if grants == "" {
+        return "<span class=\"rh-tag miss\" style=\"border-style:dashed\">no access</span>"
+    }
+    if rho_str_eq(grants, app + ":*") {
+        return "<span class=\"rh-tag ok\">all</span>"
+    }
+    if rho_str_eq(grants, app + ":read") {
+        return "<span class=\"rh-tag\">read</span>"
+    }
+    return "<span class=\"rh-tag\" title=\"" + escape_html(grants) + "\">" + escape_html(grants) + "</span>"
+}
+
+// people_inspector is one person in the inspector: their role, what they may do
+// in each application, their password, and signing them out or removing them.
+fn people_inspector(req: Request, name: string, notice: string) string {
+    if !people_has(name) {
+        return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">Person</div><h2>Choose a person</h2><div class=\"rh-state\">Their access appears here.</div></div>"
+    }
+    let role: string = people_get(name, "role")
+    var role_seg: string = ""
+    var i: u32 = 0
+    while i < 3 {
+        var r: string = "admin"
+        if i == 1 { r = "operator" } else if i == 2 { r = "viewer" }
+        var checked: string = ""
+        if rho_str_eq(r, role) { checked = " checked" }
+        role_seg = role_seg + "<label class=\"check\"><input type=\"radio\" name=\"role\" value=\"" + r + "\"" + checked + "> " + r + "</label>"
+        i = i + 1
+    }
+    var apps: string = ""
+    var others: string = people_get(name, "grants")
+    var rest: string = people_apps()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if app == "" { continue }
+        let grants: string = people_app_grants(name, app)
+        var choice: string = "custom"
+        if grants == "" { choice = "none" } else if rho_str_eq(grants, app + ":*") { choice = "all" } else if rho_str_eq(grants, app + ":read") { choice = "read" }
+        var options: string = ""
+        var k: u32 = 0
+        while k < 4 {
+            var v: string = "none"
+            var label: string = "No access"
+            if k == 1 { v = "read"; label = "Read" } else if k == 2 { v = "all"; label = "Everything" } else if k == 3 { v = "custom"; label = "Particular…" }
+            var sel: string = ""
+            if rho_str_eq(v, choice) { sel = " selected" }
+            options = options + "<option value=\"" + v + "\"" + sel + ">" + label + "</option>"
+            k = k + 1
+        }
+        var custom: string = ""
+        if rho_str_eq(choice, "custom") { custom = grants }
+        apps = apps + "<div class=\"rh-row\"><b>" + escape_html(app_title(app, app_path(app))) + "</b>" +
+            "<select name=\"app_" + escape_html(app) + "\" style=\"width:auto;min-height:0;padding:.25rem .4rem\">" + options + "</select></div>" +
+            "<input name=\"custom_" + escape_html(app) + "\" value=\"" + escape_html(custom) + "\" placeholder=\"" + escape_html(app) + ":thing, " + escape_html(app) + ":thing:read\" style=\"margin-top:-.3rem\">"
+    }
+    var message: string = ""
+    if notice != "" {
+        message = "<div class=\"notice\">" + escape_html(notice) + "</div>"
+    }
+    let open: u32 = people_sessions(name)
+    let base: string = "/people/" + escape_html(name)
+    var remove: string = ""
+    if !rho_str_eq(name, people_subject(req)) {
+        remove = "<form method=\"post\" action=\"" + base + "/remove\" onsubmit=\"return confirm('Remove " + escape_html(name) + "?')\">" + forms_csrf_field() +
+            "<button type=\"submit\" class=\"danger small\">Remove</button></form>"
+    }
+    return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">Person · " + escape_html(role) + "</div><h2>" + escape_html(people_get(name, "display")) +
+        "</h2><div class=\"rh-state\"><code>" + escape_html(name) + "</code><span>" + rho_int_to_str(open) + " open sessions</span></div></div>" +
+        "<form method=\"post\" action=\"" + base + "/save\" class=\"rh-body\">" + forms_csrf_field() + message +
+        "<label>Shown as<input name=\"display\" value=\"" + escape_html(people_get(name, "display")) + "\"></label>" +
+        "<div class=\"rh-sec\">Role</div><div class=\"rh-actions\">" + role_seg + "</div>" +
+        "<div class=\"rh-sec\">Applications</div>" + apps +
+        "<div class=\"rh-impact\"><b>Applying this change</b><span>Their next sign-in to an application carries the new grants; an admin reaches every application whatever is set here.</span></div>" +
+        "<label>New password<input name=\"password\" type=\"password\" autocomplete=\"new-password\"><small>Empty keeps the password.</small></label>" +
+        "<div class=\"rh-actions\"><button type=\"submit\">Save</button></div>" +
+        "<div class=\"rh-sec\">Sign-ins</div>" + auth_history_rows(name, 8) + "</form>" +
+        "<div class=\"rh-foot\"><form method=\"post\" action=\"" + base + "/signout\">" + forms_csrf_field() +
+        "<button type=\"submit\" class=\"quiet small\">Sign out everywhere</button></form>" + remove + "</div>"
+}
+
+// people_grants_from is the grants a saved inspector says: one choice per
+// application, and the particular grants written beside one.
+fn people_grants_from(body: string) string {
+    var out: string = ""
+    var rest: string = people_apps()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if app == "" { continue }
+        let choice: string = form_value(body, "app_" + app)
+        var add: string = ""
+        if rho_str_eq(choice, "read") { add = app + ":read" }
+        if rho_str_eq(choice, "all") { add = app + ":*" }
+        if rho_str_eq(choice, "custom") { add = trim(form_value(body, "custom_" + app)) }
+        if add != "" {
+            if out != "" { out = out + "," }
+            out = out + add
+        }
+    }
+    return out
+}
+
+// people_page is the people as a matrix — a row each, an application a column —
+// with the inspector of the one selected beside it, and adding one.
+fn people_page_message(req: Request, notice: string) Response {
+    return people_page_for(req, notice, query_str(req, "who"))
+}
+
+fn people_page_for(req: Request, notice: string, who: string) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    var selected: string = who
+    let apps: string = people_apps()
+    var head: string = "<th>Person</th><th>Role</th>"
+    var rest: string = apps
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if app != "" { head = head + "<th>" + escape_html(app_title(app, app_path(app))) + "</th>" }
+    }
+    head = head + "<th>Signed in</th>"
+    var rows: string = ""
+    var people: string = people_names()
+    while people != "" {
+        let at: i32 = rho_str_index_of(people, "\n")
+        var name: string = people
+        if at < 0 { people = "" } else { name = rho_str_slice(people, 0, u32(at)); people = rho_str_slice(people, u32(at) + 1, u32(rho_strlen(people)) - u32(at) - 1) }
+        if name == "" { continue }
+        if selected == "" { selected = name }
+        var style: string = ""
+        if rho_str_eq(name, selected) { style = " style=\"outline:2px solid var(--gold);outline-offset:-2px\"" }
+        var cells: string = ""
+        var cols: string = apps
+        while cols != "" {
+            let cat: i32 = rho_str_index_of(cols, "\n")
+            var app: string = cols
+            if cat < 0 { cols = "" } else { app = rho_str_slice(cols, 0, u32(cat)); cols = rho_str_slice(cols, u32(cat) + 1, u32(rho_strlen(cols)) - u32(cat) - 1) }
+            if app != "" { cells = cells + "<td>" + people_cell(name, app) + "</td>" }
+        }
+        let open: u32 = people_sessions(name)
+        var signed_in: string = "—"
+        if open > 0 { signed_in = rho_int_to_str(open) + " open" }
+        rows = rows + "<tr" + style + " hx-get=\"/people/" + escape_html(name) + "/inspect\" hx-target=\"#ins\" hx-swap=\"innerHTML\" style=\"cursor:pointer\">" +
+            "<td><b>" + escape_html(people_get(name, "display")) + "</b><br><small><code>" + escape_html(name) + "</code></small></td>" +
+            "<td><span class=\"rh-pill\">" + escape_html(people_get(name, "role")) + "</span></td>" + cells + "<td>" + signed_in + "</td></tr>"
+    }
+    // Signed in with the access token, the admin is nobody in the list: say so,
+    // in the list, and offer to make them the account they are.
+    let me: string = people_subject(req)
+    var claim: string = ""
+    if !people_has(me) {
+        var cells: string = ""
+        var cols: string = apps
+        while cols != "" {
+            let cat: i32 = rho_str_index_of(cols, "\n")
+            if cat < 0 { cols = "" } else { cols = rho_str_slice(cols, u32(cat) + 1, u32(rho_strlen(cols)) - u32(cat) - 1) }
+            cells = cells + "<td><span class=\"rh-tag ok\">all</span></td>"
+        }
+        rows = "<tr style=\"outline:2px dashed var(--warn);outline-offset:-2px\"><td><b>You</b><br><small>signed in with the access token</small></td>" +
+            "<td><span class=\"rh-pill\">admin</span></td>" + cells + "<td>this session</td></tr>" + rows
+        var mine: FormField[4]
+        mine[0] = FormField{ "name", "text", "Your name", "Lowercase letters, digits, '.', '_' or '-'.", "aurel", true, "", "", "", "", "" }
+        mine[1] = FormField{ "display", "text", "Shown as", "", "Aurel", false, "", "", "", "", "" }
+        mine[2] = FormField{ "password", "password", "Password", "At least 10 characters.", "", true, "", "", "", "", "" }
+        mine[3] = FormField{ "confirm", "password", "The same again", "", "", true, "", "", "", "", "" }
+        claim = "<div class=\"panel-form\"><div class=\"rh-kick\">You</div><h2 style=\"margin-top:.3rem\">Make your account</h2>" +
+            "<p>You are signed in with the access token, which is nobody in particular. Make the admin account you are; this session becomes it, and you sign in with it from now on.</p>" +
+            "<form method=\"post\" action=\"/people/claim\">" + forms_csrf_field() + forms_body(mine, 4) +
+            "<div class=\"form-actions\"><button type=\"submit\">Make my account</button></div></form></div>"
+    }
+    var add: FormField[5]
+    add[0] = FormField{ "name", "text", "Name", "Lowercase letters, digits, '.', '_' or '-'.", "ana", true, "", "", "", "", "" }
+    add[1] = FormField{ "display", "text", "Shown as", "", "Ana", false, "", "", "", "", "" }
+    add[2] = FormField{ "role", "select", "Role", "", "", true, "", people_role_options(""), "operator", "", "" }
+    add[3] = FormField{ "grants", "text", "Grants", "What they may use: mesh:*, mesh:greenhouse, aquarium:read.", "aquarium:*", false, "", "", "", "", "" }
+    add[4] = FormField{ "password", "password", "Password", "At least 10 characters; they can change it.", "", true, "", "", "", "", "" }
+    let body: string = "<div class=\"rh-split\"><section class=\"rh-canvas\">" +
+        "<div class=\"rh-h\"><h1>Users &amp; access</h1><span>who signs in, and what each may use</span></div>" +
+        "<p>An admin does everything; an operator runs the applications; a viewer reads. A ticket for an application carries only that person's grants for it.</p>" +
+        "<table><thead><tr>" + head + "</tr></thead><tbody>" + rows + "</tbody></table>" + claim +
+        "<details class=\"panel-form\"><summary class=\"button quiet small\">+ Add a person</summary><form method=\"post\" action=\"/people/add\">" + forms_csrf_field() + forms_body(add, 5) +
+        "<div class=\"form-actions\"><button type=\"submit\">Add</button></div></form></details></section>" +
+        "<aside class=\"rh-ins\" id=\"ins\">" + people_inspector(req, selected, notice) + "</aside></div>"
+    return page(req, "Users & access", body)
+}
+
+fn people_inspect(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    return html(status_ok(), people_inspector(req, param(req, "name"), ""))
+}
+
+fn people_page(req: Request) Response {
+    return people_page_message(req, "")
+}
+
+fn people_add_post(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return people_page_message(req, "That form was not drawn by this keeper.")
+    }
+    let name: string = trim(form_value(body, "name"))
+    let failure: string = people_add(name, trim(form_value(body, "display")), trim(form_value(body, "role")),
+        trim(form_value(body, "grants")), form_value(body, "password"))
+    if failure != "" {
+        return people_page_message(req, failure)
+    }
+    return people_page_for(req, name + " can sign in now.", name)
+}
+
+// people_action_post saves, signs out or removes one person.
+fn people_action_post(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return people_page_message(req, "That form was not drawn by this keeper.")
+    }
+    let name: string = param(req, "name")
+    let action: string = param(req, "action")
+    if !people_has(name) {
+        return people_page_message(req, "That is not a person here.")
+    }
+    var failure: string = ""
+    var done: string = ""
+    if rho_str_eq(action, "save") {
+        var grants: string = trim(form_value(body, "grants"))
+        if rho_str_index_of(body, "app_") >= 0 {
+            grants = people_grants_from(body)
+        }
+        failure = people_set(name, trim(form_value(body, "display")), trim(form_value(body, "role")), grants)
+        let password: string = form_value(body, "password")
+        if failure == "" && password != "" {
+            failure = people_passwd(name, password)
+        }
+        done = name + " was changed. Their next sign-in to an application carries the new grants."
+    } else if rho_str_eq(action, "signout") {
+        people_sign_out(name)
+        done = name + " was signed out of the keeper; every application signs them out within a minute."
+    } else if rho_str_eq(action, "remove") {
+        if rho_str_eq(name, people_subject(req)) {
+            return people_page_message(req, "You cannot remove yourself.")
+        }
+        failure = people_remove(name)
+        if failure == "" {
+            people_sign_out(name)
+        }
+        done = name + " was removed and signed out everywhere."
+    } else {
+        failure = "Unknown action."
+    }
+    if failure != "" {
+        return people_page_for(req, failure, name)
+    }
+    if rho_str_eq(action, "remove") {
+        return people_page_for(req, done, "")
+    }
+    return people_page_for(req, done, name)
+}
+
+// account_page is where a person changes their own password.
+fn account_page_message(req: Request, notice: string) Response {
+    let name: string = people_subject(req)
+    if !people_has(name) {
+        return page(req, "Account", "<h1>Account</h1><p>This session is not a person's; nothing to change here.</p>")
+    }
+    var fields: FormField[3]
+    fields[0] = FormField{ "current", "password", "Current password", "", "", true, "", "", "", "", "" }
+    fields[1] = FormField{ "password", "password", "New password", "At least 10 characters.", "", true, "", "", "", "", "" }
+    fields[2] = FormField{ "confirm", "password", "The same again", "", "", true, "", "", "", "", "" }
+    var message: string = ""
+    if notice != "" {
+        message = "<div class=\"notice\">" + escape_html(notice) + "</div>"
+    }
+    let body: string = "<div class=\"rh-h\"><h1>" + escape_html(people_get(name, "display")) + "</h1><span>" + escape_html(name) + " · " +
+        escape_html(people_get(name, "role")) + "</span></div>" + message +
+        "<div class=\"rh-sec\">What you may use</div><p>" + people_grant_chips(name) + "</p>" +
+        "<h2>Change your password</h2><form class=\"panel-form\" method=\"post\" action=\"/account\" style=\"max-width:32rem\">" +
+        forms_csrf_field() + forms_body(fields, 3) + "<div class=\"form-actions\"><button type=\"submit\">Change it</button></div></form>"
+    return page(req, "Account", body)
+}
+
+fn account_page(req: Request) Response {
+    return account_page_message(req, "")
+}
+
+fn account_post(req: Request) Response {
+    let name: string = people_subject(req)
+    let body: string = request_body(req)
+    if !people_has(name) || !forms_csrf_ok(body) {
+        return account_page_message(req, "That form was not drawn by this keeper.")
+    }
+    if people_verify(name, form_value(body, "current")) == "" {
+        return account_page_message(req, "The current password is not right.")
+    }
+    if !rho_str_eq(form_value(body, "password"), form_value(body, "confirm")) {
+        return account_page_message(req, "The two new passwords are not the same.")
+    }
+    let failure: string = people_passwd(name, form_value(body, "password"))
+    if failure != "" {
+        return account_page_message(req, failure)
+    }
+    return account_page_message(req, "Your password was changed.")
+}
+
+// people_claim makes the admin account of someone signed in with the access
+// token, and turns their session into that account's.
+fn people_claim(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return people_page_message(req, "That form was not drawn by this keeper.")
+    }
+    if people_has(people_subject(req)) {
+        return people_page_message(req, "You already have an account.")
+    }
+    let name: string = trim(form_value(body, "name"))
+    if !rho_str_eq(form_value(body, "password"), form_value(body, "confirm")) {
+        return people_page_message(req, "The two passwords are not the same.")
+    }
+    auth_keys_ensure()
+    let failure: string = people_add(name, trim(form_value(body, "display")), "admin", "", form_value(body, "password"))
+    if failure != "" {
+        return people_page_message(req, failure)
+    }
+    // This session is now that person's.
+    let sid: string = auth_session_id(req)
+    var out: string = ""
+    var rest: string = rho_read_text(auth_sessions_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line == "" { continue }
+        if sid != "" && rho_str_eq(field(line, 0), sid) {
+            line = field(line, 0) + "|" + field(line, 1) + "|" + name + "|*"
+        }
+        out = out + line + "\n"
+    }
+    ignore_bool(rho_write_secret(auth_sessions_file(), out))
+    info("keeper", "the access-token session became " + name + "'s")
+    return redirect("/people?who=" + name)
+}

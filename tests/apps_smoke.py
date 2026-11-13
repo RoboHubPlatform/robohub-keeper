@@ -6,15 +6,17 @@ applications page the way a browser does: discovery from the tree, install of
 an application that already lives on the machine, adding it to the left menu,
 removing it again, and the refusal to uninstall the keeper itself.
 
-The test uses the repository's own applications and does not need a board or a
+The test uses the orchestrator's applications and does not need a board or a
 network beyond the loopback listener. A missing application or registry is a
 failed test, because the page's promise is that its lists come from the tree.
 
 Run from anywhere:
 
-    python3 applications/keeper/tests/apps_smoke.py
+    python3 tests/apps_smoke.py
 """
 
+import json
+import re
 import os
 import socket
 import subprocess
@@ -28,8 +30,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve()
 KEEPER = HERE.parents[1]
-ROBOHUB = KEEPER.parents[1]
-PROJECTS = ROBOHUB.parent
+# The orchestrator the keeper reads: ROBOHUB_ROOT, or beside this checkout.
+PROJECTS = KEEPER.parent
+ROBOHUB = Path(os.environ.get("ROBOHUB_ROOT", PROJECTS / "robohub")).resolve()
 RHO = PROJECTS / "rho" / "bin" / "rho"
 
 
@@ -88,6 +91,27 @@ def sign_in(base: str, audience: str, return_to: str, session: bool) -> tuple:
             return response.status, "", response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as answer:
         return answer.code, answer.headers.get("Location", ""), answer.read().decode("utf-8", "replace")
+
+
+def csrf_token(base: str) -> str:
+    """The token the forms module drew the install form with."""
+    match = re.search(r'name="csrf" value="([^"]*)"', get(base, "/applications"))
+    if not match:
+        raise AssertionError("the install form carries no CSRF token")
+    return match.group(1)
+
+
+def wait_job(base: str, name: str, timeout: float = 60.0) -> dict:
+    """Waits for an application's job to end and answers the job."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        app = json.loads(get(base, "/api/v1/apps/" + name))
+        if not app["job"]:
+            jobs = [j for j in json.loads(get(base, "/api/v1/jobs"))["jobs"] if j["app"] == name]
+            if jobs:
+                return jobs[0]
+        time.sleep(0.5)
+    raise AssertionError(f"the job of {name} did not end")
 
 
 def assert_contains(haystack: str, needles: list, label: str) -> None:
@@ -156,7 +180,7 @@ def main() -> int:
         # smoke run one valid local session instead of disabling auth.
         state_dir = Path(env["RHO_KEEPER_STATE_DIR"])
         state_dir.mkdir(parents=True, exist_ok=True)
-        session_line = f"{SESSION}|{int(time.time()) + 3600}|smoke\n"
+        session_line = f"{SESSION}|{int(time.time()) + 3600}|smoke|*\n"
         (state_dir / "auth-sessions.txt").write_text(session_line, encoding="utf-8")
         # The generated middleware is configured with the home-relative
         # session_file, which a state-dir override does not move.
@@ -205,6 +229,21 @@ def main() -> int:
             status, location, body = sign_in(base, "keeper", base + "/auth/callback", True)
             if status not in (302, 303) or not location.startswith(base + "/auth/callback?ticket="):
                 raise AssertionError(f"the keeper's own sign-in did not return to it ({status}, {location!r}): {body[:200]}")
+
+            # Nobody has an account yet, so signing in is the first run; and an
+            # application can ask whether a keeper session still stands.
+            with urllib.request.urlopen(base + "/auth/login", timeout=10) as response:
+                first = response.read().decode()
+            assert_contains(first, ["Sign in with the access token", "Access token"], "the first-run page")
+            with urllib.request.urlopen(base + "/auth/session/" + SESSION, timeout=10) as response:
+                if response.status != 200:
+                    raise AssertionError("a standing session is not said to stand")
+            try:
+                urllib.request.urlopen(base + "/auth/session/0123456789abcdef", timeout=10)
+                raise AssertionError("an unknown session is said to stand")
+            except urllib.error.HTTPError as answer:
+                if answer.code != 404:
+                    raise AssertionError(f"an unknown session answers {answer.code}")
 
             page = get(base, "/applications")
             assert_contains(
@@ -259,43 +298,75 @@ def main() -> int:
             assert_contains(refusal, ["cannot uninstall itself"], "keeper uninstall")
             assert_contains(get(base, "/applications"), ["RoboHub Keeper"], "keeper still listed")
 
+            # The programs' view of the same catalogue.
+            catalogue = json.loads(get(base, "/api/v1/apps"))
+            names = {app["name"]: app for app in catalogue["apps"]}
+            if "keeper" not in names or "mesh" not in names:
+                raise AssertionError(f"the catalogue does not hold the keeper and Mesh: {sorted(names)}")
+            if names["keeper"]["state"] != "keeper" or names["keeper"]["port"] != str(port):
+                raise AssertionError(f"the keeper's own record is wrong: {names['keeper']}")
+
+            forged = post(base, "/applications/install", {"name": "demo", "source": str(demo)})
+            assert_contains(forged, ["not drawn by this keeper"], "an install without the form's token")
             installed = post(
                 base,
                 "/applications/install",
-                {"name": "demo", "source": str(demo), "menu": "1"},
+                {"name": "demo", "source": str(demo), "menu": "1", "csrf": csrf_token(base)},
             )
-            assert_contains(installed, ["demo was installed"], "install")
+            assert_contains(installed, ["demo was installed", "being built and started"], "install")
+            catalogue_file = Path(state) / "state" / "installed.yml"
+            assert_contains(catalogue_file.read_text(), ["demo:", "origin: \"external\""], "catalogue record")
+            # Building a folder is a job; demo has no sources, so the job fails and
+            # says why, and the row says it is not built.
+            failed = wait_job(base, "demo")
+            if failed["status"] != "failed" or "build failed" not in failed["reason"]:
+                raise AssertionError(f"building demo did not fail as it should: {failed}")
             assert_contains(get(base, "/api/applications/rows"),
                             ["Demo App", "not built"], "installed row")
-            assert_contains(get(base, "/"), ["Demo App", "app-open"], "pinned menu entry")
+            home = get(base, "/")
+            rail = home[home.index('<nav class="rh-rail">'):home.index("</nav>", home.index('<nav class="rh-rail">'))]
+            assert_contains(rail, ["Demo App", "/apps/demo"], "pinned menu entry")
+            assert_contains(get(base, "/apps/demo"), ["Demo App", "Dependencies", "Uninstall"], "the application's page")
+            assert_contains(home, ["rh-switch", "Demo App", "rh-card"], "the switcher and the overview")
+            assert_contains(get(base, "/jobs/strip"), ["demo"], "the strip names the job")
 
-            # Build builds and nothing else: demo has no sources, so it says the
-            # build failed rather than that it was built.
             built = post(base, "/applications/build", {"name": "demo"})
-            assert_contains(built, ["build failed"], "build of an application with no sources")
-            # A service unit written for where the application used to be is
-            # written again on a restart, which builds it from where it is now.
-            units = Path(state) / ".config" / "systemd" / "user"
-            units.mkdir(parents=True, exist_ok=True)
-            (units / "demo.service").write_text(
-                "[Service]\nWorkingDirectory=/nowhere/demo-app\n"
-                "Environment=ROBOHUB_APP_MANIFEST=/nowhere/demo-app/module.yml\n"
-                "Environment=RHO_HTTP_ADDR=:9009\nExecStart=/nowhere/demo-app/build/demo\n",
-                encoding="utf-8")
+            assert_contains(built, ["demo is being built"], "build")
+            if wait_job(base, "demo")["status"] != "failed":
+                raise AssertionError("a build of an application with no sources did not fail")
+
+            # The unit is the keeper's, written from the manifest and the catalogue:
+            # one written for where the application used to be is written again.
+            unit = Path(state) / ".config" / "systemd" / "user" / "demo.service"
+            unit.write_text("[Service]\nWorkingDirectory=/nowhere/demo-app\nExecStart=/nowhere/demo-app/build/demo\n",
+                            encoding="utf-8")
             restarted = post(base, "/applications/restart", {"name": "demo"})
-            assert_contains(restarted, ["Could not deploy demo again", "the build failed"],
-                            "restart of an application whose unit is out of date")
+            assert_contains(restarted, ["demo is being built and started"], "restart of a stale unit")
+            assert_contains(unit.read_text(), ["Written by the RoboHub keeper",
+                                               "WorkingDirectory=" + str(demo.resolve()),
+                                               "EnvironmentFile="], "rewritten unit")
+            wait_job(base, "demo")
             redeployed = post(base, "/applications/redeploy", {"name": "demo"})
-            assert_contains(redeployed, ["the build failed"], "redeploy")
-            (units / "demo.service").unlink()
+            assert_contains(redeployed, ["being built and redeployed"], "redeploy")
+            if wait_job(base, "demo")["status"] != "failed":
+                raise AssertionError("a redeploy of an application with no sources did not fail")
+            env_file = Path(state) / "state" / "workspaces" / "demo" / "app.env"
+            assert_contains(env_file.read_text(), ["RHO_APP_NAME=demo", "RHO_HTTP_ADDR=127.0.0.1:9009",
+                                                   "RHO_APP_SECRET=", "ROBOHUB_KEEPER_URL="], "environment")
+            if env_file.stat().st_mode & 0o077:
+                raise AssertionError("the environment file is readable by others")
 
             unpinned = post(base, "/applications/menu", {"name": "demo", "pinned": "0"})
             assert_contains(unpinned, ["no longer in the keeper menu"], "unpin")
-            assert "Demo App" not in get(base, "/")
+            home = get(base, "/")
+            rail = home[home.index('<nav class="rh-rail">'):home.index("</nav>", home.index('<nav class="rh-rail">'))]
+            assert "Demo App" not in rail, "an application taken out of the menu is still in the rail"
 
             removed = post(base, "/applications/uninstall", {"name": "demo"})
-            assert_contains(removed, ["removed from the registry"], "uninstall")
+            assert_contains(removed, ["taken out of the keeper"], "uninstall")
             assert demo.is_dir(), "an external application's folder is left where it is"
+            assert not unit.exists(), "the unit of an uninstalled application is removed"
+            assert "demo:" not in catalogue_file.read_text(), "an uninstalled application stays in the catalogue"
             assert "Demo App" not in get(base, "/applications")
         finally:
             process.terminate()

@@ -1,3 +1,15 @@
+//
+// @file module_settings.rho
+// @brief A standalone module has no parent application settings page.
+//
+// @module keeper.module_settings
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-08
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.module_settings
 
 // A standalone module has no parent application settings page. The keeper can
@@ -66,12 +78,19 @@ fn app_module_settings_page(req: Request) Response {
 }
 
 fn app_module_settings_save(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(request_query_param(req, "name"))
     if !forms_csrf_ok(body) {
         return app_module_settings_page_message(req, i18n_t(req, "settings.csrf_refused"))
     }
-    var rest: string = settings_list(app_module_settings_prefix(name))
+    if !valid_name(name) {
+        return app_module_settings_page_message(req, "That is not a module name.")
+    }
+    let prefix: string = app_module_settings_prefix(name)
+    var rest: string = settings_list(prefix)
     var index: u32 = 0
     while rest != "" && index < 16 {
         let at: i32 = rho_str_index_of(rest, "\n")
@@ -88,9 +107,35 @@ fn app_module_settings_save(req: Request) Response {
         }
         index = index + 1
     }
-    let new_key: string = trim(form_value(body, "new_key"))
+    // A new key belongs to this module: it is written under the module's own
+    // prefix, so the form cannot change another module's settings.
+    var new_key: string = trim(form_value(body, "new_key"))
     if new_key != "" {
+        if !rho_str_starts_with(new_key, prefix) {
+            new_key = prefix + new_key
+        }
+        if !settings_key_ok(rho_str_slice(new_key, u32(rho_strlen(prefix)), u32(rho_strlen(new_key)) - u32(rho_strlen(prefix)))) {
+            return app_module_settings_page_message(req, "A setting's name uses letters, digits, '_', '-' and '.' only.")
+        }
         settings_set(new_key, trim(form_value(body, "new_value")))
     }
     return redirect("/app-modules/settings?name=" + name)
+}
+
+// settings_key_ok is whether a key, after its module's prefix, is a plain name
+// that cannot reach outside it.
+fn settings_key_ok(key: string) bool {
+    if key == "" || rho_str_index_of(key, "..") >= 0 {
+        return false
+    }
+    let allowed: string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-."
+    var i: u32 = 0
+    let length: u32 = u32(rho_strlen(key))
+    while i < length {
+        if rho_str_index_of(allowed, rho_str_slice(key, i, 1)) < 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
 }

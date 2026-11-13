@@ -1,3 +1,15 @@
+//
+// @file settings.rho
+// @brief The keeper's own runtime settings.
+//
+// @module keeper.settings
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-08
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.settings
 
 // The keeper's own runtime settings: the display preference and its alert
@@ -125,6 +137,9 @@ fn keeper_settings_page(req: Request) Response {
 }
 
 fn keeper_settings_save(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let tab: string = keeper_settings_tab(req)
     if !forms_csrf_ok(body) {

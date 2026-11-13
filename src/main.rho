@@ -1,3 +1,15 @@
+//
+// @file main.rho
+// @brief The RoboHub keeper.
+//
+// @module keeper
+// @project keeper
+// @author Aurel Miron
+// @date 2026-10-22
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper
 
 // The RoboHub keeper: a local dashboard for the ecosystem.
@@ -9,15 +21,26 @@ include "settings"
 include "keeper/plugin_registry.rho"
 include "keeper/alerts.rho"
 include "keeper/apps.rho"
+include "keeper/catalog.rho"
+include "keeper/supervisor.rho"
+include "keeper/jobs.rho"
+include "keeper/api.rho"
+include "keeper/packages.rho"
+include "keeper/deps.rho"
+include "keeper/integrations.rho"
+include "keeper/overview.rho"
 include "keeper/plugins.rho"
 include "keeper/providers.rho"
 include "keeper/app_modules.rho"
 include "keeper/module_settings.rho"
+include "keeper/people.rho"
 include "keeper/auth.rho"
 include "keeper/settings.rho"
 include "keeper/enrollment.rho"
 include "keeper/nodes.rho"
 include "htmx"
+include "ui"
+include "notifications"
 include "i18n"
 include "logging"
 
@@ -41,8 +64,8 @@ fn init() void {
 route GET "/" => home
 route GET "/modules" => modules_page
 route GET "/module/{name}" => module_page
-route GET "/install" => install_page
-route GET "/uninstall" => uninstall_page
+route POST "/install" => install_page
+route POST "/uninstall" => uninstall_page
 route GET "/logout" => auth_logout
 route POST "/api/enroll" => keeper_enroll
 route POST "/api/nodes/verify" => keeper_node_verify
@@ -56,6 +79,8 @@ route GET "/docs" => docs_page
 route GET "/docs/{path...}" => doc_page
 route GET "/applications" => applications_page
 route GET "/applications/log" => applications_log
+route GET "/applications/preview" => deps_preview_page
+route POST "/integrations/install" => integrations_install_post
 route GET "/api/applications/rows" => applications_rows_endpoint
 route POST "/applications/install" => applications_install
 route POST "/applications/uninstall" => applications_uninstall
@@ -66,17 +91,46 @@ route POST "/applications/update" => applications_redeploy
 route POST "/applications/build" => applications_build
 route POST "/applications/restart" => applications_restart
 route POST "/applications/menu" => applications_menu
+route GET "/api/applications/candidates" => applications_candidates_endpoint
+route GET "/apps/{name}" => app_page
+route GET "/overview/cards" => overview_cards_endpoint
+route GET "/overview/app/{name}" => overview_inspector_endpoint
+route POST "/overview/app/{name}/{action}" => overview_action_endpoint
+route GET "/jobs" => jobs_page
+route GET "/jobs/strip" => jobs_strip_endpoint
+route GET "/jobs/{id}" => job_page
+route GET "/jobs/{id}/log" => job_log_endpoint
+route GET "/api/v1/switcher" => api_switcher
+route GET "/api/v1/registry" => api_registry
+route GET "/api/v1/me" => api_me
+route GET "/api/v1/services" => api_services
+route GET "/api/v1/config/{app}" => api_config
+route GET "/api/v1/apps" => api_apps
+route GET "/api/v1/apps/{name}" => api_app
+route POST "/api/v1/apps/{name}/{action}" => api_app_action
+route GET "/api/v1/events" => api_events
+route GET "/api/v1/jobs" => api_jobs
+route GET "/api/v1/jobs/{id}" => api_job
 route GET "/plugins" => plugins_page
 route POST "/plugins/toggle" => plugins_toggle
 route POST "/plugins/test" => plugins_test
 route POST "/plugins/install" => plugins_install
 route POST "/plugins/uninstall" => plugins_uninstall
+route GET "/people" => people_page
+route POST "/people/add" => people_add_post
+route POST "/people/claim" => people_claim
+route GET "/people/{name}/inspect" => people_inspect
+route POST "/people/{name}/{action}" => people_action_post
+route GET "/account" => account_page
+route POST "/account" => account_post
 route GET "/auth/login" => auth_login
 route POST "/auth/login" => auth_login_post
 route POST "/auth/service-token" => auth_service_token
 route GET "/auth/public-key" => auth_public_key
+route GET "/auth/session/{sid}" => auth_session_check
 route GET "/auth/token" => auth_token_page
 route POST "/auth/token" => auth_token_post
+route POST "/auth/rotate-key" => auth_rotate_key
 route GET "/providers" => providers_page
 route POST "/providers/install" => providers_install
 route POST "/providers/uninstall" => providers_uninstall
@@ -86,22 +140,21 @@ route POST "/app-modules/settings" => app_module_settings_save
 route POST "/app-modules/install" => app_modules_install
 route POST "/app-modules/uninstall" => app_modules_uninstall
 
-fn home(req: Request) Response {
-    let body: string = template_fill(template_get("home"), vars("", ""))
-    return page(req, i18n_t(req, "page.home"), body)
+// modules_page is where the registry was: it is part of the Applications page now.
+fn modules_page(req: Request) Response {
+    return redirect("/applications#registry")
 }
 
-fn modules_page(req: Request) Response {
-    let rows: string = module_rows()
-    let body: string = template_fill(template_get("modules"), vars("rows", rows))
-    return page(req, i18n_t(req, "page.registry"), body)
+// registry_section is the orchestrator's registry, for the Applications page.
+fn registry_section() string {
+    return template_fill(template_get("modules"), vars("rows", module_rows()))
 }
 
 fn module_page(req: Request) Response {
     let name: string = param(req, "name")
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
-    if !rho_path_exists(entry) {
-        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>")
+    if !valid_name(name) || !rho_path_exists(entry) {
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>Unknown module: " + forms_escape(name) + "</p><p><a href='/modules'>Back</a></p>")
     }
     let role: string = yaml.value(entry, "role")
     let path: string = resolve_path(yaml.value(entry, "path"))
@@ -117,52 +170,110 @@ fn module_page(req: Request) Response {
     return page(req, name, info)
 }
 
-fn install_page(req: Request) Response {
-    let name: string = param(req, "module")
-    if name == "" {
-        return page_status(req, status_bad_request(), i18n_t(req, "page.install"), "<p>No module specified.</p><p><a href='/modules'>Back</a></p>")
+// registry_entry is the orchestrator's registry file for a module a form named,
+// or "" when the name is not a plain module name or names nothing.
+fn registry_entry(name: string) string {
+    if !valid_name(name) {
+        return ""
     }
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !rho_path_exists(entry) {
-        return page_status(req, status_not_found(), i18n_t(req, "page.install"), "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>")
+        return ""
+    }
+    return entry
+}
+
+fn registry_back(req: Request, status: u32, title: string, message: string) Response {
+    return page_status(req, status, title, "<p>" + forms_escape(message) + "</p><p><a href='/modules'>Back</a></p>")
+}
+
+// The checkouts the keeper fetched itself, one path per line. Only these are
+// ever removed: a checkout somebody made by hand is theirs, with whatever work
+// is in it.
+fn fetched_file() string {
+    return keeper_state_dir() + "/fetched.txt"
+}
+
+fn fetched_by_keeper(path: string) bool {
+    return rho_str_index_of("\n" + rho_read_text(fetched_file()), "\n" + path + "\n") >= 0
+}
+
+fn fetched_set(path: string, keep: bool) void {
+    var out: string = ""
+    var rest: string = rho_read_text(fetched_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 {
+            rest = ""
+        } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line != "" && !rho_str_eq(line, path) {
+            out = out + line + "\n"
+        }
+    }
+    if keep {
+        out = out + path + "\n"
+    }
+    ignore_bool(rho_write_text(fetched_file(), out))
+}
+
+fn install_page(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
+    let title: string = i18n_t(req, "page.install")
+    let name: string = trim(form_value(request_body(req), "module"))
+    let entry: string = registry_entry(name)
+    if entry == "" {
+        return registry_back(req, status_not_found(), title, "Unknown module: " + name)
     }
     let git_url: string = yaml.value(entry, "git")
     let path: string = resolve_path(yaml.value(entry, "path"))
     if rho_path_exists(path + "/module.yml") {
-        return page(req, i18n_t(req, "page.install"), "<p>" + name + " is already installed.</p><p><a href='/modules'>Back</a></p>")
+        return registry_back(req, status_ok(), title, name + " is already installed.")
     }
-    let output: string = "build/reports/clone-" + name + ".txt"
-    let code: u32 = rho_exec("git", "clone " + git_url + " " + path, output)
+    if !arg_ok(git_url) || !arg_ok(path) {
+        return registry_back(req, status_bad_request(), title, "The registry entry for " + name + " does not name a plain git URL and path.")
+    }
+    ensure_keeper_state()
+    let output: string = apps_report("clone-" + name)
+    let code: u32 = rho_exec_args("git", "clone\n--\n" + git_url + "\n" + path + "\n", output)
     if code != 0 {
-        return page_status(req, status_internal(), i18n_t(req, "page.install"), "<p>Failed to clone " + name + ".</p><p><a href='/modules'>Back</a></p>")
+        return registry_back(req, status_internal(), title, "Failed to clone " + name + ".")
     }
-    return page_status(req, status_created(), i18n_t(req, "page.install"), "<p>Installed " + name + ".</p><p><a href='/modules'>Back</a></p>")
+    fetched_set(path, true)
+    info("keeper", "fetched " + name + " into " + path)
+    return registry_back(req, status_created(), title, "Installed " + name + ".")
 }
 
 fn uninstall_page(req: Request) Response {
-    let name: string = param(req, "module")
-    if name == "" {
-        return page_status(req, status_bad_request(), i18n_t(req, "page.uninstall"), "<p>No module specified.</p><p><a href='/modules'>Back</a></p>")
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
     }
-    let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
-    if !rho_path_exists(entry) {
-        return page_status(req, status_not_found(), i18n_t(req, "page.uninstall"), "<p>Unknown module: " + name + "</p><p><a href='/modules'>Back</a></p>")
+    let title: string = i18n_t(req, "page.uninstall")
+    let name: string = trim(form_value(request_body(req), "module"))
+    let entry: string = registry_entry(name)
+    if entry == "" {
+        return registry_back(req, status_not_found(), title, "Unknown module: " + name)
     }
     let path: string = resolve_path(yaml.value(entry, "path"))
     if !rho_path_exists(path + "/module.yml") {
-        return page(req, i18n_t(req, "page.uninstall"), "<p>" + name + " is not installed.</p><p><a href='/modules'>Back</a></p>")
+        return registry_back(req, status_ok(), title, name + " is not installed.")
     }
-    let output: string = "build/reports/uninstall-" + name + ".txt"
-    let code: u32 = rho_exec("rm", "-rf " + path, output)
+    if !fetched_by_keeper(path) {
+        return registry_back(req, status_conflict(), title, name + " at " + path + " was not fetched by the keeper, so the keeper leaves it alone. Remove the folder yourself if you mean to.")
+    }
+    let output: string = apps_report("uninstall-" + name)
+    let code: u32 = rho_exec_args("rm", "-rf\n--\n" + path + "\n", output)
     if code != 0 {
-        return page_status(req, status_internal(), i18n_t(req, "page.uninstall"), "<p>Failed to uninstall " + name + ".</p><p><a href='/modules'>Back</a></p>")
+        return registry_back(req, status_internal(), title, "Failed to uninstall " + name + ".")
     }
-    return page(req, i18n_t(req, "page.uninstall"), "<p>Uninstalled " + name + ".</p><p><a href='/modules'>Back</a></p>")
-}
-
-fn system_page(req: Request) Response {
-    let tools: string = "avr-gcc avr-objcopy avr-size avrdude ssh rsync"
-    return page(req, i18n_t(req, "page.system"), "<h2>System dependencies</h2><p>Tools the ecosystem needs.</p><p><a href='/'>Home</a></p>")
+    fetched_set(path, false)
+    info("keeper", "removed " + name + " from " + path)
+    return registry_back(req, status_ok(), title, "Uninstalled " + name + ".")
 }
 
 fn docs_page(req: Request) Response {
@@ -309,7 +420,7 @@ fn module_rows() string {
     // Discover modules from the registry directory
     let listing: string = ""
     let reg_dir: string = robohub_root() + "/registry/modules"
-    let code: u32 = rho_exec("sh", "-c \"ls " + reg_dir + "/\"", "build/reports/ls-modules.txt")
+    let code: u32 = rho_exec_args("ls", reg_dir + "\n", "build/reports/ls-modules.txt")
     if code == 0 {
         listing = rho_read_text("build/reports/ls-modules.txt")
     }
@@ -338,11 +449,17 @@ fn module_rows() string {
         let path: string = resolve_path(yaml.value(entry, "path"))
         let installed: string = "no"
         let version: string = ""
-        let badge: string = "<a href='/install?module=" + name + "'>install</a>"
+        var badge: string = "<form method='post' action='/install'><input type='hidden' name='module' value='" + name + "'><button type='submit'>Install</button></form>"
+        if !valid_name(name) {
+            continue
+        }
         if rho_path_exists(path + "/module.yml") {
             installed = "yes"
             version = yaml.value(path + "/module.yml", "module.version")
-            badge = "<a href='/uninstall?module=" + name + "'>uninstall</a>"
+            badge = ""
+            if fetched_by_keeper(path) {
+                badge = "<form method='post' action='/uninstall' onsubmit=\"return confirm('Remove this checkout?')\"><input type='hidden' name='module' value='" + name + "'><button type='submit' class='danger'>Uninstall</button></form>"
+            }
         }
         let row: string = template_fill(template_get("module-row"), vars("name", name) + vars("role", role) + vars("version", version) + vars("installed", installed) + vars("badge", badge))
         result = result + row

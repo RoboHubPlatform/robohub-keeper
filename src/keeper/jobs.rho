@@ -1,0 +1,305 @@
+//
+// @file jobs.rho
+// @brief Long work, out of the request.
+//
+// @module keeper.jobs
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.jobs
+
+// Long work, out of the request.
+//
+// Building an application, redeploying it and waiting for it to answer take from
+// seconds to minutes, and a page that waits for them freezes. Each is a job: a
+// script the keeper writes and starts in the background, one at a time per
+// application (a lock file says which application is busy), with its output in a
+// log and its outcome in a status file. Pages show the jobs in the strip at the
+// bottom, and the log is one click away.
+//
+//   jobs/<id>/run.sh    what the job does
+//   jobs/<id>/meta      name|action|started (epoch)
+//   jobs/<id>/status    running | done | failed, then the line that says why
+//   jobs/<id>/log       everything it printed
+
+import std.web.http
+
+/// How many finished jobs are kept.
+const JOBS_KEPT: u32 = 40
+
+/// How long, in seconds, a job is waited for to answer its health probe.
+const JOBS_HEALTH_SECONDS: u32 = 40
+
+fn jobs_dir() string {
+    return keeper_state_dir() + "/jobs"
+}
+
+fn job_dir(id: string) string {
+    return jobs_dir() + "/" + id
+}
+
+fn job_id_ok(id: string) bool {
+    return valid_name(id) && rho_strlen(id) <= 96
+}
+
+fn job_status(id: string) string {
+    return first_line(rho_read_text(job_dir(id) + "/status"))
+}
+
+// job_status_line is one line of the status file: the outcome, the reason, the
+// time it ended.
+fn job_status_line(id: string, index: u32) string {
+    var rest: string = rho_read_text(job_dir(id) + "/status")
+    var i: u32 = 0
+    while i < index {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        if at < 0 {
+            return ""
+        }
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        i = i + 1
+    }
+    return trim(first_line(rest))
+}
+
+fn job_reason(id: string) string {
+    return job_status_line(id, 1)
+}
+
+fn job_meta(id: string, index: u32) string {
+    let meta: string = first_line(rho_read_text(job_dir(id) + "/meta"))
+    return field(meta, index)
+}
+
+fn job_log(id: string) string {
+    return rho_read_text(job_dir(id) + "/log")
+}
+
+// job_ids are the jobs, newest first.
+fn job_ids() string {
+    if !rho_path_exists(jobs_dir()) {
+        return ""
+    }
+    let report: string = apps_report("jobs-list")
+    ignore_u32(rho_exec_args("ls", "-t\n" + jobs_dir() + "\n", report))
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if line != "" && rho_str_index_of(line, ".lock") < 0 && job_id_ok(line) && rho_path_exists(job_dir(line) + "/meta") {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// job_running_for is the job an application is busy with, or "".
+fn job_running_for(name: string) string {
+    var rest: string = job_ids()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var id: string = rest
+        if at < 0 { rest = "" } else { id = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(job_meta(id, 0), name) && rho_str_eq(job_status(id), "running") {
+            return id
+        }
+    }
+    return ""
+}
+
+// jobs_prune keeps the newest JOBS_KEPT jobs and removes the rest.
+fn jobs_prune() void {
+    var rest: string = job_ids()
+    var count: u32 = 0
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var id: string = rest
+        if at < 0 { rest = "" } else { id = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        count = count + 1
+        if count > JOBS_KEPT && !rho_str_eq(job_status(id), "running") {
+            ignore_u32(rho_exec_args("rm", "-rf\n--\n" + job_dir(id) + "\n", apps_report("jobs-prune")))
+        }
+    }
+}
+
+// job_health_lines is the shell that waits for an application to answer.
+fn job_health_lines(name: string) string {
+    let port: string = app_port_of(name)
+    if port == "" {
+        return ""
+    }
+    return "echo \"Waiting for " + name + " to answer on port " + port + " …\"\n" +
+        "i=0\nwhile [ $i -lt " + rho_int_to_str(JOBS_HEALTH_SECONDS) + " ]; do\n" +
+        "  if curl -fsS -m 2 -o /dev/null http://127.0.0.1:" + port + "/healthz; then echo \"" + name + " answers.\"; finish done; fi\n" +
+        "  i=$((i+1)); sleep 1\ndone\n" +
+        "journalctl --user -u " + shell_quote(app_unit_name(name) + ".service") + " -n 30 --no-pager -o short-iso || true\n" +
+        "finish failed \"" + name + " did not answer within " + rho_int_to_str(JOBS_HEALTH_SECONDS) + " seconds\"\n"
+}
+
+// job_build_lines is the shell that builds a folder from its sources. A
+// published package carries its program and has nothing to build.
+fn job_build_lines(name: string) string {
+    if rho_str_eq(catalog_get(name, "origin"), "registry") {
+        return "echo \"" + name + " is a published package; it runs as it was published.\"\n"
+    }
+    let location: string = shell_quote(catalog_get(name, "location"))
+    return "echo \"Building " + name + " …\"\n" +
+        "cd " + location + " || finish failed \"the folder is gone\"\n" +
+        "rm -rf build/generated\n" +
+        "rho build . || finish failed \"the build failed\"\n" +
+        "[ -x " + shell_quote(app_program(name)) + " ] || finish failed \"the build made no program\"\n"
+}
+
+// job_start writes a job and starts it in the background. `body` is the shell
+// that does the work, with `finish <status> [reason]` to end it. It answers the
+// job's id, or "" when the application is already busy.
+fn job_start(name: string, action: string, body: string) string {
+    if job_running_for(name) != "" {
+        return ""
+    }
+    ensure_keeper_state()
+    let id: string = rho_int_to_str(auth_now()) + "-" + name + "-" + action + "-" + rho_str_slice(rho_random_hex(3), 0, 4)
+    let dir: string = job_dir(id)
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "\n", apps_report("jobs-mkdir")))
+    ignore_bool(rho_write_text(dir + "/meta", name + "|" + action + "|" + rho_int_to_str(auth_now()) + "\n"))
+    ignore_bool(rho_write_text(dir + "/status", "running\n"))
+    let script: string = "#!/bin/sh\n# " + action + " " + name + ", written by the RoboHub keeper.\n" +
+        "STATUS=" + shell_quote(dir + "/status") + "\n" +
+        "finish() { printf '%s\\n%s\\n%s\\n' \"$1\" \"${2:-}\" \"$(date +%s)\" > \"$STATUS\"; exit 0; }\n" +
+        "trap 'finish failed \"the job was interrupted\"' INT TERM\n" +
+        "export PATH=" + shell_quote(getenv("PATH")) + "\n" +
+        "echo \"[$(date -Iseconds)] " + action + " " + name + "\"\n" +
+        body +
+        "finish done\n"
+    ignore_bool(rho_write_text(dir + "/run.sh", script))
+    let lock: string = jobs_dir() + "/" + name + ".lock"
+    let launch: string = "cd " + shell_quote(dir) + " && nohup flock -n " + shell_quote(lock) +
+        " sh run.sh > log 2>&1 < /dev/null &"
+    ignore_u32(rho_exec_args("sh", "-c\n" + launch + "\n", apps_report("jobs-launch")))
+    jobs_prune()
+    info("keeper", "job " + id + " started")
+    keeper_event("job.started", name, action + " " + name)
+    return id
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The jobs an application has                                               */
+/* -------------------------------------------------------------------------- */
+
+// job_build builds an application; what runs is not touched.
+fn job_build(name: string) string {
+    return job_start(name, "build", job_build_lines(name))
+}
+
+// job_redeploy builds, writes the unit for where the application is now, restarts
+// it and waits for it to answer.
+fn job_redeploy(name: string) string {
+    let unit: string = shell_quote(app_unit_name(name))
+    return job_start(name, "redeploy", job_build_lines(name) +
+        "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
+        job_health_lines(name))
+}
+
+// job_start_built builds an application that has never been built, then starts it.
+fn job_start_built(name: string) string {
+    let unit: string = shell_quote(app_unit_name(name))
+    return job_start(name, "start", job_build_lines(name) +
+        "systemctl --user start " + unit + " || finish failed \"systemd could not start it\"\n" +
+        job_health_lines(name))
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The strip                                                                 */
+/* -------------------------------------------------------------------------- */
+
+fn job_action_words(action: string) string {
+    if rho_str_eq(action, "build") { return "Building" }
+    if rho_str_eq(action, "redeploy") { return "Redeploying" }
+    if rho_str_eq(action, "start") { return "Building and starting" }
+    if rho_str_eq(action, "install") { return "Installing for" }
+    return action
+}
+
+// jobs_strip is the line at the bottom of every page: what is running, and how
+// the last job ended when it ended in the last two minutes.
+fn jobs_strip() string {
+    var running: string = ""
+    var last: string = ""
+    let now: u32 = auth_now()
+    var rest: string = job_ids()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var id: string = rest
+        if at < 0 { rest = "" } else { id = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let status: string = job_status(id)
+        // A job that ended is said once, to every open page, through the shared
+        // notifications module.
+        if !rho_str_eq(status, "running") && status != "" && !rho_path_exists(job_dir(id) + "/announced") {
+            ignore_bool(rho_write_text(job_dir(id) + "/announced", "\n"))
+            let words: string = job_meta(id, 0) + ": " + job_meta(id, 1)
+            if rho_str_eq(status, "failed") {
+                notification_live_event("err", words + " failed — " + job_reason(id))
+                keeper_event("job.failed", job_meta(id, 0), words + " failed — " + job_reason(id))
+            } else {
+                notification_live_event("ok", words + " done")
+                keeper_event("job.done", job_meta(id, 0), words + " done")
+            }
+        }
+        let name: string = escape_html(job_meta(id, 0))
+        let link: string = "<a href=\"/jobs/" + escape_html(id) + "\">"
+        if rho_str_eq(status, "running") {
+            let elapsed: u32 = now - u32(rho_int_from_str(job_meta(id, 2)))
+            running = running + "<span class=\"job busy\">" + link + job_action_words(job_meta(id, 1)) + " " + name +
+                "</a> <small>" + rho_int_to_str(elapsed) + " s</small></span>"
+        } else if last == "" {
+            let ended: u32 = u32(rho_int_from_str(job_status_line(id, 2)))
+            if now < ended + 120 {
+                var tone: string = "ok"
+                var words: string = name + ": " + job_meta(id, 1) + " done"
+                if rho_str_eq(status, "failed") {
+                    tone = "bad"
+                    words = name + ": " + escape_html(job_reason(id))
+                }
+                last = "<span class=\"job " + tone + "\">" + link + words + "</a></span>"
+            }
+        }
+    }
+    if running == "" && last == "" {
+        return "<span class=\"job idle\">No jobs running.</span>"
+    }
+    return running + last
+}
+
+fn jobs_strip_endpoint(req: Request) Response {
+    return html(status_ok(), jobs_strip())
+}
+
+fn job_page(req: Request) Response {
+    let id: string = param(req, "id")
+    if !job_id_ok(id) || !rho_path_exists(job_dir(id) + "/meta") {
+        return page_status(req, status_not_found(), "Job", "<p>No such job.</p>")
+    }
+    let status: string = job_status(id)
+    var refresh: string = ""
+    if rho_str_eq(status, "running") {
+        refresh = "<div hx-get=\"/jobs/" + escape_html(id) + "/log\" hx-trigger=\"every 2s\" hx-target=\"#job-log\" hx-swap=\"innerHTML\"></div>"
+    }
+    let body: string = "<h1>" + escape_html(job_action_words(job_meta(id, 1)) + " " + job_meta(id, 0)) + "</h1>" +
+        "<p>Status: <b>" + escape_html(status) + "</b> " + escape_html(job_reason(id)) + "</p>" + refresh +
+        "<pre id=\"job-log\" class=\"log\">" + escape_html(job_log(id)) + "</pre>"
+    return page(req, "Job " + id, body)
+}
+
+fn job_log_endpoint(req: Request) Response {
+    let id: string = param(req, "id")
+    if !job_id_ok(id) {
+        return html(status_not_found(), "")
+    }
+    return html(status_ok(), escape_html(job_log(id)))
+}

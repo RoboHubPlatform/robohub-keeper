@@ -1,3 +1,15 @@
+//
+// @file plugins.rho
+// @brief The keeper's plugin registry.
+//
+// @module keeper.plugins
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-02
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.plugins
 
 // The keeper's plugin registry.
@@ -165,7 +177,7 @@ fn plugins_page_message(req: Request, message: string) Response {
     let body: string = template_fill(template_get("plugins"),
         vars("notice", notice) + vars("channels", channel_rows_html()) +
         vars("rows", plugin_rows_html()) +
-        vars("root", plugin_root()))
+        vars("root", plugin_root()) + vars("install_form", keeper_install_form("/plugins/install", "robohub-auth", "https://github.com/RoboHubPlatform/robohub-plugin or /path/to/plugin", "A git URL, or a folder with a plugin module.yml.")))
     return page(req, i18n_t(req, "page.plugins"), body)
 }
 
@@ -174,6 +186,9 @@ fn plugins_page(req: Request) Response {
 }
 
 fn plugins_toggle(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     let enabled: string = form_value(body, "enabled")
@@ -210,6 +225,9 @@ fn plugins_toggle(req: Request) Response {
 }
 
 fn plugins_test(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !keeper_alert_bound(name) {
@@ -261,7 +279,13 @@ fn plugin_source_name(source: string) string {
 }
 
 fn plugins_install(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
+    }
     var name: string = trim(form_value(body, "name"))
     let source: string = trim(form_value(body, "source"))
     if source == "" {
@@ -277,17 +301,17 @@ fn plugins_install(req: Request) Response {
     if rho_path_exists(target) {
         return plugins_page_message(req, name + " is already installed.")
     }
-    ignore_u32(rho_exec("mkdir", "-p " + plugin_root(), apps_report("mkdir-plugins")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + plugin_root() + "\n", apps_report("mkdir-plugins")))
     var code: u32 = 0
     if source_is_git(source) {
-        code = rho_exec("git", "clone " + arg_quote(source) + " " + arg_quote(target),
+        code = rho_exec_args("git", "clone\n--\n" + source + "\n" + target + "\n",
             apps_report("install-plugin-" + name))
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
             return plugins_page_message(req, "No plugin module.yml at " + path + ".")
         }
-        code = rho_exec("cp", "-r " + arg_quote(path) + " " + arg_quote(target),
+        code = rho_exec_args("cp", "-r\n" + path + "\n" + target + "\n",
             apps_report("install-plugin-" + name))
     }
     if code != 0 {
@@ -296,7 +320,7 @@ fn plugins_install(req: Request) Response {
     // A plugin says what kind it is: `module.plugin_kind`, as every plugin here
     // is written, or a `plugin:` block.
     if plugin_field(target + "/module.yml", "kind") == "" {
-        ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("remove-not-plugin")))
+        ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n", apps_report("remove-not-plugin")))
         return plugins_page_message(req, source + " is not a plugin module.")
     }
     ignore_bool(plugin_db_add(plugin_root(), name))
@@ -305,6 +329,9 @@ fn plugins_install(req: Request) Response {
 }
 
 fn plugins_uninstall(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let name: string = trim(form_value(body, "name"))
     if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
@@ -312,7 +339,7 @@ fn plugins_uninstall(req: Request) Response {
     }
     let target: string = plugin_root() + "/" + name
     ignore_bool(plugin_db_remove(plugin_root(), name))
-    ignore_u32(rho_exec("rm", "-rf " + arg_quote(target), apps_report("uninstall-plugin-" + name)))
+    ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n", apps_report("uninstall-plugin-" + name)))
     info("keeper", "uninstalled plugin " + name)
     if htmx_is_request(req) {
         return html(status_ok(), "")

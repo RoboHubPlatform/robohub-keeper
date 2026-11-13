@@ -1,0 +1,142 @@
+# Whole labels as the keeper writes them in English, and what a Romanian page
+# shows instead: English and Romanian separated by a tab, one per line. A label
+# that carries a name or a number is not here; it stays as it is.
+Account	Cont
+Account and password	Cont și parolă
+Actions	Acțiuni
+Add	Adaugă
+Add to menu	Adaugă în meniu
+Add…	Adaugă…
+Alert channels	Canale de alertă
+All	Toate
+All docs	Toată documentația
+App modules	Module de aplicație
+Application	Aplicație
+Applications	Aplicații
+Applying this change	Aplicarea modificării
+Back	Înapoi
+Build	Compilează
+Cancel	Renunță
+Change	Modifică
+Change it	Schimb-o
+Change your password	Schimbă-ți parola
+Check what it needs	Verifică de ce are nevoie
+Choose a person	Alege o persoană
+Choose an application	Alege o aplicație
+Client	Client
+Dependencies	Dependențe
+Docs	Documentație
+Documentation	Documentație
+Empty keeps the password.	Gol păstrează parola.
+Every application found on this machine is in the keeper.	Fiecare aplicație găsită pe acest calculator este deja în keeper.
+Environment	Mediu
+First run	Prima pornire
+Found on this machine	Găsite pe acest calculator
+Home	Acasă
+Inspector	Inspector
+Install	Instalează
+Install a module	Instalează un modul
+Install a plugin	Instalează un plugin
+Install a provider	Instalează un furnizor
+Install an application	Instalează o aplicație
++ Install an application	+ Instalează o aplicație
+Installed plugins	Pluginuri instalate
+Installing	Instalare
+Its identity	Identitatea ei
+Its page	Pagina ei
+Its state, log, environment and actions appear here.	Starea, jurnalul, mediul și acțiunile ei apar aici.
+Job	Job
+Jobs	Joburi
+Language	Limbă
+Loading…	Se încarcă…
+Location	Locație
+Log	Jurnal
+Looking…	Se caută…
+Machine	Calculator
+Make my account	Creează-mi contul
+Make the admin and sign in	Creează administratorul și intră
+Make your account	Creează-ți contul
+Name	Nume
+New client secret	Secret nou de client
+New password	Parolă nouă
+No access	Fără acces
+No jobs running.	Niciun job în curs.
+No jobs yet. Builds and redeploys appear here.	Încă niciun job. Compilările și redistribuirile apar aici.
+Not allowed	Nepermis
+Nothing here.	Nimic aici.
+Nothing recorded yet.	Nimic înregistrat încă.
+Open	Deschide
+Open application ↗	Deschide aplicația ↗
+Outcome	Rezultat
+Overview	Prezentare
+Password	Parolă
+People	Oameni
+Person	Persoană
+Plugins	Pluginuri
+Port	Port
+Providers	Furnizori
+Recovery token	Token de recuperare
+Redeploy	Redistribuie
+Registry	Registru
+Remove	Elimină
+Remove from menu	Scoate din meniu
+Restart	Repornește
+Role	Rol
+Rotate the signing key	Schimbă cheia de semnare
+Route	Rută
+Running	Pornite
+Save	Salvează
+Send test	Trimite un test
+Settings	Setări
+Shown as	Afișat ca
+Sign in	Intră
+Sign out	Ieși
+Sign out everywhere	Ieși peste tot
+Signed in	Conectat
+Signing key	Cheie de semnare
+Start	Pornește
+Started	Pornit
+State	Stare
+Status	Stare
+Stop	Oprește
+The first admin	Primul administrator
+The same again	Încă o dată
+Their access appears here.	Accesul ei apare aici.
+Theme	Temă
+This machine	Acest calculator
+Toolchain	Toolchain
+Uninstall	Dezinstalează
+Unit	Unitate
+Update token	Actualizează tokenul
+Users & access	Utilizatori și acces
+Version	Versiune
+What it is started with	Cu ce pornește
+What these do	Ce fac acestea
+What you may use	Ce poți folosi
+Where	Unde
+Why	De ce
+You	Tu
+Folder	Dosar
+Kind	Tip
+Applications declare an	Aplicațiile declară un bloc
+running	pornită
+stopped	oprită
+failed	eșuată
+starting	pornește
+not built	necompilată
+no service	fără serviciu
+this keeper	acest keeper
+done	gata
+admin	administrator
+operator	operator
+viewer	cititor
+Everything	Tot
+Read	Citire
+Particular…	Anume…
+Build leaves what runs alone; Restart runs the newest build; Redeploy builds, restarts and waits for it to answer.	Compilează nu atinge ce rulează; Repornește rulează cea mai nouă compilare; Redistribuie compilează, repornește și așteaptă să răspundă.
+Their next sign-in to an application carries the new grants; an admin reaches every application whatever is set here.	La următoarea intrare într-o aplicație are noile drepturi; un administrator ajunge în orice aplicație, orice s-ar seta aici.
+Signed in once, you are signed in to every RoboHub application you may use.	Intrat o dată, ești intrat în fiecare aplicație RoboHub pe care o poți folosi.
+Applications in the workspace, the module registry or the orchestrator that the keeper does not run yet.	Aplicații din spațiul de lucru, din registrul de module sau din orchestrator pe care keeperul nu le rulează încă.
+Its manifest names nothing it needs from the machine.	Manifestul ei nu cere nimic de la calculator.
+It names no Rho modules outside RoboHub's own.	Nu cere module Rho în afara celor RoboHub.
+It depends on no other application and calls no service.	Nu depinde de altă aplicație și nu cheamă niciun serviciu.

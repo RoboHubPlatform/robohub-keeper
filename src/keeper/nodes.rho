@@ -1,3 +1,15 @@
+//
+// @file nodes.rho
+// @brief Enrolled node identities.
+//
+// @module keeper.nodes
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-09
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.nodes
 
 // Enrolled node identities: the record Keeper issued, and the actions an
@@ -13,6 +25,9 @@ fn node_path(device: string) string {
 }
 
 fn node_record(device: string) string {
+    if !valid_name(device) {
+        return ""
+    }
     let path: string = node_path(device)
     if !rho_path_exists(path) {
         return ""
@@ -31,7 +46,7 @@ fn node_status(device: string) string {
 
 fn node_rows() string {
     let report: string = apps_report("node-list")
-    ignore_u32(rho_exec("ls", node_dir(), report))
+    ignore_u32(rho_exec_args("ls", node_dir() + "\n", report))
     var out: string = ""
     var rest: string = rho_read_text(report)
     while rest != "" {
@@ -79,32 +94,38 @@ fn keeper_nodes_page(req: Request) Response {
 }
 
 fn keeper_nodes_revoke(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let device: string = trim(form_value(body, "device"))
-    if device != "" {
-        ignore_u32(rho_exec("rm", "-f " + node_path(device), apps_report("node-revoke")))
-        info("keeper", "revoked node " + device)
+    if node_record(device) == "" {
+        return keeper_nodes_page_message(req, "That node is not enrolled.")
     }
+    ignore_u32(rho_exec_args("rm", "-f\n" + node_path(device) + "\n", apps_report("node-revoke")))
+    info("keeper", "revoked node " + device)
     return keeper_nodes_page_message(req, "Node " + device + " was revoked.")
 }
 
 fn keeper_nodes_rotate(req: Request) Response {
+    if !keeper_allowed(req, "admin") {
+        return keeper_refused(req)
+    }
     let body: string = request_body(req)
     let device: string = trim(form_value(body, "device"))
     let record: string = node_record(device)
     if record == "" {
-        return keeper_nodes_page_message(req, "Node " + device + " is not enrolled.")
+        return keeper_nodes_page_message(req, "That node is not enrolled.")
     }
-    let report: string = apps_report("node-rotate")
-    if rho_exec("openssl", "rand -hex 32", report) != 0 {
+    let credential: string = rho_random_hex(32)
+    if rho_strlen(credential) != 64 {
         return keeper_nodes_page_message(req, "Could not generate a new credential.")
     }
-    let credential: string = first_line(rho_read_text(report))
     let updated: string = field(record, 0) + "|" + field(record, 1) + "|" + field(record, 2) +
         "|" + field(record, 3) + "|" + field(record, 4) + "|" + credential +
         "|" + field(record, 6) + "\n"
     ignore_bool(rho_write_secret(node_path(device), updated))
-    ignore_u32(rho_exec("chmod", "600 " + node_path(device), apps_report("node-chmod")))
+    ignore_u32(rho_exec_args("chmod", "600\n" + node_path(device) + "\n", apps_report("node-chmod")))
     info("keeper", "rotated credential for node " + device)
     return keeper_nodes_page_message(req, "New credential for " + device + ": " + credential)
 }
@@ -116,7 +137,7 @@ fn keeper_node_verify(req: Request) Response {
     let device: string = trim(form_value(body, "device_id"))
     let credential: string = trim(form_value(body, "credential"))
     let record: string = node_record(device)
-    if record == "" || field(record, 5) != credential {
+    if record == "" || !auth_same(credential, field(record, 5)) {
         return Response{ 403, "{\"ok\":false,\"error\":\"unknown node or credential\"}", "application/json", "" }
     }
     return Response{ 200,

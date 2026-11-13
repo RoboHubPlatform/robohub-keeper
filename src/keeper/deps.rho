@@ -1,0 +1,390 @@
+//
+// @file deps.rho
+// @brief What an application needs, at three levels, and whether it has it.
+//
+// @module keeper.deps
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-13
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.deps
+
+// What an application needs, at three levels, and whether it has it.
+//
+//   machine  the programs and permissions its manifest's system_deps name, as
+//            `rho doctor --path` finds them
+//   rho      the Rho modules its manifest's deps name outside the robohub group,
+//            as the module registry has them
+//   robohub  the applications it depends on (deploy.depends) and the services it
+//            calls (deploy.calls), as the catalogue has them
+//
+// A required program that is missing stops the application from starting, and
+// the inspector offers to install it: a job that runs `rho keeper install`, which
+// fetches into ~/.rho/toolchains when it can and runs the package manager when it
+// must.
+
+import std.web.http
+
+/// How long, in seconds, a machine report is kept before it is asked again.
+const DEPS_FRESH_SECONDS: u32 = 120
+
+fn deps_dir() string {
+    return keeper_state_dir() + "/deps"
+}
+
+// deps_machine_report is `rho doctor --tsv` for an application's folder, one
+// requirement per line: module, dep, kind, required, status, found version,
+// message, how to install. It is kept for DEPS_FRESH_SECONDS unless `fresh`.
+fn deps_machine_report(name: string, fresh: bool) string {
+    let file: string = deps_dir() + "/" + name + ".tsv"
+    let stamp: string = deps_dir() + "/" + name + ".at"
+    let now: u32 = auth_now()
+    if !fresh && rho_path_exists(file) && now < u32(rho_int_from_str(first_line(rho_read_text(stamp)))) + DEPS_FRESH_SECONDS {
+        return rho_read_text(file)
+    }
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + deps_dir() + "\n", apps_report("mkdir-deps")))
+    ignore_u32(rho_exec_args("rho", "doctor\n--tsv\n--path\n" + catalog_get(name, "location") + "\n", file))
+    // The doctor logs a line to standard error, which lands in the same file.
+    var out: string = ""
+    var rest: string = rho_read_text(file)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if tsv_field(line, 4) != "" && !rho_str_starts_with(line, "[") {
+            out = out + line + "\n"
+        }
+    }
+    ignore_bool(rho_write_text(file, out))
+    ignore_bool(rho_write_text(stamp, rho_int_to_str(now) + "\n"))
+    return out
+}
+
+// deps_missing is the required programs an application lacks, one per line.
+fn deps_missing(name: string, fresh: bool) string {
+    var out: string = ""
+    var rest: string = deps_machine_report(name, fresh)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let status: string = tsv_field(line, 4)
+        if rho_str_eq(tsv_field(line, 3), "yes") && (rho_str_eq(status, "MISSING") || rho_str_eq(status, "OUTDATED")) {
+            out = out + tsv_field(line, 1) + "\n"
+        }
+    }
+    return out
+}
+
+// deps_selected is the version of a Rho module the registry selects, or "".
+fn deps_selected(listing: string, wanted_module: string) string {
+    var rest: string = listing
+    var any: string = ""
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(tsv_field(line, 1), wanted_module) {
+            any = tsv_field(line, 2)
+            if rho_str_eq(tsv_field(line, 4), "selected") {
+                return any
+            }
+        }
+    }
+    return any
+}
+
+fn deps_row(tone: string, label: string, detail: string, action: string) string {
+    return "<div class=\"rh-row " + tone + "\"><b>" + escape_html(label) + "</b><span title=\"" + escape_html(detail) + "\">" +
+        escape_html(detail) + "</span>" + action + "</div>"
+}
+
+// deps_report_rows is a machine report as rows. With `name` (an application in
+// the catalogue) what is missing has an Install button; without, the rows only
+// say what the machine has, as a preview before anything is installed.
+fn deps_report_rows(report: string, name: string) string {
+    var out: string = ""
+    var rest: string = report
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let dep: string = tsv_field(line, 1)
+        if dep == "" {
+            continue
+        }
+        let status: string = tsv_field(line, 4)
+        var tone: string = "ok"
+        var detail: string = tsv_field(line, 6)
+        var action: string = ""
+        if rho_str_eq(status, "MISSING") || rho_str_eq(status, "OUTDATED") {
+            tone = "bad"
+            if rho_str_eq(tsv_field(line, 3), "no") {
+                tone = "warn"
+            }
+            detail = detail + " · " + tsv_field(line, 7)
+            if name != "" {
+                action = "<button type=\"button\" class=\"small\" hx-post=\"/overview/app/" + escape_html(name) + "/install-dep?dep=" +
+                    escape_html(dep) + "&module=" + escape_html(tsv_field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\">Install</button>"
+            }
+        } else if !rho_str_eq(status, "OK") {
+            tone = "warn"
+        }
+        out = out + deps_row(tone, dep, detail, action)
+    }
+    if out == "" {
+        return "<p class=\"rh-empty\">Its manifest names nothing it needs from the machine.</p>"
+    }
+    return out
+}
+
+// deps_machine_rows is the machine level as the inspector shows it, with an
+// Install button on what is missing.
+fn deps_machine_rows(name: string) string {
+    return deps_report_rows(deps_machine_report(name, true), name)
+}
+
+// deps_folder_report is the machine report for a folder that is not in the
+// catalogue yet.
+fn deps_folder_report(path: string) string {
+    let report: string = apps_report("deps-preview")
+    ignore_u32(rho_exec_args("rho", "doctor\n--tsv\n--path\n" + path + "\n", report))
+    var out: string = ""
+    var rest: string = rho_read_text(report)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if tsv_field(line, 4) != "" && !rho_str_starts_with(line, "[") {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// deps_rho_rows is the Rho modules the manifest names outside the robohub group.
+fn deps_rho_rows(name: string) string {
+    return deps_rho_rows_at(catalog_get(name, "location"))
+}
+
+fn deps_rho_rows_at(location: string) string {
+    let manifest: string = manifest_of(location)
+    let report: string = apps_report("deps-modules")
+    ignore_u32(rho_exec_args("rho", "module\nlist\n--format\ntsv\n", report))
+    let listing: string = rho_read_text(report)
+    var out: string = ""
+    var rest: string = yaml.keys(manifest, "deps")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var dep_module: string = rest
+        if at < 0 { rest = "" } else { dep_module = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if dep_module == "" || rho_str_eq(dep_module, "robohub") {
+            continue
+        }
+        let wanted: string = yaml.value(manifest, "deps." + dep_module)
+        let have: string = deps_selected(listing, dep_module)
+        if have == "" {
+            out = out + deps_row("bad", dep_module, "not installed · wants " + wanted + " · rho module install " + dep_module, "")
+        } else {
+            out = out + deps_row("ok", dep_module, have + " · wants " + wanted, "")
+        }
+    }
+    if out == "" {
+        return "<p class=\"rh-empty\">It names no Rho modules outside RoboHub's own.</p>"
+    }
+    return out
+}
+
+// deps_robohub_rows is the applications it depends on and the services it calls.
+fn deps_robohub_rows(name: string) string {
+    return deps_robohub_rows_at(name, catalog_get(name, "location"))
+}
+
+fn deps_robohub_rows_at(name: string, location: string) string {
+    var out: string = ""
+    var rest: string = app_depends(name, location) + app_calls(location)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var item: string = rest
+        if at < 0 { rest = "" } else { item = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let colon: i32 = rho_str_index_of(item, ":")
+        var service: string = item
+        if colon >= 0 { service = rho_str_slice(item, 0, u32(colon)) }
+        if service == "" || rho_str_eq(service, name) {
+            continue
+        }
+        if !catalog_has(service) {
+            out = out + deps_row("warn", service, "not an application of this keeper; a service an application starts", "")
+            continue
+        }
+        let state: string = app_state(service)
+        var tone: string = "ok"
+        if !rho_str_eq(state, "running") && !rho_str_eq(state, "keeper") {
+            tone = "warn"
+        }
+        out = out + deps_row(tone, service, state + " · :" + app_port_of(service), "")
+    }
+    if out == "" {
+        return "<p class=\"rh-empty\">It depends on no other application and calls no service.</p>"
+    }
+    return out
+}
+
+fn deps_inspector_body(name: string) string {
+    return "<div class=\"rh-sec\">Machine</div>" + deps_machine_rows(name) +
+        "<div class=\"rh-sec\">Rho</div>" + deps_rho_rows(name) +
+        "<div class=\"rh-sec\">RoboHub</div>" + deps_robohub_rows(name)
+}
+
+// deps_install_job installs one requirement of an application in the background.
+// The module is the one the doctor named; `rho keeper install` looks the
+// requirement up again rather than running a command the request carried.
+fn deps_install_job(name: string, owner: string, dep: string) string {
+    if !valid_name(owner) || !valid_name(dep) {
+        return "That is not a requirement."
+    }
+    if !line_in_list(deps_missing(name, true) + deps_optional_missing(name), dep) {
+        return dep + " is already there."
+    }
+    let location: string = shell_quote(catalog_get(name, "location"))
+    let id: string = job_start(name, "install", "echo \"Installing " + dep + " for " + name + " …\"\n" +
+        "rho keeper install " + shell_quote(owner) + " " + shell_quote(dep) + " --path " + location + " --yes < /dev/null || " +
+        "finish failed \"" + dep + " could not be installed here; the log says how to do it by hand\"\n" +
+        "rho doctor --tsv --path " + location + " | grep -q \"\t" + dep + "\t.*\tOK\t\" || finish failed \"" + dep + " is still missing\"\n")
+    ignore_u32(rho_exec_args("rm", "-f\n" + deps_dir() + "/" + name + ".at\n", apps_report("deps-forget")))
+    if id == "" {
+        return name + " is busy with a job."
+    }
+    return "Installing " + dep + " for " + name + "."
+}
+
+// deps_optional_missing is the requirements an application can do without that
+// are missing, one per line.
+fn deps_optional_missing(name: string) string {
+    var out: string = ""
+    var rest: string = deps_machine_report(name, false)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(tsv_field(line, 3), "no") && !rho_str_eq(tsv_field(line, 4), "OK") {
+            out = out + tsv_field(line, 1) + "\n"
+        }
+    }
+    return out
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Before installing, and the machine as a whole                             */
+/* -------------------------------------------------------------------------- */
+
+// deps_preview_page shows what installing an application means before it is
+// installed: where it is, the port and unit it would get, and what it needs at
+// the three levels. A git URL is checked once it is cloned, so it goes straight
+// to Install, which does not start what lacks a required program.
+fn deps_preview_page(req: Request) Response {
+    let add: string = trim(query_str(req, "add"))
+    let source: string = trim(query_str(req, "source"))
+    var name: string = trim(query_str(req, "name"))
+    var path: string = ""
+    var hidden: string = ""
+    if add != "" {
+        path = record_path(catalog_candidates(), add)
+        name = add
+        hidden = "<input type=\"hidden\" name=\"add\" value=\"" + escape_html(add) + "\">"
+    } else if source != "" && arg_ok(source) && !source_is_git(source) {
+        path = app_canonical(resolve_path(source))
+        if name == "" {
+            name = yaml.value(manifest_of(path), "module.name")
+        }
+        hidden = "<input type=\"hidden\" name=\"source\" value=\"" + escape_html(path) + "\"><input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) + "\">"
+    }
+    if path == "" || !rho_path_exists(manifest_of(path)) {
+        return page(req, "Install", "<h1>Install</h1><div class=\"notice warn\">Nothing to check there: name an application found on this machine, or a folder with a module.yml. A git URL is checked once it is cloned.</div><p><a href=\"/applications#install\">Back</a></p>")
+    }
+    if !valid_name(name) || catalog_has(name) {
+        return page(req, "Install", "<h1>Install</h1><div class=\"notice warn\">" + escape_html(name) + " is already in the keeper, or is not a plain name.</div><p><a href=\"/applications\">Back</a></p>")
+    }
+    let report: string = deps_folder_report(path)
+    var blocked: string = ""
+    var rest: string = report
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let status: string = tsv_field(line, 4)
+        if rho_str_eq(tsv_field(line, 3), "yes") && (rho_str_eq(status, "MISSING") || rho_str_eq(status, "OUTDATED")) {
+            blocked = blocked + tsv_field(line, 1) + " "
+        }
+    }
+    var impact: string = "Installing writes its unit and its environment and starts it. Nothing else restarts."
+    if blocked != "" {
+        impact = "It is recorded and given its unit, but it does not start until the machine has: " + trim(blocked) + ". Its Dependencies can install them."
+    }
+    var kind_note: string = ""
+    if app_kind(path) != "keeper-hosted" {
+        kind_note = "<div class=\"notice bad\">This is not a keeper-hosted application; the keeper cannot run it.</div>"
+    }
+    let body: string = "<div class=\"rh-kick\">Install · application</div><div class=\"rh-h\"><h1>" + escape_html(app_title(name, path)) +
+        "</h1><span>" + escape_html(app_version(path)) + "</span></div>" + kind_note +
+        "<div style=\"max-width:44rem;display:grid;gap:.6rem\">" +
+        "<div class=\"rh-sec\">Where</div>" + overview_row("Folder", path) +
+        overview_row("Port", catalog_allocate_port(name, app_port(path))) + overview_row("Unit", name + ".service") +
+        "<div class=\"rh-sec\">Machine</div>" + deps_report_rows(report, "") +
+        "<div class=\"rh-sec\">Rho</div>" + deps_rho_rows_at(path) +
+        "<div class=\"rh-sec\">RoboHub</div>" + deps_robohub_rows_at(name, path) +
+        "<div class=\"rh-impact\"><b>Installing</b><span>" + escape_html(impact) + "</span></div>" +
+        "<form method=\"post\" action=\"/applications/install\" class=\"form-actions\">" + forms_csrf_field() + hidden +
+        "<label class=\"check\"><input type=\"checkbox\" name=\"menu\" value=\"1\"> Add to the keeper menu</label>" +
+        "<a class=\"button quiet\" href=\"/applications\">Cancel</a><button type=\"submit\">Install</button></form></div>"
+    return page(req, "Install " + name, body)
+}
+
+// system_page is the machine as a whole: what every application in the keeper
+// needs from it, and what the installed toolchain modules need.
+fn system_page(req: Request) Response {
+    var apps: string = ""
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var name: string = rest
+        if at < 0 { rest = "" } else { name = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if name == "" {
+            continue
+        }
+        apps = apps + "<div class=\"rh-sec\">" + escape_html(app_title(name, app_path(name))) + "</div>" +
+            deps_report_rows(deps_machine_report(name, false), "")
+    }
+    let report: string = apps_report("deps-toolchain")
+    ignore_u32(rho_exec_args("rho", "doctor\n--tsv\n--enabled\n", report))
+    var toolchain: string = ""
+    var current: string = ""
+    var lines: string = rho_read_text(report)
+    while lines != "" {
+        let at: i32 = rho_str_index_of(lines, "\n")
+        var line: string = lines
+        if at < 0 { lines = "" } else { line = rho_str_slice(lines, 0, u32(at)); lines = rho_str_slice(lines, u32(at) + 1, u32(rho_strlen(lines)) - u32(at) - 1) }
+        if tsv_field(line, 4) == "" || rho_str_starts_with(line, "[") {
+            continue
+        }
+        let owner: string = tsv_field(line, 0)
+        if !rho_str_eq(owner, current) {
+            toolchain = toolchain + "<div class=\"rh-sec\">" + escape_html(owner) + "</div>"
+            current = owner
+        }
+        toolchain = toolchain + deps_report_rows(line + "\n", "")
+    }
+    if toolchain == "" {
+        toolchain = "<p class=\"rh-empty\">No enabled toolchain module declares what it needs.</p>"
+    }
+    let body: string = "<div class=\"rh-h\"><h1>Dependencies</h1><span>what this machine has, against what is asked of it</span></div>" +
+        "<p>Each application's own needs are on its card's Dependencies tab, which installs what is missing. " +
+        "In a terminal: <code>rho doctor</code> reads the same, and <code>rho keeper sync</code> installs it.</p>" +
+        "<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(22rem,1fr));gap:1.4rem;align-items:start\">" +
+        "<section style=\"display:grid;gap:.45rem\"><h2>Applications</h2>" + apps + "</section>" +
+        "<section style=\"display:grid;gap:.45rem\"><h2>Toolchain</h2>" + toolchain + "</section></div>"
+    return page(req, i18n_t(req, "page.system"), body)
+}

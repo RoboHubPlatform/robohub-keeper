@@ -1,3 +1,15 @@
+//
+// @file alerts.rho
+// @brief Where the keeper's plugins are, and how the keeper raises an alert.
+//
+// @module keeper.alerts
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-02
+//
+// SPDX-License-Identifier: MIT
+//
+
 module keeper.alerts
 
 // Where the keeper's plugins are, and how the keeper raises an alert. It lives
@@ -8,18 +20,6 @@ fn plugin_root() string {
     return robohub_root() + "/plugins"
 }
 
-fn keeper_manifest_path() string {
-    if rho_path_exists("module.yml") &&
-        yaml.value("module.yml", "module.name") == "keeper" {
-        return "module.yml"
-    }
-    // The manifest the application was built from travels with it.
-    let path: string = rho_asset_dir("keeper") + "/module.yml"
-    if rho_path_exists(path) {
-        return path
-    }
-    return ""
-}
 
 fn keeper_plugin_state_file() string {
     ensure_keeper_state()
