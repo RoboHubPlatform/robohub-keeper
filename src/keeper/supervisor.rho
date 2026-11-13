@@ -200,6 +200,24 @@ fn app_secret(name: string) string {
     return value
 }
 
+// env_quote is a value as systemd's environment file reads it whole: in double
+// quotes, with a quote or a backslash in it escaped. Unquoted, a value stops at
+// its first space — a PATH holding `/mnt/c/Program Files/...`, as WSL's does,
+// lost every directory after it, and with them powershell.exe.
+fn env_quote(value: string) string {
+    var out: string = "\""
+    var i: u32 = 0
+    while i < u32(rho_strlen(value)) {
+        let ch: string = rho_str_slice(value, i, 1)
+        if rho_str_eq(ch, "\"") || rho_str_eq(ch, "\\") {
+            out = out + "\\"
+        }
+        out = out + ch
+        i = i + 1
+    }
+    return out + "\""
+}
+
 // app_environment is the contract above for one application, as KEY=value lines.
 fn app_environment(name: string) string {
     let location: string = catalog_get(name, "location")
@@ -213,8 +231,8 @@ fn app_environment(name: string) string {
         "ROBOHUB_KEEPER_URL=" + keeper_url() + "\n" +
         "RHO_KEEPER_PORT=" + keeper_listen_port() + "\n" +
         "ROBOHUB_APP_MANIFEST=" + app_manifest_in_use(name) + "\n" +
-        "HOME=" + getenv("HOME") + "\n" +
-        "PATH=" + getenv("PATH") + "\n" + bus_environment(name)
+        "HOME=" + env_quote(getenv("HOME")) + "\n" +
+        "PATH=" + env_quote(getenv("PATH")) + "\n" + bus_environment(name)
     let root: string = robohub_root()
     if rho_path_exists(root + "/registry/modules") {
         let canonical: string = app_canonical(root)

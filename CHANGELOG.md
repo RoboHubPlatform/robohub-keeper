@@ -312,3 +312,7 @@ Built on provider-email 0.2.1, provider-webhook 0.2.1, provider-log 0.2.1 and no
 
 - Uninstalling an application removes its releases and its secrets (app.env, app.secret), so the same name installed again starts afresh; its data is kept.
 - An application's name may not contain a dot, which the catalogue would read back as a record of its own.
+
+## [0.9.5] - 2026-11-13
+
+An application's `app.env` quotes HOME and PATH, as systemd's environment file reads a value whole: unquoted, WSL's PATH stopped at `/mnt/c/Program` and the Windows directories after it — powershell.exe among them — were lost, so Mesh could not reach a board through Windows to flash it.
