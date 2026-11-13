@@ -15,8 +15,11 @@ Run from anywhere:
     python3 tests/apps_smoke.py
 """
 
+import http.server
 import json
+import threading
 import re
+import shutil
 import os
 import socket
 import subprocess
@@ -143,6 +146,29 @@ def make_hello(root: Path) -> Path:
     return app
 
 
+class _Healthy(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == "/healthz" else 404)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *args):
+        pass
+
+
+class Stand_in:
+    """Answers /healthz on an application's port, for a test whose systemd cannot
+    start the application itself: with it, a release answers; without, it does not."""
+
+    def __init__(self, port: int):
+        self.server = http.server.HTTPServer(("127.0.0.1", port), _Healthy)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
 def post_json(base: str, path: str) -> str:
     request = urllib.request.Request(base + path, data=b"", method="POST")
     request.add_header("Origin", base)
@@ -225,7 +251,17 @@ def main() -> int:
         env["ROBOHUB_WORKSPACE"] = str(PROJECTS)
         env["RHO_KEEPER_STATE_DIR"] = os.path.join(state, "state")
         env["HOME"] = state
-        env["RHO_HTTP_ADDR"] = f":{port}"
+        env["RHO_HTTP_ADDR"] = f"127.0.0.1:{port}"
+        # systemd cannot run this test's applications; a stand-in says yes to
+        # restarting and starting them, and passes every other question on.
+        fake = Path(state) / "fake-bin"
+        fake.mkdir()
+        real = shutil.which("systemctl") or "/bin/false"
+        (fake / "systemctl").write_text("#!/bin/sh\n"
+            "case \" $* \" in *\" restart \"*|*\" start \"*|*\" daemon-reload \"*) exit 0;; esac\n"
+            f"exec {real} \"$@\"\n", encoding="utf-8")
+        (fake / "systemctl").chmod(0o755)
+        env["PATH"] = str(fake) + os.pathsep + env.get("PATH", "")
         # The applications page is behind the keeper's own session. Give the
         # smoke run one valid local session instead of disabling auth.
         state_dir = Path(env["RHO_KEEPER_STATE_DIR"])
@@ -436,24 +472,68 @@ def main() -> int:
                 if not (current / wanted).exists():
                     raise AssertionError(f"the release has no {wanted}")
             first = os.readlink(current)
-            time.sleep(1.1)
-            post(base, "/applications/redeploy", {"name": "hello"})
-            wait_job(base, "hello", 120)
-            second = os.readlink(current)
-            if second == first or not Path(second).is_dir():
-                raise AssertionError(f"a redeploy did not put a new release in use: {first} {second}")
-            assert_contains(get(base, "/overview/app/hello"), ["Release", Path(second).name, "Roll back"], "the release in use")
-            rolled = json.loads(post_json(base, "/api/v1/apps/hello/rollback"))
-            assert_contains(rolled["message"], ["previous release"], "rollback")
-            wait_job(base, "hello", 60)
-            if os.readlink(current) != first:
-                raise AssertionError(f"the rollback did not put the first release back: {os.readlink(current)}")
-            for _ in range(3):
+
+            def redeploy() -> dict:
                 time.sleep(1.1)
                 post(base, "/applications/redeploy", {"name": "hello"})
-                wait_job(base, "hello", 120)
+                return wait_job(base, "hello", 120)
+
+            # A release that answers stays in use.
+            stand_in = Stand_in(9011)
+            try:
+                redeploy()
+                second = os.readlink(current)
+                if second == first or not Path(second).is_dir():
+                    raise AssertionError(f"a redeploy did not put a new release in use: {first} {second}")
+                assert_contains(get(base, "/overview/app/hello"), ["Release", Path(second).name, "Roll back"], "the release in use")
+                redeploy()
+                third = os.readlink(current)
+                # A rollback goes to the release made before the one in use, and a
+                # second rollback further back, not to the release the first left.
+                rolled = json.loads(post_json(base, "/api/v1/apps/hello/rollback"))
+                assert_contains(rolled["message"], ["previous release"], "rollback")
+                wait_job(base, "hello", 60)
+                if os.readlink(current) != second:
+                    raise AssertionError(f"the rollback did not put the release before back: {os.readlink(current)}")
+                post_json(base, "/api/v1/apps/hello/rollback")
+                wait_job(base, "hello", 60)
+                if os.readlink(current) != first:
+                    raise AssertionError(f"a second rollback did not go further back: {os.readlink(current)} (third {third})")
+            finally:
+                stand_in.stop()
+
+            # A release that does not answer is taken back out of use: the one
+            # before it is in use again, and the job says so.
+            job = redeploy()
+            if os.readlink(current) != first:
+                raise AssertionError(f"a release that did not answer stayed in use: {os.readlink(current)}")
+            if job["status"] != "failed" or "is back in use" not in job["reason"]:
+                raise AssertionError(f"the failed redeploy's job: {job}")
+            failed = [r for r in (releases_home / "hello" / "releases").iterdir() if (r / ".failed").exists()]
+            if len(failed) != 1:
+                raise AssertionError(f"the release that did not answer is not marked: {failed}")
+
+            # Three releases are kept, by when they were made.
+            stand_in = Stand_in(9011)
+            try:
+                for _ in range(3):
+                    redeploy()
+            finally:
+                stand_in.stop()
             if len(list((releases_home / "hello" / "releases").iterdir())) != 3:
                 raise AssertionError("more than three releases were kept")
+            # A job that says it is running but holds no lock (it was killed, or
+            # the machine restarted) does not keep the application busy for ever.
+            stale = state_dir / "jobs" / f"{int(time.time()) - 120}-hello-redeploy-dead"
+            stale.mkdir(parents=True)
+            (stale / "meta").write_text(f"hello|redeploy|{int(time.time()) - 120}\n", encoding="utf-8")
+            (stale / "status").write_text("running\n", encoding="utf-8")
+            app = json.loads(get(base, "/api/v1/apps/hello"))
+            if app["job"]:
+                raise AssertionError(f"a stale job keeps the application busy: {app['job']}")
+            if not (stale / "status").read_text(encoding="utf-8").startswith("failed"):
+                raise AssertionError("the stale job was not marked failed")
+
             post(base, "/applications/uninstall", {"name": "hello"})
         finally:
             process.terminate()

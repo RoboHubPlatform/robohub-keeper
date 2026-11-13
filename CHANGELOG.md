@@ -294,3 +294,12 @@ and restarts on it every time it runs (--status only reports).
 ## [0.9.1] - 2026-11-13
 
 The clock sign-in, sessions and enrolment use is read from the process (`rho_now_s`) instead of from `date` written to a fixed file, which two requests at once could truncate under each other and make a session expire at once. Built on rho-sql 0.2.1.
+
+## [0.9.2] - 2026-11-13
+
+Correctness fixes from the 2026-11 review.
+
+- A redeploy whose release systemd cannot restart, or which does not answer, puts the release that was in use back and restarts it; the job ends failed saying which release is back, and the new one is marked `.failed`. Before, the broken release stayed in use and systemd restarted it in a loop.
+- A rollback goes to the release made before the one in use, by the time in its name; a second rollback goes further back instead of returning to where the first started. Pruning never removes the release in use or the one before it.
+- A job that says it is running but holds no lock after half a minute (killed, a restart, a lost race for the lock) is marked failed, so the application is not busy for ever.
+- The smoke test binds to 127.0.0.1, and covers a release that answers, one that does not, two rollbacks and a stale job.

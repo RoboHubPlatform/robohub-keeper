@@ -99,6 +99,25 @@ fn job_ids() string {
     return out
 }
 
+// job_stale says whether a job that says it is running is not: it started more
+// than half a minute ago and nothing holds its application's lock (the job was
+// killed, the machine restarted, or a second start lost the race for the lock).
+// A stale job is marked failed, so the application is not busy for ever.
+fn job_stale(id: string, name: string) bool {
+    let started: u32 = rho_int_from_str(job_meta(id, 2))
+    let now: u32 = auth_now()
+    if started == 0 || now < started + 30 {
+        return false
+    }
+    let lock: string = jobs_dir() + "/" + name + ".lock"
+    if rho_exec_args("flock", "-n\n" + lock + "\ntrue\n", apps_report("jobs-stale")) != 0 {
+        return false
+    }
+    ignore_bool(rho_write_text(job_dir(id) + "/status", "failed\nthe job stopped without finishing\n" + rho_int_to_str(now) + "\n"))
+    keeper_event("job.failed", name, id + " stopped without finishing")
+    return true
+}
+
 // job_running_for is the job an application is busy with, or "".
 fn job_running_for(name: string) string {
     var rest: string = job_ids()
@@ -106,7 +125,7 @@ fn job_running_for(name: string) string {
         let at: i32 = rho_str_index_of(rest, "\n")
         var id: string = rest
         if at < 0 { rest = "" } else { id = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        if rho_str_eq(job_meta(id, 0), name) && rho_str_eq(job_status(id), "running") {
+        if rho_str_eq(job_meta(id, 0), name) && rho_str_eq(job_status(id), "running") && !job_stale(id, name) {
             return id
         }
     }
@@ -140,6 +159,40 @@ fn job_health_lines(name: string) string {
         "  i=$((i+1)); sleep 1\ndone\n" +
         "journalctl --user -u " + shell_quote(app_unit_name(name) + ".service") + " -n 30 --no-pager -o short-iso || true\n" +
         "finish failed \"" + name + " did not answer within " + rho_int_to_str(JOBS_HEALTH_SECONDS) + " seconds\"\n"
+}
+
+// job_back_out_lines defines `back_out <reason>`: when a new release cannot be
+// restarted or does not answer, the release that was in use before it ($PREV,
+// kept by app_release_lines) is put back in use and restarted, and the new one
+// is marked .failed — so a bad build does not leave the application down, with
+// systemd restarting it in a loop.
+fn job_back_out_lines(name: string) string {
+    let home: string = shell_quote(app_home(name))
+    let unit: string = shell_quote(app_unit_name(name) + ".service")
+    return "back_out() {\n" +
+        "  journalctl --user -u " + unit + " -n 30 --no-pager -o short-iso || true\n" +
+        "  if [ -n \"$PREV\" ] && [ -d \"$PREV\" ]; then\n" +
+        "    touch \"$REL/.failed\"\n" +
+        "    ln -sfn \"$PREV\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current\n" +
+        "    systemctl --user restart " + unit + " || true\n" +
+        "    finish failed \"$1; release $(basename \"$PREV\") is back in use\"\n" +
+        "  fi\n" +
+        "  finish failed \"$1\"\n" +
+        "}\n"
+}
+
+// job_health_or_back waits for an application as job_health_lines does, and
+// backs a release that does not answer out of use.
+fn job_health_or_back(name: string) string {
+    let port: string = app_port_of(name)
+    if port == "" {
+        return ""
+    }
+    return "echo \"Waiting for " + name + " to answer on port " + port + " …\"\n" +
+        "i=0\nwhile [ $i -lt " + rho_int_to_str(JOBS_HEALTH_SECONDS) + " ]; do\n" +
+        "  if curl -fsS -m 2 -o /dev/null http://127.0.0.1:" + port + "/healthz; then echo \"" + name + " answers.\"; finish done; fi\n" +
+        "  i=$((i+1)); sleep 1\ndone\n" +
+        "back_out \"" + name + " did not answer within " + rho_int_to_str(JOBS_HEALTH_SECONDS) + " seconds\"\n"
 }
 
 // job_build_lines is the shell that builds a folder from its sources. A
@@ -201,10 +254,10 @@ fn job_build(name: string) string {
 // it and waits for it to answer.
 fn job_redeploy(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
-    return job_start(name, "redeploy", job_build_lines(name) + app_release_lines(name) +
+    return job_start(name, "redeploy", job_build_lines(name) + app_release_lines(name) + job_back_out_lines(name) +
         "systemctl --user daemon-reload || true\n" +
-        "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
-        job_health_lines(name))
+        "systemctl --user restart " + unit + " || back_out \"systemd could not restart it\"\n" +
+        job_health_or_back(name))
 }
 
 // job_start_built builds an application that has never been built, then starts it.
@@ -222,12 +275,14 @@ fn job_rollback(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
     let home: string = shell_quote(app_home(name))
     return job_start(name, "rollback",
-        "cur=$(basename \"$(readlink " + home + "/current)\")\n" +
-        "prev=$(ls -1t " + home + "/releases | grep -vx \"$cur\" | head -n 1)\n" +
+        // The release made before the one in use, by the time in its name: a
+        // second rollback goes further back rather than returning to the release
+        // the first one left.
+        "cur=$(readlink " + home + "/current)\n" +
+        "prev=$(" + app_releases_by_time(home) + " | awk -v cur=\"$cur\" 'found {print; exit} $0 == cur {found=1}')\n" +
         "[ -n \"$prev\" ] || finish failed \"there is no earlier release\"\n" +
-        "ln -sfn " + home + "/releases/\"$prev\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current || finish failed \"the release could not be put in use\"\n" +
-        "touch " + home + "/releases/\"$prev\"\n" +
-        "echo \"Release $prev is in use again (was $cur).\"\n" +
+        "ln -sfn \"$prev\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current || finish failed \"the release could not be put in use\"\n" +
+        "echo \"Release $(basename \"$prev\") is in use again (was $(basename \"$cur\")).\"\n" +
         "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
         job_health_lines(name))
 }

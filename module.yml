@@ -9,7 +9,7 @@ module:
   route: /
   port: "8080"
   command: keeper
-  version: 0.9.1
+  version: 0.9.2
   author: Aurel Miron
   maintainer: Aurel Miron
   license: "MIT"

@@ -98,9 +98,22 @@ fn app_release_lines(name: string) string {
         "cp -a " + shell_quote("build/" + command) + " \"$REL/\" || finish failed \"the program could not be copied into the release\"\n" +
         "cp -a module.yml \"$REL/\" || finish failed \"the manifest could not be copied into the release\"\n" +
         copies +
+        // The release in use before this one, kept so a release that does not
+        // answer can be taken back out of use (job_health_or_back).
+        "PREV=$(readlink " + home + "/current 2>/dev/null || true)\n" +
         "ln -sfn \"$REL\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current || finish failed \"the release could not be put in use\"\n" +
         "echo \"Release $(basename \"$REL\") is in use.\"\n" +
-        "ls -1dt " + home + "/releases/*/ 2>/dev/null | tail -n +4 | while read old; do rm -rf -- \"$old\"; done\n"
+        // Three are kept, by when they were made (the time in their name), and
+        // never the one in use or the one before it.
+        app_releases_by_time(home) + " | tail -n +4 | while read old; do " +
+        "[ \"" + "$(readlink " + home + "/current)\" = \"" + "$old\" ] || [ \"$PREV\" = \"$old\" ] || rm -rf -- \"$old\"; done\n"
+}
+
+// app_releases_by_time is the shell that lists an application's release folders,
+// newest first by the time in their names (`<version>-<YYYYmmddHHMMSS>`), which
+// no `touch` or copy changes.
+fn app_releases_by_time(home: string) string {
+    return "ls -1d " + home + "/releases/*/ 2>/dev/null | sed 's:/$::' | awk -F- '{print $NF\" \"$0}' | sort -r | cut -d' ' -f2-"
 }
 
 // app_releases are an application's releases, newest first, one per line.
