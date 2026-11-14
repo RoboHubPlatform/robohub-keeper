@@ -154,7 +154,7 @@ fn module_page(req: Request) Response {
     let name: string = param(req, "name")
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !valid_name(name) || !rho_path_exists(entry) {
-        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>Unknown module: " + forms_escape(name) + "</p><p><a href='/modules'>Back</a></p>")
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>Unknown module: " + escape_html(name) + "</p><p><a href='/modules'>Back</a></p>")
     }
     let role: string = yaml.value(entry, "role")
     let path: string = resolve_path(yaml.value(entry, "path"))
@@ -184,7 +184,7 @@ fn registry_entry(name: string) string {
 }
 
 fn registry_back(req: Request, status: u32, title: string, message: string) Response {
-    return page_status(req, status, title, "<p>" + forms_escape(message) + "</p><p><a href='/modules'>Back</a></p>")
+    return page_status(req, status, title, "<p>" + escape_html(message) + "</p><p><a href='/modules'>Back</a></p>")
 }
 
 // The checkouts the keeper fetched itself, one path per line. Only these are

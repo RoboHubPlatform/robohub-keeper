@@ -342,3 +342,7 @@ From a security review.
 - The keeper declares one port, 19090, and a keeper started by hand listens there on loopback.
 - Uninstalling a module is refused while an installed application uses it, and deletes its folder only when the keeper fetched it.
 - `deploy-keeper.sh` reads the manifest with awk and no longer needs PyYAML.
+
+## [0.9.10] - 2026-11-14
+
+Its function for a hosted app's workspace is `keeper_app_workspace`, apart from the toolchain's `app_workspace()`; HTML is escaped by `escape_html` (rho 0.8.0).

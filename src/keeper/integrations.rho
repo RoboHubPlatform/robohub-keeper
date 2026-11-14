@@ -143,7 +143,7 @@ fn app_binds_bus(path: string) bool {
 
 // bus_password_file is where an application's broker password is kept.
 fn bus_password_file(name: string) string {
-    return app_workspace(name) + "/auth/bus.secret"
+    return keeper_app_workspace(name) + "/auth/bus.secret"
 }
 
 // bus_password is a broker user's password, made once.

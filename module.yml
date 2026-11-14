@@ -9,7 +9,7 @@ module:
   route: /
   port: "19090"
   command: keeper
-  version: 0.9.9
+  version: 0.9.10
   author: Aurel Miron
   maintainer: Aurel Miron
   license: "MIT"

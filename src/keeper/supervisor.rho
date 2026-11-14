@@ -38,7 +38,7 @@ module keeper.supervisor
 
 import std.web.http
 
-fn app_workspace(name: string) string {
+fn keeper_app_workspace(name: string) string {
     return keeper_state_dir() + "/workspaces/" + name
 }
 
@@ -139,7 +139,7 @@ fn app_release_in_use(name: string) string {
 }
 
 fn app_env_path(name: string) string {
-    return app_workspace(name) + "/app.env"
+    return keeper_app_workspace(name) + "/app.env"
 }
 
 fn app_unit_name(name: string) string {
@@ -189,13 +189,13 @@ fn keeper_url() string {
 // app_secret is the application's own random value, made once and kept in its
 // workspace.
 fn app_secret(name: string) string {
-    let file: string = app_workspace(name) + "/auth/app.secret"
+    let file: string = keeper_app_workspace(name) + "/auth/app.secret"
     let existing: string = str_trim(rho_read_text(file))
     if rho_strlen(existing) >= 32 {
         return existing
     }
     let value: string = rho_random_hex(32)
-    ignore_u32(rho_exec_args("mkdir", "-p\n" + app_workspace(name) + "/auth\n", apps_report("mkdir-workspace")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + keeper_app_workspace(name) + "/auth\n", apps_report("mkdir-workspace")))
     ignore_bool(rho_write_secret(file, value + "\n"))
     return value
 }
@@ -221,7 +221,7 @@ fn env_quote(value: string) string {
 // app_environment is the contract above for one application, as KEY=value lines.
 fn app_environment(name: string) string {
     let location: string = catalog_get(name, "location")
-    let workspace: string = app_workspace(name)
+    let workspace: string = keeper_app_workspace(name)
     var out: string = "RHO_APP_NAME=" + name + "\n" +
         "RHO_APP_WORKSPACE=" + workspace + "\n" +
         "ROBOHUB_APP_WORKSPACE=" + workspace + "\n" +
@@ -260,8 +260,8 @@ fn app_environment(name: string) string {
 }
 
 fn app_write_environment(name: string) void {
-    ignore_u32(rho_exec_args("mkdir", "-p\n" + app_workspace(name) + "\n", apps_report("mkdir-workspace")))
-    ignore_u32(rho_exec_args("chmod", "700\n" + app_workspace(name) + "\n", apps_report("chmod-workspace")))
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + keeper_app_workspace(name) + "\n", apps_report("mkdir-workspace")))
+    ignore_u32(rho_exec_args("chmod", "700\n" + keeper_app_workspace(name) + "\n", apps_report("chmod-workspace")))
     ignore_bool(rho_write_secret(app_env_path(name), app_environment(name)))
 }
 
@@ -368,7 +368,7 @@ fn app_isolation(name: string) string {
     }
     let auth: string = auth_dir()
     return out + "TemporaryFileSystem=" + keeper_state_dir() + ":ro\n" +
-        "BindPaths=" + app_workspace(name) + " -" + app_home(name) + "\n" +
+        "BindPaths=" + keeper_app_workspace(name) + " -" + app_home(name) + "\n" +
         "InaccessiblePaths=-" + auth + "/private.pem -" + auth + "/signing.key -" + auth + "/master.token -" +
         auth + "/credentials.json -" + auth + "/clients\n"
 }
