@@ -26,15 +26,15 @@ fn keeper_say(lang: string, key: string) string {
 }
 
 fn keeper_say1(lang: string, key: string, n1: string, v1: string) string {
-    return i18n_replace_all(keeper_say(lang, key), "{" + n1 + "}", v1)
+    return str_replace(keeper_say(lang, key), "{" + n1 + "}", v1)
 }
 
 fn keeper_say2(lang: string, key: string, n1: string, v1: string, n2: string, v2: string) string {
-    return i18n_replace_all(keeper_say1(lang, key, n1, v1), "{" + n2 + "}", v2)
+    return str_replace(keeper_say1(lang, key, n1, v1), "{" + n2 + "}", v2)
 }
 
 fn keeper_say3(lang: string, key: string, n1: string, v1: string, n2: string, v2: string, n3: string, v3: string) string {
-    return i18n_replace_all(keeper_say2(lang, key, n1, v1, n2, v2), "{" + n3 + "}", v3)
+    return str_replace(keeper_say2(lang, key, n1, v1, n2, v2), "{" + n3 + "}", v3)
 }
 
 // keeper_lang is the language a request reads in.

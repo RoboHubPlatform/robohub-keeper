@@ -358,3 +358,7 @@ The applications the keeper hosts are served under its own origin, at `/app/<nam
 ## [0.9.13] - 2026-11-14
 
 The top bar is drawn in the request's language by robohub.ui itself (the whole-word swap is gone), and the switcher list carries each application's state in the reader's language.
+
+## [0.9.14] - 2026-11-14
+
+Translated sentences are filled with the toolchain's `str_replace` (rho 0.8.3) rather than a helper the i18n module keeps for itself.

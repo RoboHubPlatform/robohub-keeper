@@ -256,11 +256,11 @@ fn mqtt_write_files() string {
     ignore_u32(rho_exec_args("mv", "-f\n" + fresh + "\n" + dir + "/passwd\n", apps_report("mqtt-mv")))
     ignore_bool(rho_write_secret(dir + "/acl", acl))
     var conf: string = rho_read_text(path + "/" + integration_service(path, "config"))
-    conf = i18n_replace_all(conf, "{password_file}", dir + "/passwd")
-    conf = i18n_replace_all(conf, "{acl_file}", dir + "/acl")
-    conf = i18n_replace_all(conf, "{data}", dir + "/data")
-    conf = i18n_replace_all(conf, "{port}", catalog_get(name, "port"))
-    conf = i18n_replace_all(conf, "{listen}", integration_listen(name))
+    conf = str_replace(conf, "{password_file}", dir + "/passwd")
+    conf = str_replace(conf, "{acl_file}", dir + "/acl")
+    conf = str_replace(conf, "{data}", dir + "/data")
+    conf = str_replace(conf, "{port}", catalog_get(name, "port"))
+    conf = str_replace(conf, "{listen}", integration_listen(name))
     ignore_bool(rho_write_secret(dir + "/service.conf", conf))
     // A broker that is running reads its users and rules again on SIGHUP and keeps
     // its connections.
@@ -375,8 +375,8 @@ fn mqtt_clients_body(req: Request, name: string) string {
             continue
         }
         apps = apps + "<div class=\"rh-row ok\"><b>" + escape_html(app) + "</b><span>" +
-            escape_html(keeper_t1(req, "mqtt.writes", "topics", i18n_replace_all(str_trim(app_manifest_list(where, "bus.publish")), "\n", ", "))) + " · " +
-            escape_html(keeper_t1(req, "mqtt.reads", "topics", i18n_replace_all(str_trim(app_manifest_list(where, "bus.subscribe")), "\n", ", "))) + "</span></div>"
+            escape_html(keeper_t1(req, "mqtt.writes", "topics", str_replace(str_trim(app_manifest_list(where, "bus.publish")), "\n", ", "))) + " · " +
+            escape_html(keeper_t1(req, "mqtt.reads", "topics", str_replace(str_trim(app_manifest_list(where, "bus.subscribe")), "\n", ", "))) + "</span></div>"
     }
     if apps == "" {
         apps = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.no_app") + "</p>"
