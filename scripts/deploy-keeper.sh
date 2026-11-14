@@ -12,7 +12,16 @@ if [ ! -d "$ROBOHUB/registry/modules" ]; then
     exit 1
 fi
 ROBOHUB="$(cd "$ROBOHUB" && pwd)"
-KEEPER_PORT=$(python3 -c "import yaml,sys; print(yaml.safe_load(open('$KEEPER/module.yml'))['deploy']['port'])")
+# A value of one top-level block of module.yml (`block.key`), read with awk so
+# the script needs nothing beyond a shell.
+manifest_value() {
+    awk -v block="$1" -v key="$2" '
+        $0 ~ "^" block ":" { inside = 1; next }
+        inside && /^[^ #]/ { inside = 0 }
+        inside && $1 == key ":" { value = $2; gsub(/["\047]/, "", value); print value; exit }
+    ' "$KEEPER/module.yml"
+}
+KEEPER_PORT=$(manifest_value deploy port)
 # The keeper listens on this machine only unless told otherwise: it signs people
 # in over plain HTTP, so reaching it from the LAN belongs behind a TLS proxy.
 # KEEPER_LISTEN=0.0.0.0 opens it to every interface anyway.
@@ -48,7 +57,7 @@ cd "$KEEPER"
 # A release of the build: the program and its manifest, in a folder of its
 # own; `current` moves to it in one rename, and the three newest are kept.
 APPHOME="$HOME/.rho/keeper/apps/keeper"
-VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('$KEEPER/module.yml'))['module']['version'])")
+VERSION=$(manifest_value module version)
 REL="$APPHOME/releases/$VERSION-$(date +%Y%m%d%H%M%S)"
 mkdir -p "$REL"
 cp -a "$KEEPER/build/keeper" "$KEEPER/module.yml" "$REL/"

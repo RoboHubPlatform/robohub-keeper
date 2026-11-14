@@ -336,3 +336,9 @@ From a security review.
 - Hosted applications run with `NoNewPrivileges`, and — where the machine's systemd can make a private view for a user service, which the keeper tries once — with the keeper's folder empty in their view but for their own workspace and releases, and the keys that mint tokens hidden.
 - A manifest's `deploy.calls` cannot name `*`.
 - Enrollment: area and node must be numbers, and a token not made for a device cannot take over one already enrolled.
+
+## [0.9.9] - 2026-11-14
+
+- The keeper declares one port, 19090, and a keeper started by hand listens there on loopback.
+- Uninstalling a module is refused while an installed application uses it, and deletes its folder only when the keeper fetched it.
+- `deploy-keeper.sh` reads the manifest with awk and no longer needs PyYAML.

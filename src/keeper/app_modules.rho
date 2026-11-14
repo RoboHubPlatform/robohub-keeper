@@ -14,10 +14,12 @@ module keeper.app_modules
 
 // The keeper's application module registry.
 //
-// A module under modules/ is a small application with a backend and pages of
-// its own. modules/registry.yml is the installed set; this page confirms each
-// path, links to the running module, starts and stops it, and installs or
-// removes one. The inventory tracker is the first module.
+// A module under modules/ is shared code with pages and storage of its own that
+// applications include and compile in (inventory, rules, scheduler, …).
+// modules/registry.yml is the installed set; this page confirms each path, and
+// installs or removes one — never one an installed application still uses, and
+// a folder only when the keeper fetched it. An application picks up a module
+// change when it is rebuilt.
 
 import std.web.http
 import std.web.template
@@ -271,6 +273,31 @@ fn app_modules_install(req: Request) Response {
     return app_modules_page_message(req, name + " was installed.")
 }
 
+// app_module_users is the installed applications whose manifest names a module —
+// in `modules:` or among their dependencies — comma-separated, or "".
+fn app_module_users(wanted: string) string {
+    var out: string = ""
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        app = str_trim(app)
+        if app == "" {
+            continue
+        }
+        let manifest: string = "\n" + rho_read_text(app_canonical(catalog_get(app, "location")) + "/module.yml")
+        if rho_str_index_of(manifest, "- name: " + wanted + "\n") >= 0 || rho_str_index_of(manifest, "\n    " + wanted + ":") >= 0 ||
+            rho_str_index_of(manifest, "\n  " + wanted + ":") >= 0 {
+            if out != "" {
+                out = out + ", "
+            }
+            out = out + app
+        }
+    }
+    return out
+}
+
 fn app_modules_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
@@ -296,13 +323,27 @@ fn app_modules_uninstall(req: Request) Response {
             location = field(line, 1)
         }
     }
+    // A module is compiled into the applications that include it: removing one
+    // they use would fail their next build. It is refused while any does.
+    let users: string = app_module_users(name)
+    if users != "" {
+        return app_modules_page_message(req, name + " is used by " + users + ": it was not uninstalled.")
+    }
     let target: string = app_modules_root() + "/" + location
     ignore_bool(app_module_remove_entry(name))
-    ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n",
-        apps_report("uninstall-module-" + name)))
+    // Only a folder the keeper fetched is the keeper's to delete; a checkout a
+    // person made is left where it is, and only unlisted.
+    var message: string = name + " was uninstalled."
+    if fetched_by_keeper(target) {
+        ignore_u32(rho_exec_args("rm", "-rf\n--\n" + target + "\n",
+            apps_report("uninstall-module-" + name)))
+        fetched_set(target, false)
+    } else {
+        message = name + " was unlisted; its folder was not fetched by the keeper and was left in place."
+    }
     info("keeper", "uninstalled module " + name)
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return app_modules_page_message(req, name + " was uninstalled.")
+    return app_modules_page_message(req, message)
 }

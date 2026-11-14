@@ -7,9 +7,9 @@ module:
   kind: keeper
   title: RoboHub Keeper
   route: /
-  port: "8080"
+  port: "19090"
   command: keeper
-  version: 0.9.8
+  version: 0.9.9
   author: Aurel Miron
   maintainer: Aurel Miron
   license: "MIT"
