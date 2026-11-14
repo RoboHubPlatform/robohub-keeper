@@ -646,27 +646,9 @@ fn keeper_topbar(req: Request) string {
         links = links + "<a href=\"/people\">" + i18n_t(req, "nav.people_access") + "</a><a href=\"/settings\">" + i18n_t(req, "nav.settings") + "</a>"
     }
     links = links + ui_language(i18n_locale(req), request_path(req))
-    return keeper_ui_labels(req, ui_topbar("keeper", keeper_switcher_apps(), "",
-        ui_person(req, who, people_role_label(req, people_role(req)), links, "<a href=\"/logout\">" + i18n_t(req, "topbar.sign_out") + "</a>", true)))
-}
-
-// keeper_ui_labels puts the few words the shared robohub.ui module writes in
-// English into the request's language: the headings of its menus, the theme
-// choices and the state words of the switcher. The module takes no labels, and
-// the state stays English where it names a class (rh-dot), so only the words a
-// person reads are swapped, each where it is a whole text between tags.
-fn keeper_ui_labels(req: Request, bar: string) string {
-    var out: string = bar
-    out = i18n_replace_all(out, "<h6>Applications</h6>", "<h6>" + i18n_t(req, "nav.applications") + "</h6>")
-    out = i18n_replace_all(out, "<h6>Theme</h6>", "<h6>" + i18n_t(req, "topbar.theme") + "</h6>")
-    out = i18n_replace_all(out, "<h6>Language</h6>", "<h6>" + i18n_t(req, "topbar.language") + "</h6>")
-    out = i18n_replace_all(out, "\">dark</a>", "\">" + i18n_t(req, "topbar.theme_dark") + "</a>")
-    out = i18n_replace_all(out, "\">light</a>", "\">" + i18n_t(req, "topbar.theme_light") + "</a>")
-    out = i18n_replace_all(out, "\">system</a>", "\">" + i18n_t(req, "topbar.theme_system") + "</a>")
-    out = i18n_replace_all(out, "<small>running</small>", "<small>" + i18n_t(req, "topbar.state_running") + "</small>")
-    out = i18n_replace_all(out, "<small>stopped</small>", "<small>" + i18n_t(req, "topbar.state_stopped") + "</small>")
-    out = i18n_replace_all(out, "<small>keeper</small>", "<small>" + i18n_t(req, "topbar.state_keeper") + "</small>")
-    return out
+    return ui_topbar_in("keeper", keeper_switcher_apps(), "",
+        ui_person(req, who, people_role_label(req, people_role(req)), links, "<a href=\"/logout\">" + i18n_t(req, "topbar.sign_out") + "</a>", true),
+        i18n_locale(req))
 }
 
 // keeper_rail_link is one place in the rail, marked when the page is it or under it.

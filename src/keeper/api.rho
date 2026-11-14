@@ -209,7 +209,8 @@ fn api_switcher(req: Request) Response {
         }
         out = out + ",{\"name\":" + json_string(name) + ",\"title\":" + json_string(field(line, 1)) +
             ",\"port\":" + json_string(field(line, 2)) + ",\"route\":" + json_string(field(line, 3)) +
-            ",\"state\":" + json_string(field(line, 4)) + through + "}"
+            ",\"state\":" + json_string(field(line, 4)) + ",\"state_label\":" + json_string(ui_state_word(i18n_locale(req), field(line, 4))) +
+            through + "}"
     }
     return Response{ 200, "{\"apps\":[" + out + "]}", "application/json",
         api_switcher_cors(req) + "Cache-Control: no-store" }

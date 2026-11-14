@@ -354,3 +354,7 @@ Every page, fragment, notice and confirmation of the keeper — the sign-in page
 ## [0.9.12] - 2026-11-14
 
 The applications the keeper hosts are served under its own origin, at `/app/<name>/` (rho 0.8.1's `app_proxy`), and the keeper's links and the app switcher send a person there rather than to their ports. Cookies are scoped by host, not by port, so on its own port an application received the keeper's admin session with every request; through the keeper it never does, and its own cookies are scoped to its path. An application signs in through the keeper's origin too. `keeper.proxy_apps: off` in the keeper's settings goes back to ports. Needs rho 0.8.1.
+
+## [0.9.13] - 2026-11-14
+
+The top bar is drawn in the request's language by robohub.ui itself (the whole-word swap is gone), and the switcher list carries each application's state in the reader's language.
