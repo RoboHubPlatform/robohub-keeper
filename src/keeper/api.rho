@@ -203,9 +203,13 @@ fn api_switcher(req: Request) Response {
         if name == "" || rho_str_eq(name, "keeper") {
             continue
         }
+        var through: string = ""
+        if keeper_proxy_on() {
+            through = ",\"path\":" + json_string(keeper_app_href(name, field(line, 3)))
+        }
         out = out + ",{\"name\":" + json_string(name) + ",\"title\":" + json_string(field(line, 1)) +
             ",\"port\":" + json_string(field(line, 2)) + ",\"route\":" + json_string(field(line, 3)) +
-            ",\"state\":" + json_string(field(line, 4)) + "}"
+            ",\"state\":" + json_string(field(line, 4)) + through + "}"
     }
     return Response{ 200, "{\"apps\":[" + out + "]}", "application/json",
         api_switcher_cors(req) + "Cache-Control: no-store" }

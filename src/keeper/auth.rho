@@ -336,6 +336,12 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
     }
     // The keeper's own manifest names the port a build serves on by default; the
     // port it was started on is the one its pages are reached at.
+    let port_said: string = rho_str_slice(authority, u32(rho_strlen(host)), u32(rho_strlen(authority)) - u32(rho_strlen(host)))
+    // An application served through this keeper's origin is called back there,
+    // under its own prefix.
+    if rho_str_eq(port_said, ":" + keeper_listen_port()) && rho_str_eq(address, "/app/" + audience + "/auth/callback") {
+        return true
+    }
     var expected: string = app_port_of(audience)
     if app_kind(path) == "keeper" {
         expected = keeper_listen_port()

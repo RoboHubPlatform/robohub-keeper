@@ -58,6 +58,8 @@ const DOCS_TREE: string = "build/doctree"
 const DOCS_SITE: string = "build/site"
 
 fn init() void {
+    // The proxy's list of applications, current from the start.
+    ignore_string(keeper_switcher_apps())
     log_config_apply("keeper")
     info("keeper", "starting")
 }

@@ -350,3 +350,7 @@ Its function for a hosted app's workspace is `keeper_app_workspace`, apart from 
 ## [0.9.11] - 2026-11-14
 
 Every page, fragment, notice and confirmation of the keeper — the sign-in page included — is written with i18n keys (609 in each of English and Romanian, the same set), where hard-coded English was translated afterwards by matching whole phrases, which missed about four in ten, any message with a value in it and every confirmation. The phrase catalog and its pass are gone. Messages the keeper keeps (job reasons, the sign-in history, logs) stay English and are translated when shown; API answers stay English.
+
+## [0.9.12] - 2026-11-14
+
+The applications the keeper hosts are served under its own origin, at `/app/<name>/` (rho 0.8.1's `app_proxy`), and the keeper's links and the app switcher send a person there rather than to their ports. Cookies are scoped by host, not by port, so on its own port an application received the keeper's admin session with every request; through the keeper it never does, and its own cookies are scoped to its path. An application signs in through the keeper's origin too. `keeper.proxy_apps: off` in the keeper's settings goes back to ports. Needs rho 0.8.1.

@@ -157,6 +157,24 @@ class _Healthy(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _Page(http.server.BaseHTTPRequestHandler):
+    """An application's page behind the keeper's proxy: links written from the
+    root, a cookie of its own, and what it was sent."""
+
+    def do_GET(self):
+        body = (f'<a href="/water">w</a><form action="/rules"></form>|cookie={self.headers.get("Cookie", "")}'
+                f'|prefix={self.headers.get("X-Forwarded-Prefix", "")}').encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Set-Cookie", "rho_session_hello=s; Path=/; HttpOnly")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
 class Stand_in:
     """Answers /healthz on an application's port, for a test whose systemd cannot
     start the application itself: with it, a release answers; without, it does not."""
@@ -553,6 +571,36 @@ def main() -> int:
                     raise AssertionError(f"a second rollback did not go further back: {os.readlink(current)} (third {third})")
             finally:
                 stand_in.stop()
+
+            # The application is served under the keeper's origin: its links are
+            # under its prefix, its cookie is scoped to it, and the keeper's
+            # session never reaches it.
+            page_server = http.server.HTTPServer(("127.0.0.1", 9011), _Page)
+            threading.Thread(target=page_server.serve_forever, daemon=True).start()
+            try:
+                request = urllib.request.Request(base + "/api/v1/switcher")
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    listed = json.loads(response.read())
+                hello = [a for a in listed["apps"] if a["name"] == "hello"]
+                if not hello or not hello[0].get("path", "").startswith("/app/hello/"):
+                    raise AssertionError(f"the switcher does not route hello through the keeper: {hello}")
+                request = urllib.request.Request(base + "/app/hello/")
+                request.add_header("Cookie", f"keeper_session={SESSION}; theme=dark")
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    proxied = response.read().decode()
+                    cookie = response.headers.get("Set-Cookie", "")
+                assert_contains(proxied, ['href="/app/hello/water"', 'action="/app/hello/rules"', "|cookie=theme=dark|",
+                                          "|prefix=/app/hello"], "a page through the proxy")
+                if SESSION in proxied or "keeper_session" in proxied:
+                    raise AssertionError("the keeper's session reached the application")
+                if "Path=/app/hello/" not in cookie:
+                    raise AssertionError(f"the application's cookie is not scoped to it: {cookie!r}")
+                status, location, _ = sign_in(base, "hello", base + "/app/hello/auth/callback", True)
+                if status not in (302, 303) or "/app/hello/auth/callback?ticket=" not in location:
+                    raise AssertionError(f"signing in through the proxy did not return to it ({status}, {location!r})")
+            finally:
+                page_server.shutdown()
+                page_server.server_close()
 
             # A release that does not answer is taken back out of use: the one
             # before it is in use again, and the job says so.

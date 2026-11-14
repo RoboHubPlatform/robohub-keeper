@@ -583,7 +583,50 @@ fn keeper_switcher_apps() string {
         }
         out = out + name + "|" + app_title(name, path) + "|" + app_port_of(name) + "|" + app_route(path) + "|" + state + "\n"
     }
+    keeper_write_proxy(out)
     return out
+}
+
+// keeper_proxy_on is whether the keeper's links to its applications go through
+// its own origin (/app/<name>/) rather than to their ports: on unless turned off.
+fn keeper_proxy_on() bool {
+    return !rho_str_eq(settings_get("keeper.proxy_apps", "on"), "off")
+}
+
+// keeper_app_href is where the keeper sends a person for an application.
+fn keeper_app_href(name: string, first_page: string) string {
+    var first: string = first_page
+    if first == "" {
+        first = "/"
+    }
+    return "/app/" + name + first
+}
+
+// keeper_proxy_file is the list the app_proxy middleware reads: where its
+// project.yml says, in the keeper's home folder.
+fn keeper_proxy_file() string {
+    return getenv("HOME") + "/.rho/keeper/proxy.txt"
+}
+
+// keeper_write_proxy writes the hosted applications and their ports for the
+// proxy, `name port` per line, when they changed.
+fn keeper_write_proxy(apps: string) void {
+    var out: string = ""
+    var rest: string = apps
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let name: string = field(line, 0)
+        let port: string = field(line, 2)
+        if name != "" && !rho_str_eq(name, "keeper") && port != "" {
+            out = out + name + " " + port + "\n"
+        }
+    }
+    if !rho_str_eq(rho_read_text(keeper_proxy_file()), out) {
+        ignore_u32(rho_exec_args("mkdir", "-p\n" + getenv("HOME") + "/.rho/keeper\n", apps_report("proxy-mkdir")))
+        ignore_bool(rho_write_text(keeper_proxy_file(), out))
+    }
 }
 
 fn keeper_topbar(req: Request) string {
@@ -691,6 +734,10 @@ fn pinned_nav(req: Request) string {
 fn open_link(req: Request, name: string, path: string) string {
     if app_kind(path) == "keeper" {
         return "<a class=\"button quiet\" href=\"/\">" + i18n_t(req, "common.open") + "</a>"
+    }
+    if keeper_proxy_on() {
+        return "<a class=\"button\" href=\"" + escape_html(keeper_app_href(name, app_route(path))) +
+            "\" target=\"_blank\" rel=\"noopener\">" + i18n_t(req, "apps.open_application") + " ↗</a>"
     }
     return "<a class=\"button app-open\" href=\"#\" target=\"_blank\" rel=\"noopener\" data-app-port=\"" +
         escape_html(app_port_of(name)) + "\" data-app-route=\"" +
