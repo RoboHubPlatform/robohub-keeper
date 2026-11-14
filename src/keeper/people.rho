@@ -526,8 +526,8 @@ fn people_page_for(req: Request, notice: string, who: string) Response {
         rows = "<tr style=\"outline:2px dashed var(--warn);outline-offset:-2px\"><td><b>You</b><br><small>signed in with the access token</small></td>" +
             "<td><span class=\"rh-pill\">admin</span></td>" + cells + "<td>this session</td></tr>" + rows
         var mine: FormField[4]
-        mine[0] = FormField{ "name", "text", "Your name", "Lowercase letters, digits, '.', '_' or '-'.", "aurel", true, "", "", "", "", "" }
-        mine[1] = FormField{ "display", "text", "Shown as", "", "Aurel", false, "", "", "", "", "" }
+        mine[0] = FormField{ "name", "text", "Your name", "Lowercase letters, digits, '.', '_' or '-'.", "alex", true, "", "", "", "", "" }
+        mine[1] = FormField{ "display", "text", "Shown as", "", "Alex", false, "", "", "", "", "" }
         mine[2] = FormField{ "password", "password", "Password", "At least 10 characters.", "", true, "", "", "", "", "" }
         mine[3] = FormField{ "confirm", "password", "The same again", "", "", true, "", "", "", "", "" }
         claim = "<div class=\"panel-form\"><div class=\"rh-kick\">You</div><h2 style=\"margin-top:.3rem\">Make your account</h2>" +
