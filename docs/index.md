@@ -1,165 +1,290 @@
 # The RoboHub keeper
 
-A local dashboard for the RoboHub ecosystem.
+The keeper is RoboHub's supervisor and front door. It signs people in for every
+application, installs the applications and runs each as a systemd user unit from a
+release it made, serves them under its own origin at `/app/<name>/`, and shows what
+the machine needs to run them. It is the one page a person opens; Mesh, the
+aquarium and energy are reached through it.
 
-## What it does
+![Every application on the machine, with the inspector of one beside them](images/keeper-apps.png)
 
-The keeper is a web-based admin panel that shows the ecosystem's registry,
-which modules are installed, and what the machine needs to run them. It helps
-with the installation process: a user clones the orchestrator and the keeper,
-and the keeper retrieves the elements they need.
+![Installing an application: where it comes from, and what it needs first](images/keeper-install.png)
 
-It has a repository of its own, `robohub-keeper`, and reads the orchestrator it
-looks after from `ROBOHUB_ROOT` (or `ROBOHUB_WORKSPACE`, the folder that holds
-both checkouts).
+![Users & access: a row per person, a column per application](images/keeper-people.png)
 
-## Building
+## Reaching it
+
+| | |
+| --- | --- |
+| Address | `http://127.0.0.1:19090/` |
+| Unit | `robohub-keeper` (systemd user unit) |
+| State | `~/.rho/keeper` (owner-only) |
+| Its own settings | `~/.rho/keeper/data/settings.conf` |
+
+The keeper listens on loopback only. It signs people in over plain HTTP, so
+reaching it from another machine belongs behind a TLS proxy;
+`KEEPER_LISTEN=0.0.0.0 ./scripts/deploy-keeper.sh` opens it to every interface
+anyway. `robohub keeper` reaches it from the orchestrator's command line too.
+
+Installing it the first time is described in {ref}`start/install`.
+
+### Building and deploying
 
 ```sh
-rho build .
+rho build .                      # build into build/keeper
+./scripts/deploy-keeper.sh       # build, make a release, restart the unit on it
+./scripts/deploy-keeper.sh --status
 ```
 
-The documentation the keeper serves is built by the documentation site, which
-collects every module's pages into one tree:
-
-```sh
-rho build ../robohub/applications/docsite
-../robohub/applications/docsite/build/docsite
-```
-
-## Running
+The service runs the release in use (`~/.rho/keeper/apps/keeper/current`), never the
+checkout's build, so a rebuild here changes nothing until the next deploy.
+`ROBOHUB_ROOT` says where the orchestrator (`robohub`) is when it is not beside this
+checkout. Started by hand for a test:
 
 ```sh
 ROBOHUB_ROOT=../robohub ./build/keeper
 ```
 
-As a user service, which is how it normally runs:
+## Applications behind one origin
 
-```sh
-./scripts/deploy-keeper.sh
-```
+Every hosted application is reached through the keeper at
+`http://127.0.0.1:19090/app/<name>/` — Mesh at `/app/mesh/mesh`, the aquarium at
+`/app/aquarium/`, energy at `/app/energy/`. The keeper's links, **Open application**
+and the app switcher in every application's top bar go there.
 
-The service listens on `127.0.0.1` only: the keeper signs people in over plain
-HTTP, so reaching it from another machine belongs behind a TLS proxy.
-`KEEPER_LISTEN=0.0.0.0 ./scripts/deploy-keeper.sh` opens it to every interface
-anyway.
+A browser scopes cookies by host and not by port, so an application on a port of
+its own would receive every other application's cookies, the keeper's admin session
+among them. Through the keeper it never does:
 
-The keeper serves the built site, and reads the tree it was built from. A keeper
-that is told where the tree is — `RHO_DOCS_ROOT` and `RHO_DOCS_TREE` — builds a
-site of its own instead, and `RHO_SITE_TITLE` says what the site calls itself.
+- The `app_proxy` middleware (in `project.yml`) serves `/app/<name>/…` from the
+  application's loopback port and never forwards the keeper's `keeper_session`
+  cookie.
+- The application's own cookies are scoped to its path, and its root-relative links,
+  redirects and form targets are rewritten onto the prefix. `X-Forwarded-Prefix`,
+  `-Host` and `-Proto` tell it where it is reached. Server-sent events stream
+  through.
+- The list of applications and ports is `~/.rho/keeper/proxy.txt` (`name port` per
+  line), which the keeper writes whenever its list of applications changes and the
+  proxy reads again when the file changes, so a newly installed application is
+  reachable without a restart.
+- An application signs in through the keeper's origin as well: its callback is
+  `/app/<name>/auth/callback` on the keeper's port.
 
-The keeper is also reachable through the orchestrator's own command:
+Each application still listens on its own loopback port, which is what the proxy
+calls and what a script on the machine may use:
 
-```sh
-robohub keeper
-```
+| Application | Name | Loopback port | First page |
+| --- | --- | --- | --- |
+| Keeper | `keeper` | 19090 | `/` |
+| Mesh | `mesh` | 8478 | `/mesh` |
+| Aquarium | `aquarium` | 8480 | `/` |
+| Energy | `energy` | 8482 | `/` |
 
-## Applications
+An application whose manifest port is already taken is given the next free one from
+8500. To go back to linking each application on its own port, set
+`keeper.proxy_apps=off` in the keeper's settings file.
 
-The keeper lists the applications on the machine at `/applications`, and the
-`Applications` entry in the left menu goes there. An application is a module
-whose manifest declares an `application` block:
+## Pages
+
+| Page | What it is for |
+| --- | --- |
+| **Home** `/` | Every application as a card with its state, and an inspector beside them: folder, port, unit, release in use, journal, environment, and start, stop, restart, build, redeploy and roll back. |
+| **Applications** `/applications` | The installed applications, **Install**, the integrations that can run here and the orchestrator's registry. |
+| An application `/apps/<name>` | Its state, where it runs, what it needs (**Dependencies**), its journal, its environment and its actions; **Open application** leads into it. |
+| **Plugins** `/plugins` | The plugin registry and the alert channels the keeper binds; **Providers** and **App modules** under it. |
+| **Jobs** `/jobs` | Builds, redeploys and starts that need a build, each with its log (`/jobs/<id>`). |
+| **Users & access** `/people` | People, their roles, their grants per application, and their sessions. |
+| **Recovery token** `/auth/token` | Replace the admin's access token; rotate the signing key. |
+| **Nodes** `/nodes` | The node identities the keeper has issued. |
+| **System** `/system` | What the whole machine needs: every application's and every enabled toolchain module's system dependencies. |
+| **Docs** `/docs` | This documentation, built from the documentation site's tree. |
+| **Settings** `/settings` | General, Alerts, Auth, Logging, Configuration. |
+| **Account** `/account` | Change one's own password. |
+
+An application can be added to the left menu from its row; it then appears under
+**Applications** and leads to its page in the keeper. The selection is kept in
+`~/.rho/keeper/menu.txt`.
+
+## Installing an application
+
+What the keeper runs is its catalogue, `~/.rho/keeper/installed.yml`: one record per
+application with where it came from (`registry`, `workspace`, `bundled`, `external`,
+`fetched` or `integration`), where it is, its version, its port and its unit. Pages
+and the API read the catalogue rather than scanning folders. On its first start the
+keeper adopts what it finds on the machine; after that an application is added
+through **Install**:
+
+- **From the Rho registry**, by name — `aquarium` or `aquarium@0.5.0` — with
+  `rho module install`. When the registry has a newer version its card says
+  **update** and its inspector offers **Update to …**, which installs it, points the
+  catalogue at it, writes the unit again and restarts. The old version stays
+  installed.
+- **Found on this machine**: a checkout the orchestrator's registry names, or one
+  uninstalled earlier.
+- **A git URL**, cloned into `~/.rho/apps/<name>` (`ROBOHUB_APPS_HOME`).
+- **A folder**, which stays where it is.
+
+Before anything is installed, **Install** shows what the application needs, at three
+levels: the machine (the programs its `system_deps` names, as
+`rho doctor --path <folder>` finds them), the Rho modules it names, and the
+applications it depends on and the services it calls. A required program that is
+missing stops it from starting; **Install** on that row runs `rho keeper install` as
+a job.
+
+An application is a module whose manifest says `kind: keeper-hosted` with a title, a
+route, a port and a command:
 
 ```yaml
-application:
+module:
+  name: aquarium
   kind: keeper-hosted
-  title: RoboHub Mesh
-  route: /mesh
-  port: "8478"
-  command: mesh
+  title: Aquarium
+  route: /
+  port: "8480"
+  command: aquarium
 ```
 
-Two kinds are recognized. `keeper` is the dashboard itself: it is listed so the
-page is complete, but it cannot be started, stopped or removed from itself.
-`keeper-hosted` is an application with its own listener that the keeper can
-start and stop. A module without the block — a documentation site, a component,
-a library — is not an application and the registry does not show it.
+`kind: keeper` is the keeper itself: listed, but not started, stopped or removed from
+itself. A module without such a kind (a library, a component, a documentation site)
+is not an application.
 
-What the keeper runs is its catalogue, `~/.rho/keeper/installed.yml`: one record
-per application with where it came from (`registry`, `workspace`, `bundled`,
-`external` or `fetched`), where it is, its version, the port it was given and the
-unit that runs it. Pages and the API read the catalogue instead of scanning
-folders. On its first start the keeper adopts what it finds — the selected
-packages in the module registry, what the orchestrator's registry names, the
-orchestrator's `applications/` and the folders registered by path — and after
-that a new application is added through **Install**: one **found on this
-machine**, a git URL, which is cloned into `~/.rho/apps/<name>`
-(`ROBOHUB_APPS_HOME`), or a folder, which stays where it is. An application whose
-manifest port another application already has is given the next free one from
-8500.
+**Uninstall** stops the application and removes its unit, its record, its releases
+and its secrets (`app.env`, `app.secret`), so the same name installed again starts
+afresh. Its data — its workspace — is kept. Its folder is deleted only when the
+keeper cloned it.
 
-An application published to the Rho registry is installed by name —
-`aquarium` or `aquarium@0.5.0` under **From the Rho registry** — with
-`rho module install`, and runs as it was published. When the registry has a newer
-version its card says **update** and its inspector offers **Update to …**, which
-installs it, points the catalogue at it, writes the unit again and restarts; the old
-version stays installed.
+## How an application runs
 
-**Uninstall** removes the application's unit and its record. Its folder is
-deleted only when the keeper cloned it; a checkout or a package stays where it is
-and is offered again under **found on this machine**.
+Each application is a systemd user unit the keeper writes from its manifest and its
+record — `After=`/`Wants=` for what `deploy.depends` names, `Restart=on-failure`,
+`NoNewPrivileges`, and `EnvironmentFile=` its `app.env`. The unit is written again
+whenever it no longer says what the keeper would write, so a moved folder or a new
+port is picked up by the next start. The state a card shows comes from systemd and
+the application's `/healthz`: **running**, **starting**, **failed**, **stopped**,
+**not built**, **no service yet**. **Log** is the unit's journal.
 
-### How an application runs
-
-Each application is a systemd user unit the keeper writes from its manifest and
-its record — `After=`/`Wants=` for what `deploy.depends` names,
-`Restart=on-failure`, and `EnvironmentFile=` the application's `app.env`. The
-unit is written again whenever it no longer says what the keeper would write, so
-a moved folder or a new port is picked up by the next start or restart. The state
-a row shows comes from systemd and the application's `/healthz`: **running**,
-**starting**, **failed**, **stopped**, **not built**, **no service yet**. **Log**
-is the unit's journal.
+Where the machine's systemd can make a private view for a user service, an
+application sees the keeper's folder empty but for its own workspace and releases.
 
 What a started application is told, in `app.env` (owner-only):
 
 | Variable | What it is |
 | --- | --- |
 | `RHO_APP_NAME` | its name in the catalogue |
-| `RHO_APP_WORKSPACE` | the folder its state lives in (`ROBOHUB_APP_WORKSPACE` too) |
+| `RHO_APP_WORKSPACE` | its workspace, `~/.rho/keeper/workspaces/<name>` (`ROBOHUB_APP_WORKSPACE` too) |
 | `RHO_HTTP_ADDR` | where to listen: `127.0.0.1:<port>`, or `:<port>` when the manifest says `deploy.listen: lan` |
 | `RHO_APP_SECRET` | a random value of its own: the seed of its forms' CSRF tokens |
 | `RHO_AUTH_URL` | the issuer that signs people in |
 | `ROBOHUB_KEEPER_URL` | the keeper, for its API |
-| `RHO_CLIENT_ID`, `RHO_CLIENT_SECRET_FILE`, `RHO_SERVICE_<NAME>_URL` | for an application that calls other services (`deploy.calls`) |
+| `RHO_CLIENT_ID`, `RHO_CLIENT_SECRET_FILE` | its client of the keeper, for service tokens |
+| `RHO_SERVICE_<NAME>_URL` | each service it calls (`deploy.calls`) |
+| `ROBOHUB_BUS_URL`, `ROBOHUB_BUS_USER`, `ROBOHUB_BUS_PASSWORD_FILE` | the MQTT broker, when it binds the bus |
 
-`ROBOHUB_ROOT`, `ROBOHUB_WORKSPACE`, `ROBOHUB_APP_MANIFEST` and `RHO_KEEPER_PORT`
-are still written for applications that read the orchestrator's files; they go
-once every application asks the keeper's API instead.
+`ROBOHUB_ROOT`, `ROBOHUB_WORKSPACE`, `ROBOHUB_APP_MANIFEST` and `RHO_KEEPER_PORT` are
+still written for applications that read the orchestrator's files.
 
-### What an application needs
+### Releases and rolling back
 
-The **Dependencies** tab of an application, and the page **Install** shows before
-anything is installed, read three levels: the machine — the programs its
-manifest's `system_deps` names, as `rho doctor --path <folder>` finds them — the
-Rho modules it names outside RoboHub's own, and the applications it depends on and
-the services it calls. A required program that is missing stops the application
-from starting; **Install** on its row runs `rho keeper install` as a job, which
-fetches into `~/.rho/toolchains` when it can and uses the package manager when it
-must (a package that needs root says how to install it by hand when the job
-cannot). **Dependencies** in the rail is the whole machine: every application and
-every enabled toolchain module.
+An application built from a folder runs from a release, never from the folder. A
+redeploy (and the first start) builds, copies the program, its manifest, `static/`
+and what `deploy.files` names into
+`~/.rho/keeper/apps/<name>/releases/<version>-<time>`, moves the `current` link to it
+in one rename and restarts the unit, which runs `current`. A rebuild in the folder
+changes nothing until the next redeploy.
 
-### An application's page
+- A release that systemd cannot restart, or that does not answer `/healthz`, is
+  marked `.failed`, the release that was in use is put back and restarted, and the
+  job ends failed saying which release is back.
+- **Roll back** (in the application's inspector, or
+  `POST /api/v1/apps/<name>/rollback`) puts the release made before the one in use
+  back; a second rollback goes further back.
+- The three newest releases are kept; pruning never removes the release in use or
+  the one before it.
 
-`/apps/<name>` is an application's page in the keeper: its state, where it runs,
-what it needs, its journal, its environment and its actions. The menu entries of
-the applications added to the menu lead there, and **Open application** is the way
-into the application itself.
+| Control | What it does |
+| --- | --- |
+| **Build** | `rho build` on the folder; touches nothing that runs. |
+| **Redeploy** | Build, make a release, write the unit, restart. A failed build leaves the running program alone. |
+| **Restart** / **Start** | Restart or start the unit, writing it again first when it no longer describes the application. |
+| **Roll back** | Put the previous release in use. |
 
-### Integrations
+### Jobs
+
+Building, redeploying and a start that needs a build are jobs: a script under
+`~/.rho/keeper/jobs/<id>/` run in the background, one at a time per application,
+with its log and its outcome. The strip at the bottom of every page shows what is
+running and how the last job ended. A job that says it is running but holds no lock
+after half a minute is marked failed.
+
+### Signed artifacts
+
+A signed artifact placed in `~/.rho/keeper/incoming/` is used by **Redeploy** when it
+is the newest file for that application. The keeper verifies it, extracts it to
+`~/.rho/keeper/artifacts/<name>/<version>/`, points the application at the new
+entrypoint, restarts it and checks its health; a failed check restores the previous
+target. `ROBOHUB_ARTIFACT_PUBKEY` is the base64 Ed25519 key that must sign artifacts;
+`ROBOHUB_ARTIFACT_ALLOW_UNSIGNED=1` accepts a checksum alone, for a development
+machine only.
+
+## People and sign-in
+
+The keeper is RoboHub's authorization server. The people who sign in are in
+`~/.rho/keeper/users.yml`, owner-only, kept by the rho-auth component
+(`rho auth user add|verify|passwd|set|remove|list`, PBKDF2). Each person has a role
+and grants:
+
+| Role | May |
+| --- | --- |
+| admin | everything: applications, installing, people, plugins, settings |
+| operator | start, stop, restart, build, redeploy and roll back the applications |
+| viewer | read |
+
+Grants are what a person reaches in each application, as scopes — `mesh:*`,
+`mesh:greenhouse`, `aquarium:read`. **Users & access** is a matrix with a row per
+person and a column per application; the inspector sets a person's role and, per
+application, no access, read, everything or particular grants, and shows their
+sessions and sign-in history.
+
+**The first run.** The keeper makes an access token on its first start, owner-only,
+in `~/.rho/auth/master.token`, and a signing key pair if there is none. With nobody in
+the store the sign-in page asks for the token and nothing else; it signs the admin in
+afterwards too. Accounts with a name and a password are made under Users & access. A
+forgotten password is reset by an admin, or from the command line:
+
+```sh
+rho auth user passwd --store ~/.rho/keeper/users.yml --name ana --password-file <file>
+```
+
+**Signing in to an application.** `/auth/login` opens a keeper session and mints a
+short-lived ES256 ticket for the application: its audience, redirect URI, a one-use
+id, a 30-second lifetime, the person's name and only their grants for it (an admin's
+carry `*`). A person with no grant is told so rather than signed in. The ticket goes
+back to the application's callback: `/app/<name>/auth/callback` on the keeper's
+origin when it is reached through the keeper, `/auth/callback` at the root of its
+own port otherwise. Applications verify tickets with the key published at
+`/auth/public-key`.
+
+**Sessions end together.** A ticket names the keeper session by a handle derived from
+it. An application asks `/auth/session/<handle>` at most once a minute; signing out of
+the keeper, or **Sign out everywhere**, ends the application's session at its next
+request after that. A keeper that cannot be reached signs nobody out.
+
+**Applications as clients.** Every installed application is a client of the keeper
+with `keeper:read`; `rho_http_request(..., "keeper", "keeper:read", ...)` gets its
+service token. Its Environment tab gives it a new secret, and its client goes when it
+is uninstalled.
+
+## Integrations: the MQTT broker
 
 An integration is a plugin of `kind: integration` that brings a service the keeper
-runs for the applications. **Applications → Integrations** lists the ones under
-the orchestrator's `plugins/`; **Run it** records it in the catalogue, writes its
-configuration under `~/.rho/keeper/services/<name>/` and starts it as a user unit
-running the service's own program. Its health is a TCP check on its port; what it
-needs from the machine is its plugin's `system_deps`, on its Dependencies tab like
-an application's.
+runs for the applications. The ones under the orchestrator's `plugins/` are listed
+on the Applications page; **Run it** records it in the catalogue, writes its
+configuration under `~/.rho/keeper/services/<name>/` and starts it as a user unit.
 
-**MQTT** (`robohub-mqtt`) runs Mosquitto on port 1884, on this machine only until an
-admin opens it to the network for devices (Clients → *Open it to the network*). Every
-application whose manifest binds the bus is a broker user, with a random password
-in its workspace and the topics its `bus:` block names:
+**MQTT** ({ref}`robohub-mqtt/index`) runs Mosquitto on port 1884, on this machine
+only until an admin opens it to the network for devices (Clients → *Open it to the
+network*). Every application whose manifest binds the bus is a broker user, with a
+random password in its workspace and the topics its `bus:` block names:
 
 ```yaml
 bind:
@@ -170,212 +295,48 @@ bus:
   subscribe: [+/status/#, +/online]
 ```
 
-and is started with `ROBOHUB_BUS_URL`, `ROBOHUB_BUS_USER` and
-`ROBOHUB_BUS_PASSWORD_FILE`. A device is a broker user an admin adds on the Clients
-tab, allowed its own topic prefix; its password is shown once. **Topics** shows what
-the broker carries, live. Passwords are hashed by `mosquitto_passwd` from an
-owner-only file and never put on a command line, and a change of users or rules is
-read by the running broker without dropping its connections.
+A device is a broker user an admin adds on the Clients tab, allowed its own topic
+prefix; its password is shown once. **Topics** shows what the broker carries, live.
+Passwords are hashed by `mosquitto_passwd` from an owner-only file, never put on a
+command line, and a change of users is read by the running broker without dropping
+its connections.
 
-### Jobs
+## Settings
 
-Building, redeploying and a start that needs a build are jobs: a script under
-`~/.rho/keeper/jobs/<id>/` run in the background, one at a time per application,
-with its log and its outcome. The strip at the bottom of every page shows what is
-running and how the last job ended; `/jobs/<id>` is its log.
-
-### The API
-
-```text
-GET  /api/v1/apps                    every application: state, port, version, url
-GET  /api/v1/apps/{name}             one of them
-POST /api/v1/apps/{name}/{action}    start | stop | restart | redeploy | build
-GET  /api/v1/jobs                    recent jobs
-GET  /api/v1/jobs/{id}               one job, with its log
-GET  /api/v1/registry                the orchestrator's modules: role, path here, git
-                                     (?format=tsv for a program without JSON)
-GET  /api/v1/me                      who is asking: a person, or an application
-GET  /api/v1/services                the services an application calls, and where
-GET  /api/v1/config/{app}            an application's record and environment
-GET  /api/v1/switcher                the applications, for every app switcher (public)
-GET  /api/v1/events                  Server-Sent Events: app.installed, app.started,
-                                     app.stopped, app.updated, job.done, job.failed,
-                                     person.signed-in, person.signed-out, keys.rotated
-```
-
-An application asks with its own service token: it is a client of the keeper,
-with `keeper:read`, and `rho_http_request(..., "keeper", "keeper:read", ...)` gets
-the token for it. Mesh reads the registry this way, so it does not read the
-orchestrator's checkout.
-
-The routes are behind the keeper's sign-in like its pages.
-
-Each row can be opened in a new page, started and stopped, and added to or
-removed from the keeper's left menu. A pinned application is a sub-item under
-**Applications**, beside the registry link it was added from. The menu selection
-is kept in `~/.rho/keeper/menu.txt`; the entries are read whenever a page is
-rendered. A started application is also told the keeper's port, so it can offer
-a **Go to Keeper** link back. `RHO_KEEPER_STATE_DIR` names another state
-directory, which is what the tests use.
-
-Mesh has its own repository, robohub-mesh, beside the orchestrator: `rho build
-../robohub-mesh` builds it, and the keeper finds it through the orchestrator's
-registry (`registry/modules/robohub-mesh.yml`, `role: application`) and can start
-it from its row. Its own guide is the Mesh module's
-documentation.
-
-## Registry
-
-`/modules` is the RoboHub registry: the repositories this orchestrator publishes
-and tracks, with their versions and whether they are installed. **Install**
-clones one where its registry entry says; **Uninstall** is offered only for a
-checkout the keeper cloned itself (`~/.rho/keeper/fetched.txt`), because a
-checkout made by hand may hold work that is not anywhere else.
-
-## Menu
-
-The left menu keeps one entry per top-level concern: Home, Registry,
-Applications, Docs and System. **Applications** opens the applications list and
-also carries the current application, the pinned applications, **App modules**
-and **Plugins** as sub-items, because those are things an application carries
-rather than separate top-level destinations.
-
-## App modules
-
-`/app-modules` lists the reusable modules in `modules/registry.yml`: each row
-shows the module's title, category and version, and can remove it. **Install a
-module** adds one from a git URL or a folder. A module has no port or process of
-its own, and no single host: every application that includes it serves its
-routes on its own router, on that application's port and workspace.
-
-## Plugins
-
-`/plugins` lists the plugin registry in `plugins/registry.yml`. A row shows the
-plugin's kind, transport and whether the keeper has it enabled; a path whose
-folder is gone is marked missing. The keeper can install a plugin from a git URL
-or a folder, remove one, enable or disable it for itself, and send a test alert.
-
-The keeper's own `module.yml` names its plugins and settings. The dashboard's
-override in `~/.rho/keeper/plugins.txt` changes only this installation, leaving
-the manifest the application was installed with intact. Alerts raised by the
-application registry — an application that fails to start, stop or install —
-go through the same dispatcher.
-
-## Logging
-
-The keeper's `project.yml` asks the backend for the `logemit` port and the app
-imports `rho.log`. Records on standard error carry a UTC timestamp, the level
-and the subject:
-
-```text
-[2026-11-01T12:48:27.695Z] [info] [keeper] started application mesh on port 8478
-[2026-11-01T12:49:28.534Z] [info] [keeper] added mesh to the keeper menu
-```
-
-`RHO_LOG_FILE` also appends those records to a file. The generated HTTP server
-logs requests with its own date/time.
-
-## Security
-
-- A form posted from another origin is refused (`same_origin` in `project.yml`).
-  Every application the keeper hosts is another port of the same host, which a
-  `SameSite` cookie does not tell apart; the browser's `Sec-Fetch-Site` or
-  `Origin` does. Programs that post to the keeper send neither and are not
-  affected.
-- Every program the keeper runs gets its arguments one per line, so a name or a
-  URL is exactly one argument; a value with a line break or a leading `-` is
-  refused before it gets there.
-- `~/.rho/keeper` is owner-only. Session ids, tokens and credentials come from
-  the runtime's random source and never pass through a report file; a ticket is
-  read from a private folder and removed at once.
-- Five wrong tokens close the sign-in for five minutes. Changing the token asks
-  for the current one and signs out every other session.
-
-## People
-
-The people who sign in are in `~/.rho/keeper/users.yml`, owner-only, kept by the
-rho-auth component (`rho auth user add|verify|passwd|set|remove|list`), which
-hashes passwords with PBKDF2; the keeper hands a password to it in a private file
-removed at once, never on a command line. Each person has a role and grants:
-
-| Role | May |
+| Tab | What it changes |
 | --- | --- |
-| admin | everything: applications, installing, people, plugins, settings |
-| operator | start, stop, restart, build and redeploy the applications |
-| viewer | read |
+| General | Vertical or horizontal tabs on every page. |
+| Alerts | The channels the keeper raises its own alerts through (an application that fails to start, stop or install): the log file and its threshold; e-mail on/off, recipient and threshold; Telegram on/off, chat, bot token and threshold. |
+| Auth | A link to the recovery token page. |
+| Logging | Level, text or JSON, rotating file, size, retention, standard error. |
+| Configuration | Read-only: route, port, workspace, alert channels, version. |
 
-Grants are what a person reaches in each application, as scopes — `mesh:*`,
-`mesh:greenhouse`, `aquarium:read`. A ticket for an application carries the
-person's name and only their grants for it (an admin's carry `*`); a person with
-none is told they have no access rather than signed in.
+The alert channels are the `robohub.alert` binding in `module.yml` (the log, e-mail
+and Telegram providers); the Alerts tab changes them for this installation, and the
+**Plugins** page switches a channel on or off and sends it a test.
 
-**The first run and the admin.** The keeper makes an access token on its first
-start, owner-only, in `~/.rho/auth/master.token`, and a signing key pair if there is
-none. The token is the admin's: with nobody in the store, the sign-in page asks for
-it and nothing else, and it signs the admin in afterwards too ("The admin's access
-token instead"). Accounts with a name and a password are for other people, made
-under Users & access; the admin can make one for themselves there as well. A
-forgotten password is reset by the admin, or from the command line:
+`keeper.proxy_apps=off` in `~/.rho/keeper/data/settings.conf` links applications on
+their own ports instead of through `/app/<name>/`.
 
-```sh
-rho auth user passwd --store ~/.rho/keeper/users.yml --name ana --password-file <file>
-```
+## Registry, plugins, providers and app modules
 
-**Sessions end together.** A ticket carries the keeper session it came from. An
-application keeps it with its own session and asks `/auth/session/<id>` at most
-once a minute; signing out of the keeper, or **Sign out everywhere** under Users &
-access, ends the application's session at its next request after that. A keeper
-that cannot be reached signs nobody out.
-
-## Authentication
-
-Keeper is the RoboHub authorization server. `/auth/login` validates the master
-token, opens a keeper session, and mints a short-lived ES256 ticket for the
-requesting application. The admin UI is behind that session. Tickets are
-verified by the application with Keeper's public key; a ticket carries the
-application audience, redirect URI, one-use id and a 30-second lifetime.
-
-Signing in to an application returns to its callback: `/auth/callback` at the
-root of the port it serves on (Mesh on `:8478`), or `<route>/auth/callback` when it
-is mounted behind a proxy. Keeper signs in to itself on the port it was started on
-(`RHO_HTTP_ADDR`), which need not be the one its manifest names.
-
-## Building, redeploying and restarting
-
-Each application row has three controls that act on what runs:
-
-- **Build** runs `rho build` on the application's folder and touches nothing
-  that is running; **Restart** then runs the new build.
-- **Redeploy** builds, writes the application's systemd user unit for where it
-  is now, and restarts it. A build that fails leaves the running program alone.
-- **Restart** restarts the service. A unit that no longer describes the
-  application — its folder, manifest, program or port changed, as when a
-  repository is moved — is deployed again first, so a moved application is not
-  left restarting a program that is no longer there. **Start** does the same.
-
-## Artifact updates
-
-A signed artifact placed in `~/.rho/keeper/incoming/` is used by **Redeploy** when
-it is the newest file for that application. Keeper verifies it, extracts it to
-`~/.rho/keeper/artifacts/<name>/<version>/`, points `build/<command>` at the new
-entrypoint, restarts the service, and checks its health endpoint. A failed
-health check restores the previous target and restarts again.
-
-Set `ROBOHUB_ARTIFACT_PUBKEY` to the base64 Ed25519 public key that must sign
-artifacts. Checksum-only verification is available for a development machine by
-setting `ROBOHUB_ARTIFACT_ALLOW_UNSIGNED=1`, but a production keeper should pin a
-key.
-
-## Remaining OTA work
-
-Keeper deploys host services from verified staged artifacts. Remote host
-rollout, firmware OTA delivery through Mesh, ESP32 A/B confirmation, and
-target-declared rollback remain outstanding; a target without a rollback-capable
-bootloader is not offered remote OTA.
+- **Registry** (on the Applications page; `/modules` leads there): the repositories
+  the orchestrator publishes and tracks. **Install** clones one where its registry
+  entry says; **Uninstall** is offered only for a checkout the keeper cloned itself
+  (`~/.rho/keeper/fetched.txt`).
+- **Plugins** `/plugins`: the plugin registry in `plugins/registry.yml` — kind,
+  transport, enabled — installed from a git URL or a folder, removed, enabled or
+  disabled for the keeper (`~/.rho/keeper/plugins.txt`).
+- **Providers** `/providers`: the installed providers and the interface each
+  implements.
+- **App modules** `/app-modules`: the reusable modules in `modules/registry.yml`.
+  A module has no port or process of its own: every application that includes it
+  serves its routes on its own router. Removing one is refused while an installed
+  application uses it.
 
 ## Node enrollment
 
-Create a one-time token on the keeper host:
+Create a one-time token on the keeper's machine:
 
 ```sh
 rho bootstrap token -device garden-01 -project default -area 1 -node 7
@@ -387,28 +348,74 @@ The token lands in `~/.rho/keeper/enrollment.tokens`. A node runs:
 rho bootstrap init -config /etc/robohub/provisioning.json -token <token>
 ```
 
-The node generates its instance UUID and Ed25519 key locally, posts the public
-key and token to `POST /api/enroll`, and stores the issued credential as a
-`0600` file. Keeper keeps the node record under `~/.rho/keeper/nodes/` and marks
-the token used. A reused or expired token is refused.
+The node generates its instance UUID and Ed25519 key locally, posts the public key
+and token to `POST /api/enroll`, and stores the issued credential as a `0600` file.
+The keeper keeps the record under `~/.rho/keeper/nodes/` and marks the token used; a
+reused or expired token is refused.
 
-## Enrolled node registry
+**Nodes** lists the identities issued; each can be rotated or revoked. A gateway or
+firmware checks a credential with `POST /api/nodes/verify`
+(`device_id=<device>&credential=<credential>`) and receives the registered
+project/area/node, or `403`. That endpoint is public because the credential
+authenticates it. The firmware side of rotation and the remaining provisioning work
+are documented in the `rho-bootstrap` component.
 
-`/nodes` lists identities Keeper has issued. Each record can be rotated or
-revoked. A gateway or firmware calls:
+## API
 
-```text
-POST /api/nodes/verify
-device_id=<device>&credential=<credential>
-```
+Behind the keeper's sign-in like its pages; an application asks with its own
+service token. Answers are JSON.
 
-and receives the registered project/area/node, or `403` for an unknown or
-revoked node. This endpoint is public because the credential authenticates it.
+| Method and path | What it answers |
+| --- | --- |
+| `GET /api/v1/apps` | every application: state, port, version, URL (and its `/app/<name>/` path) |
+| `GET /api/v1/apps/{name}` | one of them |
+| `POST /api/v1/apps/{name}/{action}` | `start`, `stop`, `restart`, `redeploy`, `rollback`, `build` |
+| `GET /api/v1/jobs` | recent jobs |
+| `GET /api/v1/jobs/{id}` | one job, with its log |
+| `GET /api/v1/registry` | the orchestrator's modules: role, path here, git (`?format=tsv` too) |
+| `GET /api/v1/me` | who is asking: a person, or an application |
+| `GET /api/v1/services` | the services an application calls, and where |
+| `GET /api/v1/config/{app}` | an application's record and environment |
+| `GET /api/v1/switcher` | the applications for every app switcher (no sign-in; readable from this host's pages only) |
+| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added` |
 
-Revocation removes the record, so the next verification fails. Rotation issues a
-new credential and the node must fetch or accept it; the firmware path that
-updates the local credential is still hardware-side work.
+Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
+`POST /auth/service-token`, `POST /api/enroll`, `POST /api/nodes/verify`, `/healthz`.
 
-The remaining firmware-level provisioning work is documented in the
-`rho-bootstrap` component: NVS identity, flash encryption, enrollment transport,
-factory reset, credential refresh, and secure-element limitations.
+## Security
+
+- A form posted from another origin is refused before a handler sees it
+  (`same_origin` in `project.yml`): an application on its own port is another origin
+  of the same host, which a `SameSite` cookie does not tell apart. Programs that post
+  to the keeper send no browser headers and are not affected.
+- The keeper's session cookie is never forwarded to a proxied application.
+- Every program the keeper runs gets its arguments one per line; a value with a line
+  break or a leading `-` is refused.
+- `~/.rho/keeper` is owner-only. Session ids, tokens and credentials come from the
+  runtime's random source and never pass through a report file.
+- Five wrong attempts close the sign-in for five minutes. Changing the access token
+  asks for the current one and signs out every other session.
+
+## Operating notes
+
+| What | Where |
+| --- | --- |
+| Catalogue | `~/.rho/keeper/installed.yml` |
+| Releases | `~/.rho/keeper/apps/<name>/releases/`, `current` |
+| Application workspaces (their data) | `~/.rho/keeper/workspaces/<name>` |
+| People and sessions | `~/.rho/keeper/users.yml`, `~/.rho/keeper/auth-sessions.txt` |
+| Access token, signing keys | `~/.rho/auth/` |
+| Proxy list | `~/.rho/keeper/proxy.txt` |
+| Keeper's own settings | `~/.rho/keeper/data/settings.conf` |
+| Alerts log | `~/.rho/keeper/alerts.log` |
+| Deploy log | `~/.rho/keeper/deploy.log` |
+
+**Logs.** The keeper logs through `rho.log` to standard error, which the unit's
+journal keeps (`journalctl --user -u robohub-keeper`); the Logging tab adds a
+rotating file. An application's log is its own unit's journal, shown under **Log**.
+
+**Backup.** Stop the keeper and copy `~/.rho/keeper` and `~/.rho/auth`: they hold
+the catalogue, every application's workspace, the people and the keys. Releases can
+be rebuilt; the workspaces cannot.
+
+`RHO_KEEPER_STATE_DIR` names another state folder, which is what the tests use.

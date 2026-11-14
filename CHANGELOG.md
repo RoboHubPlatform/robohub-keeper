@@ -362,3 +362,7 @@ The top bar is drawn in the request's language by robohub.ui itself (the whole-w
 ## [0.9.14] - 2026-11-14
 
 Translated sentences are filled with the toolchain's `str_replace` (rho 0.8.3) rather than a helper the i18n module keeps for itself.
+
+## [0.9.15] - 2026-11-14
+
+The Applications page says how an application is run today: `kind: keeper-hosted` in its manifest, built into a release, on its own loopback port and served at `/app/<name>/`, instead of an `application` block and a port of its own.

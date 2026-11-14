@@ -1,75 +1,52 @@
 # RoboHub Keeper
 
-A local dashboard for the RoboHub ecosystem — its registry, what is installed,
-and what the machine needs to run it.
+RoboHub's supervisor and front door: it signs people in, installs the applications
+and runs them as systemd user units from releases, and serves them under its own
+origin at `/app/<name>/`. It listens on `127.0.0.1:19090`.
 
-This repository sits beside the orchestrator, `robohub`, whose registry and
-shared modules it reads; `ROBOHUB_ROOT` says where that is when it is somewhere
-else.
+The full guide is [docs/index.md](docs/index.md).
 
-## Building
+This repository sits beside the orchestrator, `robohub`, whose registry and shared
+modules it reads; `ROBOHUB_ROOT` says where that is when it is somewhere else.
+
+## Building and running
 
 ```sh
 rho build .
+ROBOHUB_ROOT=../robohub ./build/keeper     # by hand, on 127.0.0.1:19090
+./scripts/deploy-keeper.sh                 # as the robohub-keeper user service
 ```
 
-## Running
-
-```sh
-ROBOHUB_ROOT=../robohub ./build/keeper
-```
-
-`RHO_HTTP_ADDR` sets the address (`127.0.0.1:19090`). As a user service:
-
-```sh
-./scripts/deploy-keeper.sh
-```
+`RHO_HTTP_ADDR` sets the address a keeper started by hand listens on;
+`KEEPER_LISTEN` the one the deployed service does (`127.0.0.1` unless told).
 
 ## What it does
 
-- Shows the ecosystem registry with installation status
-- Module detail pages with version, role, path, git URL, summary
-- Install/uninstall modules via git clone
-- System dependencies page listing tools the ecosystem needs
-- Documentation pages for each module and the orchestrator
-- An applications registry: list, install, uninstall, open, start and stop
-  keeper-hosted applications, and add any of them to the keeper's left menu
-- Web-based admin panel with rho-keeper style
+- Home: every installed application as a card, with an inspector to start, stop,
+  restart, build, redeploy and roll it back, and its journal and environment
+- Install from the Rho registry by name, from a git URL or from a folder, after
+  showing what the application needs from the machine
+- A catalogue of what it runs, `~/.rho/keeper/installed.yml`, and a release per
+  redeploy under `~/.rho/keeper/apps/<name>/releases/`
+- Sign-in for every application: people with roles (admin, operator, viewer) and
+  grants per application, tickets signed with the keeper's key
+- The applications behind its own origin, `/app/<name>/` (setting
+  `keeper.proxy_apps`)
+- Integrations it runs for the applications, starting with the MQTT broker
+- Node enrollment and the registry of issued node identities
+- The documentation site
 
 ## Environment
 
-- `RHO_DOCS_ROOT` — the project root (default: `.`)
-- `RHO_DOCS_TREE` — the documentation tree (default: `docs`)
-- `RHO_SITE_BUILD` — where the built site is (default: temp dir)
-- `RHO_SITE_TITLE` — the site title (default: "Rho language and toolchain")
-
-## Applications
-
-The keeper is also the registry of the applications on the machine. An
-application is a module whose `module.yml` declares an `application` block:
-
-```yaml
-application:
-  kind: keeper-hosted
-  title: RoboHub Mesh
-  route: /mesh
-  port: "8478"
-  command: mesh
-```
-
-`kind: keeper` is the dashboard itself, listed but not removable; a module
-without the block is not an application. The `/applications` page discovers
-applications from `applications/` on every request, installs one from a git URL
-or registers a folder that already exists, and uninstalls it again. Each row
-has **Open**, **Start**, **Stop**, **Add to menu** and **Uninstall**. The
-left-menu selection and the paths of externally registered applications live in
-`~/.rho/keeper/` (`menu.txt`, `applications.txt`), or in
-`RHO_KEEPER_STATE_DIR`.
-
-The Mesh application is one of these: it has its own repository, robohub-mesh,
-which the orchestrator's registry names (`registry/modules/robohub-mesh.yml`);
-build it with `rho build ../robohub-mesh` and launch it from the registry. Its own guide is
-the Mesh module's documentation.
+| Variable | What it says |
+| --- | --- |
+| `ROBOHUB_ROOT` | the orchestrator's checkout (default: beside this one) |
+| `RHO_HTTP_ADDR` | where a keeper started by hand listens (`127.0.0.1:19090`) |
+| `RHO_KEEPER_STATE_DIR` | another state folder instead of `~/.rho/keeper` |
+| `ROBOHUB_APPS_HOME` | where applications installed from git are cloned (`~/.rho/apps`) |
+| `RHO_DOCS_ROOT`, `RHO_DOCS_TREE` | a documentation tree the keeper builds a site of its own from |
+| `RHO_SITE_TITLE` | what that site calls itself, when it should not use its default |
+| `ROBOHUB_ARTIFACT_PUBKEY` | the Ed25519 key a staged artifact must be signed with |
 
 ## Tests
 
@@ -77,7 +54,7 @@ the Mesh module's documentation.
 rho test .
 ```
 
-The Rho unit suite checks the registry's name and list helpers, and the smoke
-suite builds the keeper, starts it, and walks the applications page over HTTP:
-discovery, the keeper row, install and uninstall of an external application,
-pinning it to the menu, and refusing to remove the keeper.
+The Rho unit suite checks the registry's name and list helpers; the smoke suite
+builds the keeper, starts it on loopback and walks the applications page over HTTP:
+the keeper row, installing and uninstalling an external application, pinning it to
+the menu, refusing to remove the keeper, releases, rollbacks and a stale job.
