@@ -70,6 +70,22 @@ fn record_field_ok(value: string) bool {
         rho_str_index_of(value, "\r") < 0 && rho_strlen(value) <= 4096
 }
 
+// enrollment_number is a node's area or number: digits, one to five of them.
+fn enrollment_number(text: string) bool {
+    let n: u32 = u32(rho_strlen(text))
+    if n == 0 || n > 5 {
+        return false
+    }
+    var i: u32 = 0
+    while i < n {
+        if rho_str_index_of("0123456789", rho_str_slice(text, i, 1)) < 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
 fn keeper_enroll(req: Request) Response {
     let body: string = request_body(req)
     let token: string = str_trim(form_field(body, "token"))
@@ -84,7 +100,7 @@ fn keeper_enroll(req: Request) Response {
     // The device names the file its record is kept in, and every field is one
     // field of a `|`-separated line: neither may say more than it is.
     if !valid_name(device) || !record_field_ok(public) || !record_field_ok(project) ||
-        !record_field_ok(area) || !record_field_ok(node) {
+        !enrollment_number(area) || !enrollment_number(node) {
         return Response{ 400, "{\"ok\":false,\"error\":\"malformed enrollment fields\"}", "application/json", "" }
     }
     let line: string = enrollment_find_token(token)
@@ -101,6 +117,12 @@ fn keeper_enroll(req: Request) Response {
     let expected_device: string = field(line, 1)
     if expected_device != "" && !rho_str_eq(expected_device, device) {
         return Response{ 403, "{\"ok\":false,\"error\":\"enrollment token is for another device\"}", "application/json", "" }
+    }
+    // A token not made for this device enrolls a new one: it does not take over
+    // a node already enrolled under that id, whose credential is changed only by
+    // rotating it.
+    if expected_device == "" && rho_path_exists(enrollment_nodes_dir() + "/" + device + ".txt") {
+        return Response{ 409, "{\"ok\":false,\"error\":\"that device is already enrolled\"}", "application/json", "" }
     }
     let credential: string = rho_random_hex(32)
     if rho_strlen(credential) != 64 {

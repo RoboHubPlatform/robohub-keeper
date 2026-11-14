@@ -147,10 +147,50 @@ fn api_job(req: Request) Response {
         ",\"log\":" + json_string(job_log(id)) + "}")
 }
 
+// api_host_of is the host of an `Origin` or `Host` value, without scheme or port.
+fn api_host_of(value: string) string {
+    var rest: string = value
+    let scheme: i32 = rho_str_index_of(rest, "://")
+    if scheme >= 0 {
+        rest = rho_str_slice(rest, u32(scheme) + 3, u32(rho_strlen(rest)) - u32(scheme) - 3)
+    }
+    if rho_str_starts_with(rest, "[") {
+        let close: i32 = rho_str_index_of(rest, "]")
+        if close > 0 {
+            return rho_str_slice(rest, 0, u32(close) + 1)
+        }
+    }
+    let colon: i32 = rho_str_index_of(rest, ":")
+    if colon >= 0 {
+        rest = rho_str_slice(rest, 0, u32(colon))
+    }
+    let slash: i32 = rho_str_index_of(rest, "/")
+    if slash >= 0 {
+        rest = rho_str_slice(rest, 0, u32(slash))
+    }
+    return rest
+}
+
+// api_switcher_cors lets a page read the switcher only when it was served by
+// this machine — an application on another port of the same host — and no
+// other site the browser has open.
+fn api_switcher_cors(req: Request) string {
+    if !has_header(req, "Origin") || !has_header(req, "Host") {
+        return ""
+    }
+    let origin: string = header_str(req, "Origin")
+    let host: string = api_host_of(header_str(req, "Host"))
+    if host == "" || rho_str_index_of(origin, "\n") >= 0 || rho_str_index_of(origin, "\r") >= 0 ||
+        !rho_str_eq(api_host_of(origin), host) {
+        return ""
+    }
+    return "Access-Control-Allow-Origin: " + origin + "\nVary: Origin\n"
+}
+
 // api_switcher is what the app switcher of every RoboHub application lists: the
 // keeper and the applications it hosts, with where each listens and one word for
-// its state. It is public and asked for across ports, so it says nothing more
-// than a look at the machine's open ports would.
+// its state. It is asked for across ports by the applications' pages, so it is
+// readable from a page of this host and from no other site.
 fn api_switcher(req: Request) Response {
     var out: string = "{\"name\":\"keeper\",\"title\":\"Keeper\",\"port\":" + json_string(keeper_listen_port()) +
         ",\"route\":\"/\",\"state\":\"keeper\"}"
@@ -168,7 +208,7 @@ fn api_switcher(req: Request) Response {
             ",\"state\":" + json_string(field(line, 4)) + "}"
     }
     return Response{ 200, "{\"apps\":[" + out + "]}", "application/json",
-        "Access-Control-Allow-Origin: *\nCache-Control: no-store" }
+        api_switcher_cors(req) + "Cache-Control: no-store" }
 }
 
 /* -------------------------------------------------------------------------- */

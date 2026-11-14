@@ -349,8 +349,51 @@ fn app_unit_text(name: string) string {
     }
     return unit + "\n[Service]\nType=simple\nWorkingDirectory=" + app_run_dir(name) + "\n" +
         "EnvironmentFile=" + app_env_path(name) + "\n" +
-        "ExecStart=" + app_program(name) + "\n" +
+        "ExecStart=" + app_program(name) + "\n" + app_isolation(name) +
         "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
+}
+
+// app_isolation is what keeps a hosted application out of the keeper's and the
+// other applications' secrets, though they all run as one user: the keeper's
+// folder is an empty read-only one in the application's view, with only its own
+// workspace and its own releases put back, and the
+// keys that mint tokens are hidden. NoNewPrivileges always applies; the paths
+// only where the machine's systemd can make a private view for a user service,
+// which the keeper tries once (app_isolation_works) — a unit that cannot start
+// would be worse than one that shares a folder.
+fn app_isolation(name: string) string {
+    var out: string = "NoNewPrivileges=yes\n"
+    if integration_is(name) || !app_isolation_works() {
+        return out
+    }
+    let auth: string = auth_dir()
+    return out + "TemporaryFileSystem=" + keeper_state_dir() + ":ro\n" +
+        "BindPaths=" + app_workspace(name) + " -" + app_home(name) + "\n" +
+        "InaccessiblePaths=-" + auth + "/private.pem -" + auth + "/signing.key -" + auth + "/master.token -" +
+        auth + "/credentials.json -" + auth + "/clients\n"
+}
+
+// app_isolation_works is whether this machine's systemd can give a user service
+// a private view of the file system: asked once of a throwaway unit with the
+// same settings, and the answer kept.
+fn app_isolation_works() bool {
+    let kept: string = keeper_state_dir() + "/isolation.txt"
+    let said: string = str_trim(rho_read_text(kept))
+    if rho_str_eq(said, "yes") {
+        return true
+    }
+    if rho_str_eq(said, "no") {
+        return false
+    }
+    let code: u32 = rho_exec_args("systemd-run", "--user\n--wait\n--quiet\n--collect\n-p\nNoNewPrivileges=yes\n-p\nTemporaryFileSystem=" +
+        keeper_state_dir() + ":ro\n-p\nInaccessiblePaths=-" + auth_dir() + "/private.pem\ntrue\n", apps_report("isolation-probe"))
+    var answer: string = "no"
+    if code == 0 {
+        answer = "yes"
+    }
+    ignore_bool(rho_write_text(kept, answer + "\n"))
+    info("keeper", "user-service isolation: " + answer)
+    return code == 0
 }
 
 fn app_systemd(args: string, report: string) u32 {

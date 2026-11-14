@@ -23,6 +23,7 @@ extern fn rho_write_text(path: string, text: string) bool
 extern fn rho_write_secret(path: string, text: string) bool
 extern fn rho_append_text(path: string, text: string) bool
 extern fn rho_random_hex(bytes: u32) string
+extern fn rho_hmac_sha256_hex(key_hex: string, message_hex: string) string
 extern fn rho_exec_args(program: string, arguments: string, output_path: string) u32
 extern fn rho_exec(program: string, arguments: string, output_path: string) u32
 // The clock, from the runtime rather than from `date` written to a file and read

@@ -57,7 +57,8 @@ def wait_for(base: str, timeout: float = 20.0) -> None:
     raise SystemExit(f"keeper did not start at {base}")
 
 
-SESSION = "smoke-session"
+# A session id as the keeper makes them: 16 random bytes, as hex.
+SESSION = "5e5510a0c0ffee0123456789abcdef01"
 
 
 def get(base: str, path: str) -> str:
@@ -296,6 +297,44 @@ def main() -> int:
             if "BEGIN PUBLIC KEY" not in published or published != (keys / "public.pem").read_text():
                 raise AssertionError("the keeper does not publish its public key")
 
+            # A ticket names the keeper session by a handle, never by the cookie
+            # value: an application holding it cannot be the admin at the keeper.
+            status, location, _ = sign_in(base, "mesh", "http://127.0.0.1:8478/auth/callback", True)
+            ticket = urllib.parse.parse_qs(urllib.parse.urlparse(location).query).get("ticket", [""])[0]
+            if ticket:
+                import base64, json as _json
+                part = ticket.split(".")[1]
+                claims = _json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+                if claims.get("sid") == SESSION or len(claims.get("sid", "")) != 64:
+                    raise AssertionError(f"the ticket carries the session itself: {claims.get('sid')!r}")
+                handle = claims["sid"]
+                with urllib.request.urlopen(base + "/auth/session/" + handle, timeout=10) as response:
+                    if response.read().decode().strip() != "stands":
+                        raise AssertionError("the session handle is not recognised")
+                try:
+                    urllib.request.urlopen(base + "/auth/session/" + SESSION, timeout=10)
+                    raise AssertionError("the raw session id is accepted as a handle")
+                except urllib.error.HTTPError as answer:
+                    if answer.code != 404:
+                        raise
+
+            # A path in the docs is text on the page, not markup.
+            try:
+                get(base, "/docs/%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E")
+                raise AssertionError("an unknown doc page answered 200")
+            except urllib.error.HTTPError as answer:
+                page = answer.read().decode("utf-8", "replace")
+                if "<img src=x" in page:
+                    raise AssertionError("the docs page reflects markup from its address")
+            # The switcher answers a page of this host, and no other site.
+            for origin, allowed in ((f"http://127.0.0.1:8478", True), ("http://evil.example", False)):
+                request = urllib.request.Request(base + "/api/v1/switcher")
+                request.add_header("Origin", origin)
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    said = response.headers.get("Access-Control-Allow-Origin", "")
+                if (said == origin) != allowed or said == "*":
+                    raise AssertionError(f"switcher CORS for {origin}: {said!r}")
+
             # Signing in to an application on a port of its own returns to its
             # callback at the root of that port: Mesh at :8478 is answered at
             # /auth/callback, its route /mesh being only its first page.
@@ -331,7 +370,10 @@ def main() -> int:
             with urllib.request.urlopen(base + "/auth/login", timeout=10) as response:
                 first = response.read().decode()
             assert_contains(first, ["Sign in with the access token", "Access token"], "the first-run page")
-            with urllib.request.urlopen(base + "/auth/session/" + SESSION, timeout=10) as response:
+            # It asks by the handle its ticket carried, never by the cookie value.
+            import hashlib, hmac as _hmac
+            handle = _hmac.new(bytes.fromhex(SESSION), b"rh-session1", hashlib.sha256).hexdigest()
+            with urllib.request.urlopen(base + "/auth/session/" + handle, timeout=10) as response:
                 if response.status != 200:
                     raise AssertionError("a standing session is not said to stand")
             try:

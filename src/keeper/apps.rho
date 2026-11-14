@@ -373,6 +373,9 @@ fn app_client_wanted(path: string) string {
         let colon: i32 = rho_str_index_of(call, ":")
         var namespace: string = call
         if colon >= 0 { namespace = rho_str_slice(call, 0, u32(colon)) }
+        // A call names a service: `*` would be every audience the keeper signs
+        // for, its own included.
+        if namespace == "" || rho_str_index_of(namespace, "*") >= 0 { continue }
         audiences = audiences + "," + call
         scopes = scopes + "," + namespace + ":*"
     }

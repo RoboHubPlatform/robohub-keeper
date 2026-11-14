@@ -284,6 +284,10 @@ fn docs_page(req: Request) Response {
 
 fn doc_page(req: Request) Response {
     let path: string = param(req, "path")
+    // A page is a name under the docs tree: never a way out of it.
+    if rho_str_index_of(path, "..") >= 0 || rho_str_starts_with(path, "/") || rho_str_index_of(path, "\\") >= 0 {
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p><a href='/docs'>All docs</a></p>")
+    }
     // The path from the URL may or may not have the docs/ prefix.
     var full_path: string = path
     if rho_str_index_of(path, "docs/") != 0 {
@@ -302,7 +306,7 @@ fn doc_page(req: Request) Response {
         content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + path + "/docs/index.md")
     }
     if content == "" {
-        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>No documentation has been built for " + path + ".</p><p><a href='/docs'>All docs</a></p>")
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>No documentation has been built for " + escape_html(path) + ".</p><p><a href='/docs'>All docs</a></p>")
     }
     return page(req, path, content)
 }
@@ -371,7 +375,7 @@ fn docs_rows() string {
         if slash >= 0 {
             link_name = rho_str_slice(link_name, 0, u32(slash))
         }
-        result = result + "<tr><td><a href='/docs/" + link_name + "'>" + title + "</a></td><td>" + path + "</td></tr>"
+        result = result + "<tr><td><a href='/docs/" + escape_html(link_name) + "'>" + escape_html(title) + "</a></td><td>" + escape_html(path) + "</td></tr>"
     }
     return result
 }

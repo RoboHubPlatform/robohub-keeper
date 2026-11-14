@@ -143,7 +143,7 @@ fn keeper_node_verify(req: Request) Response {
     return Response{ 200,
         "{\"ok\":true,\"device_id\":" + json_string(device) +
         ",\"project\":" + json_string(field(record, 2)) +
-        ",\"area\":" + field(record, 3) +
-        ",\"node\":" + field(record, 4) + "}",
+        ",\"area\":" + rho_int_to_str(rho_int_from_str(field(record, 3))) +
+        ",\"node\":" + rho_int_to_str(rho_int_from_str(field(record, 4))) + "}",
         "application/json", "" }
 }

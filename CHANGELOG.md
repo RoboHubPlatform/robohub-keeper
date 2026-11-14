@@ -324,3 +324,15 @@ A mesh gateway's page can be signed in to. The gateway takes keeper's tickets fo
 ## [0.9.7] - 2026-11-14
 
 Trimming, URL decoding and form fields come from the toolchain (rho 0.7.0) rather than the keeper's own copies; a `%` not followed by two hex digits in a form is kept as written instead of becoming a zero byte. Needs rho 0.7.0.
+
+## [0.9.8] - 2026-11-14
+
+From a security review.
+
+- A sign-in ticket names the keeper session by a handle derived from it, never by the session id the keeper's cookie carries: an application, or anything that reads its ticket, could otherwise present it back to the keeper as the admin. `/auth/session/{handle}` answers by the handle.
+- The docs page no longer reflects its address as markup, and refuses a path with `..`.
+- The app switcher's list is readable from a page of this host only, not from any site (`Access-Control-Allow-Origin` was `*`).
+- `next`, `return_to` and `audience` are URL-encoded on their way through sign-in.
+- Hosted applications run with `NoNewPrivileges`, and — where the machine's systemd can make a private view for a user service, which the keeper tries once — with the keeper's folder empty in their view but for their own workspace and releases, and the keys that mint tokens hidden.
+- A manifest's `deploy.calls` cannot name `*`.
+- Enrollment: area and node must be numbers, and a token not made for a device cannot take over one already enrolled.
