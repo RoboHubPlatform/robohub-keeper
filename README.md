@@ -58,3 +58,7 @@ The Rho unit suite checks the registry's name and list helpers; the smoke suite
 builds the keeper, starts it on loopback and walks the applications page over HTTP:
 the keeper row, installing and uninstalling an external application, pinning it to
 the menu, refusing to remove the keeper, releases, rollbacks and a stale job.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
