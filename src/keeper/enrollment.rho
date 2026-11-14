@@ -28,6 +28,45 @@ fn enrollment_now() u32 {
     return rho_now_s()
 }
 
+// The token file is shared with `rho bootstrap token`, another process, which
+// adds lines to it while the keeper marks them used. Both take the same lock — a
+// directory beside the file, made with mkdir, which either makes it or finds it
+// there — and both replace the file whole through a temporary file and a rename,
+// so a reader never sees half of it and a line added during a mark is not lost.
+const ENROLL_LOCK_TRIES: u32 = 50
+const ENROLL_LOCK_WAIT_MS: u32 = 100
+
+extern fn rho_sleep_ms(ms: u32)
+
+fn enrollment_lock_dir() string {
+    return enrollment_tokens_file() + ".lock"
+}
+
+// enrollment_lock takes the token file's lock, for this process's requests and
+// for other processes. A lock that is still held after the tries is taken as
+// left behind by a process that died holding it.
+fn enrollment_lock() void {
+    rho_lock("keeper.enrollment")
+    let report: string = apps_report("enrollment-lock")
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + keeper_state_dir() + "\n", report))
+    var tries: u32 = 0
+    while tries < ENROLL_LOCK_TRIES {
+        if rho_exec_args("mkdir", enrollment_lock_dir() + "\n", report) == 0 {
+            return
+        }
+        rho_sleep_ms(ENROLL_LOCK_WAIT_MS)
+        tries = tries + 1
+    }
+    warn("keeper", "the enrollment lock was held too long; taking it")
+    ignore_u32(rho_exec_args("rm", "-rf\n" + enrollment_lock_dir() + "\n", report))
+    ignore_u32(rho_exec_args("mkdir", enrollment_lock_dir() + "\n", report))
+}
+
+fn enrollment_unlock() void {
+    ignore_u32(rho_exec_args("rmdir", enrollment_lock_dir() + "\n", apps_report("enrollment-lock")))
+    rho_unlock("keeper.enrollment")
+}
+
 fn enrollment_find_token(token: string) string {
     var rest: string = rho_read_text(enrollment_tokens_file())
     while rest != "" {
@@ -37,14 +76,15 @@ fn enrollment_find_token(token: string) string {
             line = rho_str_slice(rest, 0, u32(at))
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
-        if field(line, 0) == token {
+        if token != "" && secret_same(field(line, 0), token) {
             return line
         }
     }
     return ""
 }
 
-fn enrollment_mark_used(token: string) void {
+// enrollment_mark_used marks a token spent; the caller holds the lock.
+fn enrollment_mark_used(token: string) bool {
     var out: string = ""
     var rest: string = rho_read_text(enrollment_tokens_file())
     while rest != "" {
@@ -55,12 +95,12 @@ fn enrollment_mark_used(token: string) void {
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if line == "" { continue }
-        if field(line, 0) == token {
-            line = line + "|used"
+        if rho_str_eq(field(line, 0), token) {
+            line = enrollment_mark_line(line)
         }
         out = out + line + "\n"
     }
-    ignore_bool(rho_write_secret(enrollment_tokens_file(), out))
+    return rho_write_secret(enrollment_tokens_file(), out)
 }
 
 // record_field_ok is whether a value can be one field of a node record: no field
@@ -72,21 +112,60 @@ fn record_field_ok(value: string) bool {
 
 // enrollment_number is a node's area or number: digits, one to five of them.
 fn enrollment_number(text: string) bool {
-    let n: u32 = u32(rho_strlen(text))
-    if n == 0 || n > 5 {
-        return false
+    return enrollment_digits(text)
+}
+
+fn enrollment_refused(status: u32, error: string) Response {
+    return Response{ status, "{\"ok\":false,\"error\":" + json_string(error) + "}", "application/json", "" }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The request budget                                                        */
+/* -------------------------------------------------------------------------- */
+
+fn rate_dir() string {
+    return keeper_state_dir() + "/rate"
+}
+
+
+// rate_peer is who a request is counted against: the address of the connection
+// itself, which a caller cannot write. Only when that is this machine — a TLS
+// proxy or an SSH tunnel in front of the keeper — is the proxy's forwarded
+// address used instead, because then the proxy wrote it.
+fn rate_peer(req: Request) string {
+    let peer: string = request_remote(req)
+    if peer != "" && peer != "127.0.0.1" && peer != "::1" {
+        return peer
     }
-    var i: u32 = 0
-    while i < n {
-        if rho_str_index_of("0123456789", rho_str_slice(text, i, 1)) < 0 {
-            return false
-        }
-        i = i + 1
-    }
-    return true
+    return rate_client(header_str(req, "X-Forwarded-For"), header_str(req, "X-Real-Ip"))
+}
+
+// rate_take counts one call of a request against its client's budget and the
+// budget of every client together; false when either is spent.
+fn rate_take(req: Request, bucket: string, per_client: u32, per_window: u32) bool {
+    let client: string = rate_peer(req)
+    rho_lock("keeper.rate")
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + rate_dir() + "\n", apps_report("rate-mkdir")))
+    let now: u32 = enrollment_now()
+    let own_file: string = rate_dir() + "/" + bucket + "-" + rate_slot(client)
+    let all_file: string = rate_dir() + "/" + bucket + "-all"
+    let own: string = rate_next(str_trim(rho_read_text(own_file)), now, RATE_WINDOW_SECONDS)
+    let all: string = rate_next(str_trim(rho_read_text(all_file)), now, RATE_WINDOW_SECONDS)
+    ignore_bool(rho_write_text(own_file, own + "\n"))
+    ignore_bool(rho_write_text(all_file, all + "\n"))
+    rho_unlock("keeper.rate")
+    return !rate_over(own, per_client) && !rate_over(all, per_window)
+}
+
+fn rate_refused() Response {
+    return Response{ 429, "{\"ok\":false,\"error\":\"too many requests\"}", "application/json",
+        "Retry-After: " + rho_int_to_str(RATE_WINDOW_SECONDS) }
 }
 
 fn keeper_enroll(req: Request) Response {
+    if !rate_take(req, "enroll", ENROLL_PER_CLIENT, ENROLL_PER_WINDOW) {
+        return rate_refused()
+    }
     let body: string = request_body(req)
     let token: string = str_trim(form_field(body, "token"))
     let device: string = str_trim(form_field(body, "device_id"))
@@ -95,47 +174,65 @@ fn keeper_enroll(req: Request) Response {
     let area: string = str_trim(form_field(body, "area"))
     let node: string = str_trim(form_field(body, "node"))
     if token == "" || device == "" || public == "" {
-        return Response{ 400, "{\"ok\":false,\"error\":\"missing enrollment fields\"}", "application/json", "" }
+        return enrollment_refused(400, "missing enrollment fields")
     }
     // The device names the file its record is kept in, and every field is one
-    // field of a `|`-separated line: neither may say more than it is.
+    // field of a `|`-separated line: neither may say more than it is. The
+    // placement a request names is only compared with its token's.
     if !valid_name(device) || !record_field_ok(public) || !record_field_ok(project) ||
-        !enrollment_number(area) || !enrollment_number(node) {
-        return Response{ 400, "{\"ok\":false,\"error\":\"malformed enrollment fields\"}", "application/json", "" }
-    }
-    let line: string = enrollment_find_token(token)
-    if line == "" {
-        return Response{ 403, "{\"ok\":false,\"error\":\"unknown enrollment token\"}", "application/json", "" }
-    }
-    if field(line, 7) == "used" {
-        return Response{ 409, "{\"ok\":false,\"error\":\"enrollment token already used\"}", "application/json", "" }
-    }
-    let expires: u32 = u32(rho_int_from_str(field(line, 5)))
-    if expires != 0 && enrollment_now() > expires {
-        return Response{ 403, "{\"ok\":false,\"error\":\"enrollment token expired\"}", "application/json", "" }
-    }
-    let expected_device: string = field(line, 1)
-    if expected_device != "" && !rho_str_eq(expected_device, device) {
-        return Response{ 403, "{\"ok\":false,\"error\":\"enrollment token is for another device\"}", "application/json", "" }
-    }
-    // A token not made for this device enrolls a new one: it does not take over
-    // a node already enrolled under that id, whose credential is changed only by
-    // rotating it.
-    if expected_device == "" && rho_path_exists(enrollment_nodes_dir() + "/" + device + ".txt") {
-        return Response{ 409, "{\"ok\":false,\"error\":\"that device is already enrolled\"}", "application/json", "" }
-    }
-    let credential: string = rho_random_hex(32)
-    if rho_strlen(credential) != 64 {
-        return Response{ 500, "{\"ok\":false,\"error\":\"credential generation failed\"}", "application/json", "" }
+        (area != "" && !enrollment_number(area)) || (node != "" && !enrollment_number(node)) {
+        return enrollment_refused(400, "malformed enrollment fields")
     }
     let path: string = enrollment_nodes_dir() + "/" + device + ".txt"
-    let record: string = device + "|" + public + "|" + project + "|" + area + "|" + node +
-        "|" + credential + "|" + rho_int_to_str(enrollment_now()) + "\n"
+    // Finding the token, checking it, writing the node and spending the token
+    // are one step: two requests with one token cannot both enroll.
+    enrollment_lock()
+    let line: string = enrollment_find_token(token)
+    let problem: string = enrollment_token_problem(line, device, enrollment_now())
+    if problem != "" {
+        enrollment_unlock()
+        info("keeper", "enrollment refused for " + device + ": " + problem)
+        if rho_str_eq(problem, "enrollment token already used") {
+            return enrollment_refused(409, problem)
+        }
+        return enrollment_refused(403, problem)
+    }
+    if enrollment_placement_differs(line, project, area, node) {
+        enrollment_unlock()
+        info("keeper", "enrollment refused for " + device + ": its placement is not its token's")
+        return enrollment_refused(403, "the requested placement is not the token's")
+    }
+    // A device already enrolled is replaced only by a token made to re-enroll
+    // it; otherwise its credential is changed only by rotating it.
+    if rho_path_exists(path) && !enrollment_token_reenroll(line) {
+        enrollment_unlock()
+        return enrollment_refused(409, "that device is already enrolled")
+    }
+    let credential: string = rho_random_hex(32)
+    let salt: string = rho_random_hex(16)
+    let stored: string = credential_hash(salt, credential)
+    if rho_strlen(credential) != 64 || rho_strlen(salt) != 32 || stored == "" {
+        enrollment_unlock()
+        return enrollment_refused(500, "credential generation failed")
+    }
+    let record: string = device + "|" + public + "|" + field(line, 2) + "|" +
+        rho_int_to_str(rho_int_from_str(field(line, 3))) + "|" + rho_int_to_str(rho_int_from_str(field(line, 4))) +
+        "|" + stored + "|" + rho_int_to_str(enrollment_now()) + "\n"
     ignore_u32(rho_exec_args("mkdir", "-p\n" + enrollment_nodes_dir() + "\n", apps_report("enrollment-mkdir")))
-    ignore_bool(rho_write_secret(path, record))
-    ignore_u32(rho_exec_args("chmod", "600\n" + path + "\n", apps_report("enrollment-chmod")))
-    enrollment_mark_used(token)
+    ignore_u32(rho_exec_args("chmod", "700\n" + enrollment_nodes_dir() + "\n", apps_report("enrollment-chmod")))
+    if !enrollment_mark_used(field(line, 0)) {
+        enrollment_unlock()
+        return enrollment_refused(500, "the token could not be spent")
+    }
+    if !rho_write_secret(path, record) {
+        enrollment_unlock()
+        return enrollment_refused(500, "the node record could not be written")
+    }
+    enrollment_unlock()
     info("keeper", "enrolled node " + device)
-    return Response{ 200, "{\"ok\":true,\"credential\":" + json_string(credential) + "}",
+    return Response{ 200, "{\"ok\":true,\"credential\":" + json_string(credential) +
+        ",\"project\":" + json_string(field(line, 2)) +
+        ",\"area\":" + rho_int_to_str(rho_int_from_str(field(line, 3))) +
+        ",\"node\":" + rho_int_to_str(rho_int_from_str(field(line, 4))) + "}",
         "application/json", "" }
 }

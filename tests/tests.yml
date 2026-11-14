@@ -9,7 +9,14 @@ suites:
   - name: tests/apps_test.rho
     kind: rho
     tags: [unit, rho]
+  - name: tests/enrollment_test.rho
+    kind: rho
+    tags: [unit, rho, enrollment]
   - name: apps-smoke
     kind: command
     tags: [smoke]
     command: [python3, tests/apps_smoke.py]
+  - name: enroll-smoke
+    kind: command
+    tags: [smoke, enrollment]
+    command: [python3, tests/enroll_smoke.py]

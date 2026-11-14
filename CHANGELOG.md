@@ -366,3 +366,7 @@ Translated sentences are filled with the toolchain's `str_replace` (rho 0.8.3) r
 ## [0.9.15] - 2026-11-14
 
 The Applications page says how an application is run today: `kind: keeper-hosted` in its manifest, built into a release, on its own loopback port and served at `/app/<name>/`, instead of an `application` block and a port of its own.
+
+## [0.10.0] - 2026-11-14
+
+Enrollment trusts the token, not the node: the place a node is enrolled into is the one its token names, a token names a device and an expiry, an enrolled device is replaced only by a re-enroll token, and a token is spent once even when two requests race. Node credentials are stored salted and hashed. Enrollment and node verification are rate limited by the connection's own address (a forwarded address only from a proxy on this machine). Needs rho 0.9.0.

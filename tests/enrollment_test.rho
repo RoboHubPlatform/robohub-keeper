@@ -1,0 +1,122 @@
+//
+// @file enrollment_test.rho
+// @brief The unit tests of enrollment: what a token allows, how a credential is kept, and the request budget.
+//
+// @module keeper.enrollment_test
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-14
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.enrollment_test
+
+include "../src/keeper/apps_text.rho"
+include "../src/keeper/enrollment_text.rho"
+
+extern fn rho_strlen(s: string) u64
+extern fn rho_str_slice(s: string, start: u32, length: u32) string
+extern fn rho_str_index_of(s: string, needle: string) i32
+extern fn rho_str_from_byte(b: u8) string
+extern fn rho_str_eq(a: string, b: string) bool
+extern fn rho_str_starts_with(s: string, prefix: string) bool
+extern fn rho_int_from_str(s: string) u32
+extern fn rho_int_to_str(value: u32) string
+extern fn rho_hmac_sha256_hex(key_hex: string, message_hex: string) string
+extern fn abort()
+
+fn check(condition: bool, what: string) void {
+    if !condition {
+        print("FAIL: " + what + "\n")
+        abort()
+    }
+}
+
+const TOKEN: string = "t0k|garden-01|default|1|7|2000|"
+
+test fn a_token_names_its_device_and_expiry() void {
+    check(rho_str_eq(enrollment_token_problem(TOKEN, "garden-01", 1000), ""), "a good token enrolls its device")
+    check(rho_str_eq(enrollment_token_problem("", "garden-01", 1000), "unknown enrollment token"), "no token")
+    check(rho_str_eq(enrollment_token_problem("t|garden-01|default|1|7|0|", "garden-01", 1000),
+        "enrollment token has no expiry"), "a token without expiry is refused")
+    check(rho_str_eq(enrollment_token_problem("t||default|1|7|2000|", "garden-01", 1000),
+        "enrollment token names no device"), "a token without device is refused")
+    check(rho_str_eq(enrollment_token_problem(TOKEN, "garden-01", 2001), "enrollment token expired"),
+        "an expired token")
+    check(rho_str_eq(enrollment_token_problem(TOKEN, "garden-02", 1000), "enrollment token is for another device"),
+        "another device")
+    check(rho_str_eq(enrollment_token_problem("t|garden-01|default||7|2000|", "garden-01", 1000),
+        "enrollment token carries no placement"), "a token without placement")
+    check(rho_str_eq(enrollment_token_problem(TOKEN + "|used", "garden-01", 1000), "enrollment token already used"),
+        "a spent token")
+    print("[PASS] a_token_names_its_device_and_expiry\n")
+}
+
+test fn the_placement_is_the_tokens() void {
+    check(!enrollment_placement_differs(TOKEN, "", "", ""), "a request that names no placement takes the token's")
+    check(!enrollment_placement_differs(TOKEN, "default", "1", "07"), "the same placement, however written")
+    check(enrollment_placement_differs(TOKEN, "other", "1", "7"), "another project")
+    check(enrollment_placement_differs(TOKEN, "default", "2", "7"), "another area")
+    check(enrollment_placement_differs(TOKEN, "default", "1", "8"), "another node")
+    print("[PASS] the_placement_is_the_tokens\n")
+}
+
+test fn a_token_is_spent_once_and_reenroll_is_marked() void {
+    check(rho_str_eq(enrollment_mark_line(TOKEN), TOKEN + "|used"), "the mark follows the flags field")
+    check(enrollment_token_used(enrollment_mark_line(TOKEN)), "a marked token is used")
+    check(enrollment_token_used(enrollment_mark_line("t|d|p|1|2|3")), "a line without flags is marked too")
+    check(!enrollment_token_reenroll(enrollment_mark_line("t|d|p|1|2|3")), "and is not a re-enroll token")
+    check(rho_str_eq(enrollment_mark_line(TOKEN + "|used"), TOKEN + "|used"), "marking twice changes nothing")
+    let again: string = "t|garden-01|default|1|7|2000|reenroll"
+    check(enrollment_token_reenroll(again), "a re-enroll token")
+    check(!enrollment_token_reenroll(TOKEN), "an ordinary token")
+    check(enrollment_token_reenroll(enrollment_mark_line(again)) && enrollment_token_used(enrollment_mark_line(again)),
+        "marking keeps the flag")
+    print("[PASS] a_token_is_spent_once_and_reenroll_is_marked\n")
+}
+
+test fn a_credential_is_kept_as_a_salted_hash() void {
+    let credential: string = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    let stored: string = credential_hash("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f", credential)
+    check(credential_hashed(stored), "the stored form is a hash")
+    check(rho_str_index_of(stored, credential) < 0, "the credential itself is not stored")
+    check(credential_matches(stored, credential), "the credential matches its hash")
+    check(!credential_matches(stored, "00112233445566778899aabbccddeeff00112233445566778899aabbccddeefe"),
+        "another credential does not")
+    check(!credential_matches(stored, "not hex"), "something that is not a credential does not")
+    check(!credential_matches(stored, ""), "nothing does not")
+    let other: string = credential_hash("a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", credential)
+    check(!rho_str_eq(other, stored), "another salt is another hash")
+    check(credential_matches(credential, credential), "an entry from before hashing still verifies")
+    check(!credential_matches(credential, "x"), "and refuses another")
+    print("[PASS] a_credential_is_kept_as_a_salted_hash\n")
+}
+
+test fn a_client_has_a_budget() void {
+    check(rho_str_eq(rate_client("", ""), "direct"), "no proxy header is the connection")
+    check(rho_str_eq(rate_client("10.0.0.9, 192.168.1.5", ""), "192.168.1.5"), "the nearest proxy's entry")
+    check(rho_str_eq(rate_client("", "192.168.1.6"), "192.168.1.6"), "X-Real-IP")
+    check(rho_str_eq(rate_slot("direct"), "direct"), "the connection has its own slot")
+    check(rho_str_eq(rate_slot("192.168.1.5"), rate_slot("192.168.1.5")), "one client, one slot")
+    var state: string = ""
+    var i: u32 = 0
+    while i < 3 {
+        state = rate_next(state, 100, 60)
+        i = i + 1
+    }
+    check(rho_str_eq(state, "3|100"), "three calls in a window")
+    check(!rate_over(state, 3), "at the limit")
+    check(rate_over(rate_next(state, 120, 60), 3), "past it")
+    check(rho_str_eq(rate_next(state, 160, 60), "1|160"), "a new window starts again")
+    print("[PASS] a_client_has_a_budget\n")
+}
+
+fn main() void {
+    a_token_names_its_device_and_expiry()
+    the_placement_is_the_tokens()
+    a_token_is_spent_once_and_reenroll_is_marked()
+    a_credential_is_kept_as_a_salted_hash()
+    a_client_has_a_budget()
+    print("keeper enrollment tests ok\n")
+}

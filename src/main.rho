@@ -37,6 +37,7 @@ include "keeper/module_settings.rho"
 include "keeper/people.rho"
 include "keeper/auth.rho"
 include "keeper/settings.rho"
+include "keeper/enrollment_text.rho"
 include "keeper/enrollment.rho"
 include "keeper/nodes.rho"
 include "htmx"
@@ -61,6 +62,8 @@ fn init() void {
     // The proxy's list of applications, current from the start.
     ignore_string(keeper_switcher_apps())
     log_config_apply("keeper")
+    // Node credentials kept in the clear by an older keeper become salted hashes.
+    keeper_nodes_migrate()
     info("keeper", "starting")
 }
 

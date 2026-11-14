@@ -1,0 +1,297 @@
+//
+// @file enrollment_text.rho
+// @brief The rules of enrollment as text: token lines, stored credentials and the request budget.
+//
+// @module keeper.enrollment_text
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-14
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.enrollment_text
+
+// What enrollment decides, without a file, a clock or a request: the token line
+// and what it allows, the form a node's credential is kept in, and how many calls
+// a client has left. enrollment.rho and nodes.rho do the reading and writing;
+// tests/enrollment_test.rho checks these.
+//
+// A token line is
+//
+//   token|device|project|area|node|expires|flags|used
+//
+// written by `rho bootstrap token` (or by hand). `flags` is empty or `reenroll`,
+// which is what lets a token replace a device already enrolled; `used` is the
+// mark the keeper adds when the token is spent.
+
+const ENROLL_FLAG_REENROLL: string = "reenroll"
+
+/// The prefix of a credential kept as a salted hash: `s1$<salt>$<hmac>`.
+const CREDENTIAL_HASH_PREFIX: string = "s1$"
+
+// enrollment_token_used is whether a token line carries the used mark. A line
+// written without the flags field has the mark one field earlier.
+fn enrollment_token_used(line: string) bool {
+    return rho_str_eq(field(line, 7), "used") || rho_str_eq(field(line, 6), "used")
+}
+
+// enrollment_token_reenroll is whether a token may replace an enrolled device.
+fn enrollment_token_reenroll(line: string) bool {
+    return rho_str_eq(field(line, 6), ENROLL_FLAG_REENROLL)
+}
+
+// enrollment_digits is whether a value is a node's area or number: one to five
+// decimal digits.
+fn enrollment_digits(text: string) bool {
+    let n: u32 = u32(rho_strlen(text))
+    if n == 0 || n > 5 {
+        return false
+    }
+    var i: u32 = 0
+    while i < n {
+        if rho_str_index_of("0123456789", rho_str_slice(text, i, 1)) < 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// enrollment_token_problem is why a token line cannot enroll `device` at `now`,
+// or "" when it can. A token names its device and its expiry, and the placement
+// it carries is a placement: the node's request does not get to choose one.
+fn enrollment_token_problem(line: string, device: string, now: u32) string {
+    if line == "" {
+        return "unknown enrollment token"
+    }
+    if enrollment_token_used(line) {
+        return "enrollment token already used"
+    }
+    let expected: string = field(line, 1)
+    if expected == "" {
+        return "enrollment token names no device"
+    }
+    let expires: u32 = u32(rho_int_from_str(field(line, 5)))
+    if expires == 0 {
+        return "enrollment token has no expiry"
+    }
+    if now > expires {
+        return "enrollment token expired"
+    }
+    if !rho_str_eq(expected, device) {
+        return "enrollment token is for another device"
+    }
+    if !enrollment_digits(field(line, 3)) || !enrollment_digits(field(line, 4)) {
+        return "enrollment token carries no placement"
+    }
+    return ""
+}
+
+// enrollment_number_same is whether two decimal numbers are the same number
+// ("007" is 7).
+fn enrollment_number_same(a: string, b: string) bool {
+    return rho_int_from_str(a) == rho_int_from_str(b)
+}
+
+// enrollment_placement_differs is whether a request asked for a placement other
+// than its token's. A request that names none takes the token's; one that names
+// another is refused rather than corrected, so a node configured for the wrong
+// place hears so.
+fn enrollment_placement_differs(line: string, project: string, area: string, node: string) bool {
+    if project != "" && !rho_str_eq(project, field(line, 2)) {
+        return true
+    }
+    if area != "" && !enrollment_number_same(area, field(line, 3)) {
+        return true
+    }
+    if node != "" && !enrollment_number_same(node, field(line, 4)) {
+        return true
+    }
+    return false
+}
+
+// enrollment_mark_line is a token line with the used mark, keeping the flags
+// field where it is.
+fn enrollment_mark_line(line: string) string {
+    if enrollment_token_used(line) {
+        return line
+    }
+    // token|device|project|area|node|expires has six fields; the flags field is
+    // the seventh and may be missing or empty.
+    var fields: u32 = 1
+    var i: u32 = 0
+    while i < u32(rho_strlen(line)) {
+        if rho_str_eq(rho_str_slice(line, i, 1), "|") {
+            fields = fields + 1
+        }
+        i = i + 1
+    }
+    if fields < 6 {
+        return line + "|||used"
+    }
+    if fields == 6 {
+        return line + "||used"
+    }
+    return line + "|used"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Stored credentials                                                        */
+/* -------------------------------------------------------------------------- */
+
+// secret_same compares two secrets without stopping at the first difference.
+fn secret_same(a: string, b: string) bool {
+    let la: u32 = u32(rho_strlen(a))
+    let lb: u32 = u32(rho_strlen(b))
+    if la == 0 || lb == 0 {
+        return false
+    }
+    var differ: u32 = 0
+    if la != lb {
+        differ = 1
+    }
+    var i: u32 = 0
+    while i < lb {
+        var ca: string = ""
+        if i < la {
+            ca = rho_str_slice(a, i, 1)
+        }
+        if !rho_str_eq(ca, rho_str_slice(b, i, 1)) {
+            differ = differ + 1
+        }
+        i = i + 1
+    }
+    return differ == 0
+}
+
+// credential_hashed is whether a stored credential is a salted hash.
+fn credential_hashed(stored: string) bool {
+    return rho_str_starts_with(stored, CREDENTIAL_HASH_PREFIX)
+}
+
+// credential_hash is a credential (hex) kept under a salt (hex):
+// `s1$<salt>$HMAC-SHA256(salt, credential)`, or "" when either is not hex.
+fn credential_hash(salt: string, credential: string) string {
+    let mac: string = rho_hmac_sha256_hex(salt, credential)
+    if rho_strlen(mac) != 64 || rho_strlen(salt) == 0 {
+        return ""
+    }
+    return CREDENTIAL_HASH_PREFIX + salt + "$" + mac
+}
+
+// credential_salt is the salt of a stored hash.
+fn credential_salt(stored: string) string {
+    let rest: string = rho_str_slice(stored, u32(rho_strlen(CREDENTIAL_HASH_PREFIX)),
+        u32(rho_strlen(stored)) - u32(rho_strlen(CREDENTIAL_HASH_PREFIX)))
+    let at: i32 = rho_str_index_of(rest, "$")
+    if at <= 0 {
+        return ""
+    }
+    return rho_str_slice(rest, 0, u32(at))
+}
+
+// credential_matches is whether a presented credential is the stored one: a
+// salted hash is recomputed and compared, an entry from before hashing is
+// compared as it is. Both comparisons take as long whatever matched.
+fn credential_matches(stored: string, presented: string) bool {
+    if presented == "" || stored == "" {
+        return false
+    }
+    if !credential_hashed(stored) {
+        return secret_same(presented, stored)
+    }
+    let salt: string = credential_salt(stored)
+    var computed: string = credential_hash(salt, presented)
+    if computed == "" {
+        // Not hex: compare against something of the right length anyway.
+        computed = CREDENTIAL_HASH_PREFIX + salt + "$"
+    }
+    return secret_same(computed, stored)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The request budget                                                        */
+/* -------------------------------------------------------------------------- */
+
+// The calls a client may make to the unauthenticated node endpoints, per
+// window: enrollment is rare, verification is what a gateway or Mesh asks.
+const ENROLL_PER_CLIENT: u32 = 10
+const ENROLL_PER_WINDOW: u32 = 60
+const VERIFY_PER_CLIENT: u32 = 60
+const VERIFY_PER_WINDOW: u32 = 600
+const RATE_WINDOW_SECONDS: u32 = 60
+const RATE_SLOTS: u32 = 1021
+
+// rate_client is who a request is counted against: the address the nearest
+// proxy appended to X-Forwarded-For (its rightmost entry), else X-Real-IP, else
+// the connection itself ("direct"). A caller can write any of these headers,
+// which is why every endpoint also has a budget for all callers together.
+fn rate_client(forwarded: string, real: string) string {
+    var value: string = ""
+    if forwarded != "" {
+        value = forwarded
+        var at: i32 = rho_str_index_of(value, ",")
+        while at >= 0 {
+            value = rho_str_slice(value, u32(at) + 1, u32(rho_strlen(value)) - u32(at) - 1)
+            at = rho_str_index_of(value, ",")
+        }
+    } else {
+        value = real
+    }
+    value = rate_trim(value)
+    if value == "" {
+        return "direct"
+    }
+    return value
+}
+
+fn rate_trim(value: string) string {
+    var start: u32 = 0
+    var end: u32 = u32(rho_strlen(value))
+    while start < end && rho_str_eq(rho_str_slice(value, start, 1), " ") {
+        start = start + 1
+    }
+    while end > start && rho_str_eq(rho_str_slice(value, end - 1, 1), " ") {
+        end = end - 1
+    }
+    return rho_str_slice(value, start, end - start)
+}
+
+// rate_slot is the file a client is counted in. Clients are folded into a fixed
+// number of slots, so a stream of made-up addresses cannot make files without
+// end; two clients sharing a slot share a budget.
+fn rate_slot(client: string) string {
+    if rho_str_eq(client, "direct") {
+        return "direct"
+    }
+    let alphabet: string = "0123456789abcdefABCDEF.:"
+    var hash: u32 = 7
+    var i: u32 = 0
+    while i < u32(rho_strlen(client)) && i < 64 {
+        let at: i32 = rho_str_index_of(alphabet, rho_str_slice(client, i, 1))
+        var digit: u32 = 25
+        if at >= 0 {
+            digit = u32(at) + 1
+        }
+        hash = (hash * 31 + digit) % RATE_SLOTS
+        i = i + 1
+    }
+    return "c" + rho_int_to_str(hash)
+}
+
+// rate_next is a counter after one more call: `count|window start`. A window
+// that has passed starts again at one.
+fn rate_next(state: string, now: u32, window: u32) string {
+    let count: u32 = u32(rho_int_from_str(field(state, 0)))
+    let start: u32 = u32(rho_int_from_str(field(state, 1)))
+    if state == "" || now < start || now >= start + window {
+        return "1|" + rho_int_to_str(now)
+    }
+    return rho_int_to_str(count + 1) + "|" + rho_int_to_str(start)
+}
+
+// rate_over is whether a counter is past its limit.
+fn rate_over(state: string, limit: u32) bool {
+    return u32(rho_int_from_str(field(state, 0))) > limit
+}

@@ -342,23 +342,41 @@ Create a one-time token on the keeper's machine:
 rho bootstrap token -device garden-01 -project default -area 1 -node 7
 ```
 
-The token lands in `~/.rho/keeper/enrollment.tokens`. A node runs:
+The token lands in `~/.rho/keeper/enrollment.tokens`, one line
+`token|device|project|area|node|expires|flags`, added under the keeper's lock
+(`enrollment.tokens.lock`) and with the file replaced whole. A node runs:
 
 ```sh
-rho bootstrap init -config /etc/robohub/provisioning.json -token <token>
+rho bootstrap init -config /etc/robohub/provisioning.json -token-file /run/enroll.token
 ```
 
 The node generates its instance UUID and Ed25519 key locally, posts the public key
-and token to `POST /api/enroll`, and stores the issued credential as a `0600` file.
-The keeper keeps the record under `~/.rho/keeper/nodes/` and marks the token used; a
-reused or expired token is refused.
+and token to `POST /api/enroll` over https, and stores the issued credential as a
+`0600` file. What the keeper holds a token to:
 
-**Nodes** lists the identities issued; each can be rotated or revoked. A gateway or
-firmware checks a credential with `POST /api/nodes/verify`
+- it names a device and an expiry; one without either is refused, as is a used,
+  expired or another device's token;
+- the node is placed where the token says: a request naming another project,
+  area or node is refused;
+- a device already enrolled is replaced only by a token made with
+  `rho bootstrap token -reenroll`;
+- finding, checking and spending the token and writing the record are one step
+  under the lock, so a token presented many times at once enrolls once.
+
+The record under `~/.rho/keeper/nodes/` keeps the credential only as a salted
+hash (`s1$<salt>$<hmac>`); records an older keeper kept in the clear are hashed
+when it starts. `/api/enroll` and `/api/nodes/verify` have a budget of calls per
+client (the rightmost `X-Forwarded-For` entry the TLS proxy adds) and for all
+clients together: enrollment 10 a minute per client and 60 in all, verification 60
+and 600; past it they answer 429.
+
+**Nodes** lists the identities issued; each can be rotated or revoked. A gateway,
+Mesh or firmware checks a credential with `POST /api/nodes/verify`
 (`device_id=<device>&credential=<credential>`) and receives the registered
 project/area/node, or `403`. That endpoint is public because the credential
-authenticates it. The firmware side of rotation and the remaining provisioning work
-are documented in the `rho-bootstrap` component.
+authenticates it. Mesh uses it to hand a Linux host node its board key
+(`rho bootstrap key`). The firmware side of rotation and the remaining
+provisioning work are documented in the `rho-bootstrap` component.
 
 ## API
 
