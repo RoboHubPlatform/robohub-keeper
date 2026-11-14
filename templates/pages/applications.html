@@ -1,27 +1,22 @@
-<h1>Applications</h1>
-<p>Applications declare an <code>application</code> block in their manifest. A
-<code>keeper-hosted</code> application is built and run on its own port; the
-keeper can start and stop it, and can add it to the left menu.</p>
+<h1>{{t "page.applications"}}</h1>
+<p>{{t "apps.intro_before"}} <code>application</code> {{t "apps.intro_middle"}} <code>keeper-hosted</code> {{t "apps.intro_after"}}</p>
 {{{ notice }}}
 <table>
 <thead>
-<tr><th>Application</th><th>Kind</th><th>Version</th><th>Location</th><th>Status</th><th></th></tr>
+<tr><th>{{t "apps.col.application"}}</th><th>{{t "common.kind"}}</th><th>{{t "common.version"}}</th><th>{{t "apps.col.location"}}</th><th>{{t "common.status"}}</th><th></th></tr>
 </thead>
-<tbody id="app-rows" hx-get="/api/applications/rows" hx-trigger="load" hx-target="#app-rows" hx-swap="innerHTML"><tr><td colspan="6">Loading…</td></tr></tbody>
+<tbody id="app-rows" hx-get="/api/applications/rows" hx-trigger="load" hx-target="#app-rows" hx-swap="innerHTML"><tr><td colspan="6">{{t "common.loading"}}</td></tr></tbody>
 </table>
 
-<h2 class="app-install">Found on this machine</h2>
-<p>Applications in the workspace, the module registry or the orchestrator that the
-keeper does not run yet.</p>
+<h2 class="app-install">{{t "apps.found"}}</h2>
+<p>{{t "apps.found_intro"}}</p>
 <table>
-<thead><tr><th>Application</th><th>Version</th><th>Location</th><th></th></tr></thead>
-<tbody hx-get="/api/applications/candidates" hx-trigger="load" hx-swap="innerHTML"><tr><td colspan="4">Looking…</td></tr></tbody>
+<thead><tr><th>{{t "apps.col.application"}}</th><th>{{t "common.version"}}</th><th>{{t "apps.col.location"}}</th><th></th></tr></thead>
+<tbody hx-get="/api/applications/candidates" hx-trigger="load" hx-swap="innerHTML"><tr><td colspan="4">{{t "apps.looking"}}</td></tr></tbody>
 </table>
 
-<h2 class="app-install" id="install">Install an application</h2>
-<p>Clone an application from a git URL into <code>~/.rho/apps</code>, or add one that
-already lives on this machine. An added folder is not moved or copied; it stays
-where it is.</p>
+<h2 class="app-install" id="install">{{t "apps.install_heading"}}</h2>
+<p>{{t "apps.install_intro_before"}} <code>~/.rho/apps</code>{{t "apps.install_intro_after"}}</p>
 {{{ install_form }}}
 
 {{{ registry }}}

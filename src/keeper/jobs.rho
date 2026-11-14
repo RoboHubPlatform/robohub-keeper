@@ -291,18 +291,38 @@ fn job_rollback(name: string) string {
 /*  The strip                                                                 */
 /* -------------------------------------------------------------------------- */
 
-fn job_action_words(action: string) string {
-    if rho_str_eq(action, "build") { return "Building" }
-    if rho_str_eq(action, "redeploy") { return "Redeploying" }
-    if rho_str_eq(action, "rollback") { return "Rolling back" }
-    if rho_str_eq(action, "start") { return "Building and starting" }
-    if rho_str_eq(action, "install") { return "Installing for" }
+fn job_action_words(lang: string, action: string) string {
+    if rho_str_eq(action, "build") { return keeper_say(lang, "jobs.action.build") }
+    if rho_str_eq(action, "redeploy") { return keeper_say(lang, "jobs.action.redeploy") }
+    if rho_str_eq(action, "rollback") { return keeper_say(lang, "jobs.action.rollback") }
+    if rho_str_eq(action, "start") { return keeper_say(lang, "jobs.action.start") }
+    if rho_str_eq(action, "install") { return keeper_say(lang, "jobs.action.install") }
     return action
 }
 
+// job_action_noun is what a job did, for "demo: build done".
+fn job_action_noun(req: Request, action: string) string {
+    if rho_str_eq(action, "build") { return i18n_t(req, "jobs.noun.build") }
+    if rho_str_eq(action, "redeploy") { return i18n_t(req, "jobs.noun.redeploy") }
+    if rho_str_eq(action, "rollback") { return i18n_t(req, "jobs.noun.rollback") }
+    if rho_str_eq(action, "start") { return i18n_t(req, "jobs.noun.start") }
+    if rho_str_eq(action, "install") { return i18n_t(req, "jobs.noun.install") }
+    return action
+}
+
+// job_status_word is a job's outcome as a person reads it.
+fn job_status_word(req: Request, status: string) string {
+    if rho_str_eq(status, "running") { return i18n_t(req, "jobs.status.running") }
+    if rho_str_eq(status, "done") { return i18n_t(req, "jobs.status.done") }
+    if rho_str_eq(status, "failed") { return i18n_t(req, "jobs.status.failed") }
+    return status
+}
+
 // jobs_strip is the line at the bottom of every page: what is running, and how
-// the last job ended when it ended in the last two minutes.
-fn jobs_strip() string {
+// the last job ended when it ended in the last two minutes. The notification
+// a finished job sends goes once to every open page, whoever reads it, so it is
+// said in English, like the keeper's events.
+fn jobs_strip(req: Request) string {
     var running: string = ""
     var last: string = ""
     let now: u32 = auth_now()
@@ -329,13 +349,13 @@ fn jobs_strip() string {
         let link: string = "<a href=\"/jobs/" + escape_html(id) + "\">"
         if rho_str_eq(status, "running") {
             let elapsed: u32 = now - u32(rho_int_from_str(job_meta(id, 2)))
-            running = running + "<span class=\"job busy\">" + link + job_action_words(job_meta(id, 1)) + " " + name +
+            running = running + "<span class=\"job busy\">" + link + escape_html(job_action_words(keeper_lang(req), job_meta(id, 1))) + " " + name +
                 "</a> <small>" + rho_int_to_str(elapsed) + " s</small></span>"
         } else if last == "" {
             let ended: u32 = u32(rho_int_from_str(job_status_line(id, 2)))
             if now < ended + 120 {
                 var tone: string = "ok"
-                var words: string = name + ": " + job_meta(id, 1) + " done"
+                var words: string = keeper_t2(req, "jobs.strip_done", "name", name, "action", escape_html(job_action_noun(req, job_meta(id, 1))))
                 if rho_str_eq(status, "failed") {
                     tone = "bad"
                     words = name + ": " + escape_html(job_reason(id))
@@ -345,29 +365,29 @@ fn jobs_strip() string {
         }
     }
     if running == "" && last == "" {
-        return "<span class=\"job idle\">No jobs running.</span>"
+        return "<span class=\"job idle\">" + i18n_t(req, "jobs.none_running") + "</span>"
     }
     return running + last
 }
 
 fn jobs_strip_endpoint(req: Request) Response {
-    return html(status_ok(), jobs_strip())
+    return html(status_ok(), jobs_strip(req))
 }
 
 fn job_page(req: Request) Response {
     let id: string = param(req, "id")
     if !job_id_ok(id) || !rho_path_exists(job_dir(id) + "/meta") {
-        return page_status(req, status_not_found(), "Job", "<p>No such job.</p>")
+        return page_status(req, status_not_found(), i18n_t(req, "jobs.job"), "<p>" + i18n_t(req, "jobs.no_such_job") + "</p>")
     }
     let status: string = job_status(id)
     var refresh: string = ""
     if rho_str_eq(status, "running") {
         refresh = "<div hx-get=\"/jobs/" + escape_html(id) + "/log\" hx-trigger=\"every 2s\" hx-target=\"#job-log\" hx-swap=\"innerHTML\"></div>"
     }
-    let body: string = "<h1>" + escape_html(job_action_words(job_meta(id, 1)) + " " + job_meta(id, 0)) + "</h1>" +
-        "<p>Status: <b>" + escape_html(status) + "</b> " + escape_html(job_reason(id)) + "</p>" + refresh +
+    let body: string = "<h1>" + escape_html(job_action_words(keeper_lang(req), job_meta(id, 1)) + " " + job_meta(id, 0)) + "</h1>" +
+        "<p>" + i18n_t(req, "common.status") + ": <b>" + escape_html(job_status_word(req, status)) + "</b> " + escape_html(job_reason(id)) + "</p>" + refresh +
         "<pre id=\"job-log\" class=\"log\">" + escape_html(job_log(id)) + "</pre>"
-    return page(req, "Job " + id, body)
+    return page(req, i18n_t(req, "jobs.job") + " " + id, body)
 }
 
 fn job_log_endpoint(req: Request) Response {

@@ -9,7 +9,7 @@ module:
   route: /
   port: "19090"
   command: keeper
-  version: 0.9.10
+  version: 0.9.11
   author: Aurel Miron
   maintainer: Aurel Miron
   license: "MIT"
@@ -34,7 +34,6 @@ build:
 # The application's own files, embedded when it is built.
 assets:
   - module.yml
-  - locales/phrases.ro.txt
 
 # The notifications module keeps what it shows in the host's SQL database.
 requires:

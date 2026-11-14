@@ -102,13 +102,13 @@ fn integration_command_line(name: string) string {
 
 // integration_install records an integration from its plugin folder, writes its
 // configuration and starts it. It answers what came of it.
-fn integration_install(path: string) string {
+fn integration_install(lang: string, path: string) string {
     let name: string = integration_service(path, "name")
     if !valid_name(name) || !rho_path_exists(manifest_of(path)) {
-        return "That is not an integration plugin."
+        return keeper_say(lang, "integrations.not_a_plugin")
     }
     if catalog_has(name) {
-        return name + " is already running here."
+        return keeper_say1(lang, "integrations.already_running", "name", name)
     }
     let unit: string = "robohub-" + name
     let port: string = integration_service(path, "port")
@@ -118,7 +118,7 @@ fn integration_install(path: string) string {
     ignore_u32(rho_exec_args("chmod", "700\n" + integration_dir(name) + "\n", apps_report("chmod-service")))
     info("keeper", "installed the integration " + name + " from " + path)
     keeper_event("app.installed", name, name + " was installed as an integration.")
-    return name + " was installed. " + app_start(name)
+    return keeper_say1(lang, "integrations.installed", "name", name) + " " + app_start(lang, name)
 }
 
 /* -------------------------------------------------------------------------- */
@@ -288,20 +288,33 @@ fn mqtt_lines_only(text: string) string {
     return out
 }
 
+// mqtt_failure_text is what mqtt_write_files answered, in a language: the
+// function itself answers in English, for the places that only log it.
+fn mqtt_failure_text(lang: string, failure: string) string {
+    if rho_str_eq(failure, "MQTT is not installed.") {
+        return keeper_say(lang, "mqtt.not_installed")
+    }
+    let hashed: string = "the broker's users could not be hashed: "
+    if rho_str_starts_with(failure, hashed) {
+        return keeper_say1(lang, "mqtt.hash_failed", "why", rho_str_slice(failure, u32(rho_strlen(hashed)), u32(rho_strlen(failure)) - u32(rho_strlen(hashed))))
+    }
+    return failure
+}
+
 // mqtt_add_device adds a broker user for a device, allowed its own topic prefix,
 // and answers the password, or "!" and why not.
-fn mqtt_add_device(device: string, prefix: string) string {
+fn mqtt_add_device(lang: string, device: string, prefix: string) string {
     if !valid_name(device) || prefix == "" || !mqtt_topic_ok(prefix) || rho_str_index_of(prefix, "#") >= 0 || rho_str_index_of(prefix, "+") >= 0 {
-        return "!A device has a plain name and a topic prefix without wildcards."
+        return "!" + keeper_say(lang, "mqtt.device_bad")
     }
     if line_in_list(rho_read_text(mqtt_devices_file()), device + "|" + prefix) {
-        return "!" + device + " is already a broker user."
+        return "!" + keeper_say1(lang, "mqtt.device_taken", "device", device)
     }
     ignore_bool(rho_append_text(mqtt_devices_file(), device + "|" + prefix + "\n"))
     let password: string = bus_password(integration_dir("mqtt") + "/devices/" + device + ".secret")
     let failure: string = mqtt_write_files()
     if failure != "" {
-        return "!" + failure
+        return "!" + mqtt_failure_text(lang, failure)
     }
     keeper_event("bus.device-added", "mqtt", device + " may use " + prefix + "/#.")
     return password
@@ -337,20 +350,20 @@ fn tcp_answers(port: string) bool {
 
 // mqtt_clients_body is who may use the broker: the keeper, the applications that
 // bind the bus with their topics, and the devices, with adding and removing one.
-fn mqtt_clients_body(name: string) string {
-    var listen: string = "this machine only"
+fn mqtt_clients_body(req: Request, name: string) string {
+    var listen: string = i18n_t(req, "mqtt.this_machine_only")
     var other: string = "lan"
-    var other_label: string = "Open it to the network, for devices"
+    var other_label: string = i18n_t(req, "mqtt.open_to_network")
     if rho_str_eq(integration_listen(name), "0.0.0.0") {
-        listen = "the network (every interface)"
+        listen = i18n_t(req, "mqtt.the_network")
         other = "local"
-        other_label = "Back to this machine only"
+        other_label = i18n_t(req, "mqtt.back_to_local")
     }
-    var out: string = "<div class=\"rh-sec\">Listens on</div><div class=\"rh-row\"><b>" + escape_html(listen) + "</b><span>port " +
-        escape_html(catalog_get(name, "port")) + "</span></div>" +
+    var out: string = "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.listens_on") + "</div><div class=\"rh-row\"><b>" + escape_html(listen) + "</b><span>" +
+        escape_html(keeper_t1(req, "integrations.port", "port", catalog_get(name, "port"))) + "</span></div>" +
         "<div class=\"rh-actions\"><button type=\"button\" class=\"quiet small\" hx-post=\"/overview/app/" + escape_html(name) +
         "/listen?to=" + other + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"" + escape_html(other_label) + "?\">" + escape_html(other_label) + "</button></div>" +
-        "<div class=\"rh-sec\">Applications</div><div class=\"rh-row ok\"><b>keeper</b><span>reads everything, to show it here</span></div>"
+        "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.applications") + "</div><div class=\"rh-row ok\"><b>keeper</b><span>" + i18n_t(req, "mqtt.keeper_reads") + "</span></div>"
     var apps: string = ""
     var rest: string = catalog_names()
     while rest != "" {
@@ -361,12 +374,12 @@ fn mqtt_clients_body(name: string) string {
         if app == "" || integration_is(app) || !app_binds_bus(where) {
             continue
         }
-        apps = apps + "<div class=\"rh-row ok\"><b>" + escape_html(app) + "</b><span>writes " +
-            escape_html(i18n_replace_all(str_trim(app_manifest_list(where, "bus.publish")), "\n", ", ")) + " · reads " +
-            escape_html(i18n_replace_all(str_trim(app_manifest_list(where, "bus.subscribe")), "\n", ", ")) + "</span></div>"
+        apps = apps + "<div class=\"rh-row ok\"><b>" + escape_html(app) + "</b><span>" +
+            escape_html(keeper_t1(req, "mqtt.writes", "topics", i18n_replace_all(str_trim(app_manifest_list(where, "bus.publish")), "\n", ", "))) + " · " +
+            escape_html(keeper_t1(req, "mqtt.reads", "topics", i18n_replace_all(str_trim(app_manifest_list(where, "bus.subscribe")), "\n", ", "))) + "</span></div>"
     }
     if apps == "" {
-        apps = "<p class=\"rh-empty\">No application binds the bus yet.</p>"
+        apps = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.no_app") + "</p>"
     }
     var devices: string = ""
     var list: string = rho_read_text(mqtt_devices_file())
@@ -377,16 +390,16 @@ fn mqtt_clients_body(name: string) string {
         if field(line, 0) == "" { continue }
         devices = devices + "<div class=\"rh-row\"><b>" + escape_html(field(line, 0)) + "</b><span>" + escape_html(field(line, 1)) + "/#</span>" +
             "<button type=\"button\" class=\"danger small\" hx-post=\"/overview/app/" + escape_html(name) + "/remove-device?device=" +
-            escape_html(field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"Remove " + escape_html(field(line, 0)) + "?\">Remove</button></div>"
+            escape_html(field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"" + escape_html(keeper_t1(req, "mqtt.remove_device_confirm", "device", field(line, 0))) + "\">" + i18n_t(req, "common.remove") + "</button></div>"
     }
     if devices == "" {
-        devices = "<p class=\"rh-empty\">No device has a broker user yet.</p>"
+        devices = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.no_device") + "</p>"
     }
-    return out + apps + "<div class=\"rh-sec\">Devices</div>" + devices +
+    return out + apps + "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.devices") + "</div>" + devices +
         "<form class=\"rh-body\" style=\"padding:0\" hx-post=\"/overview/app/" + escape_html(name) + "/add-device\" hx-target=\"#ins\" hx-swap=\"innerHTML\">" +
-        "<label>Device<input name=\"device\" placeholder=\"shellyplugmgen3-a1b2\"></label>" +
-        "<label>Its topics<input name=\"prefix\" placeholder=\"shellyplugmgen3-a1b2\"><small>It may write and read under this prefix.</small></label>" +
-        "<div class=\"rh-actions\"><button type=\"submit\" class=\"small\">Add the device</button></div></form>"
+        "<label>" + i18n_t(req, "mqtt.device") + "<input name=\"device\" placeholder=\"shellyplugmgen3-a1b2\"></label>" +
+        "<label>" + i18n_t(req, "mqtt.its_topics") + "<input name=\"prefix\" placeholder=\"shellyplugmgen3-a1b2\"><small>" + i18n_t(req, "mqtt.its_topics_help") + "</small></label>" +
+        "<div class=\"rh-actions\"><button type=\"submit\" class=\"small\">" + i18n_t(req, "mqtt.add_device") + "</button></div></form>"
 }
 
 // mqtt_client_action adds or removes a device, or moves the listener.
@@ -394,16 +407,16 @@ fn mqtt_client_action(req: Request, action: string) string {
     if rho_str_eq(action, "add-device") {
         let body: string = request_body(req)
         let device: string = str_trim(form_field(body, "device"))
-        let answer: string = mqtt_add_device(device, str_trim(form_field(body, "prefix")))
+        let answer: string = mqtt_add_device(keeper_lang(req), device, str_trim(form_field(body, "prefix")))
         if rho_str_starts_with(answer, "!") {
             return rho_str_slice(answer, 1, u32(rho_strlen(answer)) - 1)
         }
-        return device + " may connect as " + device + " with the password " + answer + " — it is shown only now."
+        return keeper_t2(req, "mqtt.device_added", "device", device, "password", answer)
     }
     if rho_str_eq(action, "remove-device") {
         let device: string = query_str(req, "device")
         mqtt_remove_device(device)
-        return device + " was removed."
+        return keeper_t1(req, "mqtt.device_removed", "device", device)
     }
     let to: string = query_str(req, "to")
     var value: string = "local"
@@ -413,17 +426,17 @@ fn mqtt_client_action(req: Request, action: string) string {
     ignore_bool(rho_write_text(integration_dir("mqtt") + "/listen", value + "\n"))
     let failure: string = mqtt_write_files()
     if failure != "" {
-        return failure
+        return mqtt_failure_text(keeper_lang(req), failure)
     }
     ignore_bool(app_install_unit("mqtt"))
-    return "The broker listens on " + integration_listen("mqtt") + " now. " + app_restart("mqtt")
+    return keeper_t1(req, "mqtt.listens_now", "address", integration_listen("mqtt")) + " " + app_restart(keeper_lang(req), "mqtt")
 }
 
 // mqtt_topics_body is what the broker carries now: every topic the keeper heard,
 // newest first, with its last message.
-fn mqtt_topics_body(name: string) string {
+fn mqtt_topics_body(req: Request, name: string) string {
     if !rho_str_eq(app_state(name), "running") {
-        return "<p class=\"rh-empty\">The broker is not running.</p>"
+        return "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.not_running") + "</p>"
     }
     ignore_bool(mqtt_follow("127.0.0.1:" + catalog_get(name, "port"), "keeper", integration_dir(name) + "/keeper.secret", "#", ""))
     var out: string = ""
@@ -435,18 +448,18 @@ fn mqtt_topics_body(name: string) string {
         if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
         if line == "" { continue }
         out = out + "<div class=\"rh-row\" style=\"display:grid;gap:.1rem\"><b style=\"font-family:var(--mono);font-size:.74rem\">" + escape_html(tsv_field(line, 0)) +
-            "</b><span style=\"text-align:left;white-space:normal\">" + escape_html(tsv_field(line, 2)) + " · " + escape_html(tsv_field(line, 1)) + " s ago</span></div>"
+            "</b><span style=\"text-align:left;white-space:normal\">" + escape_html(tsv_field(line, 2)) + " · " + escape_html(keeper_t1(req, "mqtt.seconds_ago", "seconds", tsv_field(line, 1))) + "</span></div>"
         count = count + 1
     }
     if out == "" {
-        out = "<p class=\"rh-empty\">Nothing heard yet. Messages appear here as they arrive.</p>"
+        out = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.nothing_heard") + "</p>"
     }
-    return "<div class=\"rh-sec\">Live topics</div><div hx-get=\"/overview/app/" + escape_html(name) + "?tab=topics\" hx-trigger=\"every 5s\" hx-target=\"#ins\" hx-swap=\"innerHTML\"></div>" + out
+    return "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.live_topics") + "</div><div hx-get=\"/overview/app/" + escape_html(name) + "?tab=topics\" hx-trigger=\"every 5s\" hx-target=\"#ins\" hx-swap=\"innerHTML\"></div>" + out
 }
 
 // integrations_section is the integrations that can run here, for the
 // Applications page.
-fn integrations_section() string {
+fn integrations_section(req: Request) string {
     var cards: string = ""
     var rest: string = integration_plugins()
     while rest != "" {
@@ -456,21 +469,21 @@ fn integrations_section() string {
         if path == "" { continue }
         let name: string = integration_service(path, "name")
         var action: string = "<form method=\"post\" action=\"/integrations/install\">" + forms_csrf_field() +
-            "<input type=\"hidden\" name=\"plugin\" value=\"" + escape_html(path) + "\"><button type=\"submit\" class=\"small\">Run it</button></form>"
-        var pill: string = "<span class=\"rh-pill\">available</span>"
+            "<input type=\"hidden\" name=\"plugin\" value=\"" + escape_html(path) + "\"><button type=\"submit\" class=\"small\">" + i18n_t(req, "integrations.run_it") + "</button></form>"
+        var pill: string = "<span class=\"rh-pill\">" + i18n_t(req, "integrations.available") + "</span>"
         if catalog_has(name) {
-            action = "<a class=\"button quiet small\" href=\"/apps/" + escape_html(name) + "\">Its page</a>"
-            pill = "<span class=\"rh-pill ok\">installed</span>"
+            action = "<a class=\"button quiet small\" href=\"/apps/" + escape_html(name) + "\">" + i18n_t(req, "integrations.its_page") + "</a>"
+            pill = "<span class=\"rh-pill ok\">" + i18n_t(req, "integrations.installed_pill") + "</span>"
         }
         cards = cards + "<div class=\"rh-card int\"><span class=\"r\"><span class=\"nm\">" + escape_html(app_title(name, path)) + "</span>" + pill + "</span>" +
             "<span class=\"sb\">" + escape_html(yaml.value(manifest_of(path), "description")) + "</span>" +
-            "<span class=\"sb\">provides " + escape_html(yaml.value(manifest_of(path), "integration.provides")) + " · port " + escape_html(integration_service(path, "port")) + "</span>" +
+            "<span class=\"sb\">" + escape_html(keeper_t1(req, "integrations.provides", "what", yaml.value(manifest_of(path), "integration.provides"))) + " · " + escape_html(keeper_t1(req, "integrations.port", "port", integration_service(path, "port"))) + "</span>" +
             "<div class=\"app-actions\">" + action + "</div></div>"
     }
     if cards == "" {
         return ""
     }
-    return "<div class=\"rh-h\"><h2 id=\"integrations\" style=\"margin:1.6rem 0 0\">Integrations</h2><span>services the keeper runs for the applications</span></div>" +
+    return "<div class=\"rh-h\"><h2 id=\"integrations\" style=\"margin:1.6rem 0 0\">" + i18n_t(req, "integrations.heading") + "</h2><span>" + i18n_t(req, "integrations.subtitle") + "</span></div>" +
         "<div class=\"rh-grid\" style=\"margin-top:.6rem\">" + cards + "</div>"
 }
 
@@ -480,11 +493,11 @@ fn integrations_install_post(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return applications_page_message(req, "That form was not drawn by this keeper.")
+        return applications_page_message(req, i18n_t(req, "common.csrf_refused"))
     }
     let path: string = str_trim(form_field(body, "plugin"))
     if !line_in_list(integration_plugins(), path) {
-        return applications_page_message(req, "That is not an integration plugin here.")
+        return applications_page_message(req, i18n_t(req, "integrations.not_a_plugin_here"))
     }
-    return applications_page_message(req, integration_install(path))
+    return applications_page_message(req, integration_install(keeper_lang(req), path))
 }

@@ -1,0 +1,62 @@
+//
+// @file text.rho
+// @brief What a person reads, in their language: the keeper's own helpers over the i18n catalog.
+//
+// @module keeper.text
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-14
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.text
+
+// Every label and message a person reads is a key in locales/<locale>.json.
+// i18n_t(req, key) is the label for a page; the helpers here are for a message
+// that carries a value, and for a message made where there is a language but no
+// request (an action the API asks for too, which answers in English).
+//
+// A value sits in the catalog's text as {name} and is put in as it is: the text
+// is plain, and is escaped where it is written into a page, as before.
+
+// keeper_say is a key's text in a language ("en", "ro").
+fn keeper_say(lang: string, key: string) string {
+    return template_fill("{{t " + json_string(key) + "}}", vars("__locale", lang))
+}
+
+fn keeper_say1(lang: string, key: string, n1: string, v1: string) string {
+    return i18n_replace_all(keeper_say(lang, key), "{" + n1 + "}", v1)
+}
+
+fn keeper_say2(lang: string, key: string, n1: string, v1: string, n2: string, v2: string) string {
+    return i18n_replace_all(keeper_say1(lang, key, n1, v1), "{" + n2 + "}", v2)
+}
+
+fn keeper_say3(lang: string, key: string, n1: string, v1: string, n2: string, v2: string, n3: string, v3: string) string {
+    return i18n_replace_all(keeper_say2(lang, key, n1, v1, n2, v2), "{" + n3 + "}", v3)
+}
+
+// keeper_lang is the language a request reads in.
+fn keeper_lang(req: Request) string {
+    return i18n_locale(req)
+}
+
+// keeper_t1..3 are i18n_t for a message with values in it.
+fn keeper_t1(req: Request, key: string, n1: string, v1: string) string {
+    return keeper_say1(i18n_locale(req), key, n1, v1)
+}
+
+fn keeper_t2(req: Request, key: string, n1: string, v1: string, n2: string, v2: string) string {
+    return keeper_say2(i18n_locale(req), key, n1, v1, n2, v2)
+}
+
+fn keeper_t3(req: Request, key: string, n1: string, v1: string, n2: string, v2: string, n3: string, v3: string) string {
+    return keeper_say3(i18n_locale(req), key, n1, v1, n2, v2, n3, v3)
+}
+
+// keeper_confirm is an onsubmit/onclick that asks before it goes on, in the
+// request's language, quoted for an attribute written in double quotes.
+fn keeper_confirm(req: Request, key: string) string {
+    return "return confirm(" + escape_html(json_string(i18n_t(req, key))) + ")"
+}

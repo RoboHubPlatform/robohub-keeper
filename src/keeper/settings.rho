@@ -65,10 +65,31 @@ fn keeper_alert_set(body: string, provider: string, key: string, field: string) 
     }
 }
 
+// keeper_log_settings_form is the shared logging module's form with its labels
+// in the request's language: the module writes them in English, so the keeper
+// takes its fields and puts its own keys over the words a person reads.
+fn keeper_log_settings_form(req: Request) string {
+    var fields: FormField[6]
+    log_settings_field_defs(fields, "keeper")
+    fields[0].label = i18n_t(req, "settings.logging.level")
+    fields[0].hint = i18n_t(req, "settings.logging.level_hint")
+    fields[1].label = i18n_t(req, "settings.logging.format")
+    fields[1].hint = i18n_t(req, "settings.logging.format_hint")
+    fields[2].label = i18n_t(req, "settings.logging.file")
+    fields[2].hint = i18n_t(req, "settings.logging.file_hint")
+    fields[3].label = i18n_t(req, "settings.logging.max_bytes")
+    fields[3].hint = i18n_t(req, "settings.logging.max_bytes_hint")
+    fields[4].label = i18n_t(req, "settings.logging.keep")
+    fields[4].hint = i18n_t(req, "settings.logging.keep_hint")
+    fields[5].label = i18n_t(req, "settings.logging.stderr")
+    fields[5].hint = i18n_t(req, "settings.logging.stderr_hint")
+    fields[5].options = "1|" + i18n_t(req, "settings.alerts.on") + ",0|" + i18n_t(req, "settings.alerts.off")
+    return forms_open(fields, 6, "/settings?tab=logging", i18n_t(req, "settings.logging.save"), i18n_locale(req))
+}
+
 fn keeper_settings_form(req: Request, tab: string) string {
     if rho_str_eq(tab, "logging") {
-        return log_settings_form("keeper", "/settings?tab=logging",
-            i18n_locale(req))
+        return keeper_log_settings_form(req)
     }
     if rho_str_eq(tab, "alerts") {
         // Each channel's settings are the binding's: the defaults in module.yml,
@@ -103,11 +124,11 @@ fn keeper_settings_form(req: Request, tab: string) string {
             "<p><a href=\"/auth/token\">" + i18n_t(req, "settings.auth.token_link") + "</a></p>"
     }
     if rho_str_eq(tab, "configuration") {
-        return "<dl class=\"settings\"><dt>Application</dt><dd>keeper</dd>" +
-            "<dt>Route</dt><dd>/</dd><dt>Port</dt><dd>19090</dd>" +
-            "<dt>Workspace</dt><dd><code>" + escape_html(robohub_root()) + "</code></dd>" +
-            "<dt>Alert channels</dt><dd>" + escape_html(keeper_alert_list()) + "</dd>" +
-            "<dt>Version</dt><dd>" + escape_html(yaml.value("module.yml", "module.version")) + "</dd></dl>"
+        return "<dl class=\"settings\"><dt>" + i18n_t(req, "settings.config.application") + "</dt><dd>keeper</dd>" +
+            "<dt>" + i18n_t(req, "settings.config.route") + "</dt><dd>/</dd><dt>" + i18n_t(req, "common.port") + "</dt><dd>19090</dd>" +
+            "<dt>" + i18n_t(req, "settings.config.workspace") + "</dt><dd><code>" + escape_html(robohub_root()) + "</code></dd>" +
+            "<dt>" + i18n_t(req, "settings.config.alert_channels") + "</dt><dd>" + escape_html(keeper_alert_list()) + "</dd>" +
+            "<dt>" + i18n_t(req, "common.version") + "</dt><dd>" + escape_html(yaml.value("module.yml", "module.version")) + "</dd></dl>"
     }
     var fields: FormField[1]
     fields[0] = FormField{ "tabs", "select", i18n_t(req, "settings.orientation"), "",

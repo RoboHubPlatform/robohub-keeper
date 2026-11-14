@@ -20,27 +20,47 @@ module keeper.overview
 import std.web.http
 
 // overview_pill is the one thing a card says, by priority: a job, then the state.
-fn overview_pill(name: string) string {
+fn overview_pill(req: Request, name: string) string {
     let job: string = job_running_for(name)
     if job != "" {
-        return "<span class=\"rh-pill busy\">" + escape_html(job_action_words(job_meta(job, 1))) + "</span>"
+        return "<span class=\"rh-pill busy\">" + escape_html(job_action_words(keeper_lang(req), job_meta(job, 1))) + "</span>"
     }
     let update: string = package_update(name)
     if update != "" && !overview_needs_you(name) {
-        return "<span class=\"rh-pill busy\">update " + escape_html(update) + "</span>"
+        return "<span class=\"rh-pill busy\">" + escape_html(keeper_t1(req, "overview.pill_update", "version", update)) + "</span>"
     }
     let missing: string = deps_missing(name, false)
     if missing != "" {
-        return "<span class=\"rh-pill warn\">needs " + escape_html(first_line(missing)) + "</span>"
+        return "<span class=\"rh-pill warn\">" + escape_html(keeper_t1(req, "overview.pill_needs", "dep", first_line(missing))) + "</span>"
     }
     let state: string = app_state(name)
-    if rho_str_eq(state, "keeper") { return "<span class=\"rh-pill ok\">this keeper</span>" }
-    if rho_str_eq(state, "running") { return "<span class=\"rh-pill ok\">running</span>" }
-    if rho_str_eq(state, "starting") { return "<span class=\"rh-pill busy\">starting</span>" }
-    if rho_str_eq(state, "failed") { return "<span class=\"rh-pill bad\">failed</span>" }
-    if rho_str_eq(state, "not-built") { return "<span class=\"rh-pill warn\">not built</span>" }
-    if rho_str_eq(state, "not-deployed") { return "<span class=\"rh-pill warn\">no service</span>" }
-    return "<span class=\"rh-pill\">stopped</span>"
+    let word: string = escape_html(overview_state_word(req, state))
+    if rho_str_eq(state, "keeper") || rho_str_eq(state, "running") { return "<span class=\"rh-pill ok\">" + word + "</span>" }
+    if rho_str_eq(state, "starting") { return "<span class=\"rh-pill busy\">" + word + "</span>" }
+    if rho_str_eq(state, "failed") { return "<span class=\"rh-pill bad\">" + word + "</span>" }
+    if rho_str_eq(state, "not-built") || rho_str_eq(state, "not-deployed") { return "<span class=\"rh-pill warn\">" + word + "</span>" }
+    return "<span class=\"rh-pill\">" + word + "</span>"
+}
+
+// overview_state_word is an application's state as a person reads it.
+fn overview_state_word(req: Request, state: string) string {
+    if rho_str_eq(state, "keeper") { return i18n_t(req, "overview.state.keeper") }
+    if rho_str_eq(state, "running") { return i18n_t(req, "overview.state.running") }
+    if rho_str_eq(state, "starting") { return i18n_t(req, "overview.state.starting") }
+    if rho_str_eq(state, "failed") { return i18n_t(req, "overview.state.failed") }
+    if rho_str_eq(state, "not-built") { return i18n_t(req, "overview.state.not_built") }
+    if rho_str_eq(state, "not-deployed") { return i18n_t(req, "overview.state.no_service") }
+    if rho_str_eq(state, "stopped") || state == "" { return i18n_t(req, "overview.state.stopped") }
+    return state
+}
+
+// overview_origin_word is where an application came from, as a person reads it.
+fn overview_origin_word(req: Request, origin: string) string {
+    if rho_str_eq(origin, "fetched") { return i18n_t(req, "overview.origin.fetched") }
+    if rho_str_eq(origin, "external") { return i18n_t(req, "overview.origin.external") }
+    if rho_str_eq(origin, "registry") { return i18n_t(req, "overview.origin.registry") }
+    if rho_str_eq(origin, "workspace") { return i18n_t(req, "overview.origin.workspace") }
+    return origin
 }
 
 // overview_needs_you is whether an application wants a person: it failed, or it
@@ -53,7 +73,7 @@ fn overview_needs_you(name: string) bool {
     return rho_str_eq(state, "failed") || rho_str_eq(state, "not-built") || rho_str_eq(state, "not-deployed")
 }
 
-fn overview_card(name: string, selected: string) string {
+fn overview_card(req: Request, name: string, selected: string) string {
     let path: string = app_path(name)
     var cls: string = "rh-card"
     if app_kind(path) == "keeper" {
@@ -68,21 +88,21 @@ fn overview_card(name: string, selected: string) string {
     if overview_needs_you(name) {
         cls = cls + " needs"
     }
-    var where: string = catalog_get(name, "origin")
+    var where: string = overview_origin_word(req, catalog_get(name, "origin"))
     let port: string = app_port_of(name)
     if port != "" {
         where = where + " · :" + port
     }
     return "<button type=\"button\" class=\"" + cls + "\" data-select hx-get=\"/overview/app/" + escape_html(name) +
         "\" hx-target=\"#ins\" hx-swap=\"innerHTML\"><span class=\"r\"><span class=\"nm\">" +
-        escape_html(app_title(name, path)) + "</span>" + overview_pill(name) + "</span>" +
+        escape_html(app_title(name, path)) + "</span>" + overview_pill(req, name) + "</span>" +
         "<span class=\"sb\">" + escape_html(app_version(path)) + " · " + escape_html(where) + "</span>" +
         "<span class=\"sb\">" + escape_html(path) + "</span></button>"
 }
 
 // overview_cards is the grid, filtered: all, the ones that want a person, the
 // ones running.
-fn overview_cards(filter: string, selected: string) string {
+fn overview_cards(req: Request, filter: string, selected: string) string {
     var out: string = ""
     var rest: string = catalog_names()
     while rest != "" {
@@ -101,12 +121,12 @@ fn overview_cards(filter: string, selected: string) string {
                 continue
             }
         }
-        out = out + overview_card(name, selected)
+        out = out + overview_card(req, name, selected)
     }
     if out == "" && filter != "" {
-        out = "<p class=\"rh-empty\">Nothing here.</p>"
+        out = "<p class=\"rh-empty\">" + i18n_t(req, "common.nothing_here") + "</p>"
     }
-    return out + "<a class=\"rh-new\" href=\"/applications#install\">+ Install an application</a>"
+    return out + "<a class=\"rh-new\" href=\"/applications#install\">+ " + i18n_t(req, "overview.install_app") + "</a>"
 }
 
 fn overview_count_needs() u32 {
@@ -158,20 +178,22 @@ fn home(req: Request) Response {
     let needs: u32 = overview_count_needs()
     var needs_chip: string = ""
     if needs > 0 {
-        needs_chip = overview_chip("needs", filter, "Needs you · " + rho_int_to_str(needs), "warn")
+        needs_chip = overview_chip("needs", filter, i18n_t(req, "overview.needs_you") + " · " + rho_int_to_str(needs), "warn")
     }
-    var inspector: string = "<div class=\"rh-ins-h\"><div class=\"rh-kick\">Inspector</div><h2>Choose an application</h2>" +
-        "<div class=\"rh-state\">Its state, log, environment and actions appear here.</div></div>"
+    var inspector: string = "<div class=\"rh-ins-h\"><div class=\"rh-kick\">" + i18n_t(req, "overview.inspector") + "</div><h2>" +
+        i18n_t(req, "overview.choose_app") + "</h2>" +
+        "<div class=\"rh-state\">" + i18n_t(req, "overview.choose_app_hint") + "</div></div>"
     if selected != "" {
-        inspector = overview_inspector(selected, "overview", "")
+        inspector = overview_inspector(req, selected, "overview", "")
     }
     let body: string = "<div class=\"rh-split\"><section class=\"rh-canvas\">" +
-        "<div class=\"rh-h\"><h1>This machine</h1><span>" + escape_html(overview_hostname()) + " · " +
-        rho_int_to_str(count) + " in the keeper</span></div>" +
-        "<div class=\"rh-chips\">" + overview_chip("", filter, "All", "") + overview_chip("running", filter, "Running", "") +
+        "<div class=\"rh-h\"><h1>" + i18n_t(req, "overview.this_machine") + "</h1><span>" + escape_html(overview_hostname()) + " · " +
+        escape_html(keeper_t1(req, "overview.in_keeper", "count", rho_int_to_str(count))) + "</span></div>" +
+        "<div class=\"rh-chips\">" + overview_chip("", filter, i18n_t(req, "overview.filter_all"), "") +
+        overview_chip("running", filter, i18n_t(req, "overview.filter_running"), "") +
         needs_chip + "</div>" +
         "<div class=\"rh-grid\" id=\"cards\" hx-get=\"/overview/cards?show=" + filter + "\" hx-trigger=\"every 6s\" hx-swap=\"innerHTML\">" +
-        overview_cards(filter, selected) + "</div></section>" +
+        overview_cards(req, filter, selected) + "</div></section>" +
         "<aside class=\"rh-ins\" id=\"ins\">" + inspector + "</aside></div>"
     return page(req, i18n_t(req, "page.home"), body)
 }
@@ -181,7 +203,7 @@ fn overview_cards_endpoint(req: Request) Response {
     if !rho_str_eq(filter, "needs") && !rho_str_eq(filter, "running") {
         filter = ""
     }
-    return html(status_ok(), overview_cards(filter, ""))
+    return html(status_ok(), overview_cards(req, filter, ""))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -213,7 +235,7 @@ fn overview_action(name: string, action: string, label: string, cls: string, con
 
 // overview_environment is the application's app.env with the values of secrets
 // left out.
-fn overview_environment(name: string) string {
+fn overview_environment(req: Request, name: string) string {
     var out: string = ""
     var rest: string = rho_read_text(app_env_path(name))
     while rest != "" {
@@ -235,31 +257,31 @@ fn overview_environment(name: string) string {
         out = out + overview_row(key, value)
     }
     if out == "" {
-        return "<p class=\"rh-empty\">No environment yet: it is written when the application is first started.</p>"
+        return "<p class=\"rh-empty\">" + i18n_t(req, "overview.no_environment") + "</p>"
     }
     return out
 }
 
-fn overview_inspector(name: string, tab: string, notice: string) string {
+fn overview_inspector(req: Request, name: string, tab: string, notice: string) string {
     let path: string = app_path(name)
     let state: string = app_state(name)
     let is_keeper: bool = app_kind(path) == "keeper"
-    var kick: string = "App · " + catalog_get(name, "origin")
+    var kick: string = i18n_t(req, "overview.kick_app") + " · " + overview_origin_word(req, catalog_get(name, "origin"))
     if integration_is(name) {
-        kick = "Integration · " + app_kind(path)
+        kick = i18n_t(req, "overview.kick_integration") + " · " + app_kind(path)
     }
     var head: string = "<div class=\"rh-ins-h\"><div class=\"rh-kick\">" + escape_html(kick) +
-        "</div><h2>" + escape_html(app_title(name, path)) + "</h2><div class=\"rh-state\">" + overview_pill(name) +
+        "</div><h2>" + escape_html(app_title(name, path)) + "</h2><div class=\"rh-state\">" + overview_pill(req, name) +
         "<span>" + escape_html(app_version(path)) + "</span></div></div>"
-    var tabs: string = "<nav class=\"rh-tabs\">" + overview_tab(name, "overview", tab, "Overview")
+    var tabs: string = "<nav class=\"rh-tabs\">" + overview_tab(name, "overview", tab, i18n_t(req, "overview.tab.overview"))
     if !is_keeper {
-        tabs = tabs + overview_tab(name, "deps", tab, "Dependencies")
+        tabs = tabs + overview_tab(name, "deps", tab, i18n_t(req, "overview.tab.deps"))
         if rho_str_eq(name, mqtt_name()) {
-            tabs = tabs + overview_tab(name, "clients", tab, "Clients") + overview_tab(name, "topics", tab, "Topics")
+            tabs = tabs + overview_tab(name, "clients", tab, i18n_t(req, "overview.tab.clients")) + overview_tab(name, "topics", tab, i18n_t(req, "overview.tab.topics"))
         }
-        tabs = tabs + overview_tab(name, "log", tab, "Log")
+        tabs = tabs + overview_tab(name, "log", tab, i18n_t(req, "common.log"))
         if !integration_is(name) {
-            tabs = tabs + overview_tab(name, "env", tab, "Environment")
+            tabs = tabs + overview_tab(name, "env", tab, i18n_t(req, "overview.tab.env"))
         }
     }
     tabs = tabs + "</nav>"
@@ -268,67 +290,71 @@ fn overview_inspector(name: string, tab: string, notice: string) string {
         body = body + "<div class=\"notice\">" + escape_html(notice) + "</div>"
     }
     if rho_str_eq(tab, "clients") && rho_str_eq(name, mqtt_name()) {
-        body = body + mqtt_clients_body(name)
+        body = body + mqtt_clients_body(req, name)
     } else if rho_str_eq(tab, "topics") && rho_str_eq(name, mqtt_name()) {
-        body = body + mqtt_topics_body(name)
+        body = body + mqtt_topics_body(req, name)
     } else if rho_str_eq(tab, "deps") {
-        body = body + deps_inspector_body(name)
+        body = body + deps_inspector_body(req, name)
     } else if rho_str_eq(tab, "log") && !is_keeper {
-        body = body + "<div class=\"rh-sec\">The journal of " + escape_html(app_unit_name(name)) + ".service</div>" +
+        body = body + "<div class=\"rh-sec\">" + escape_html(keeper_t1(req, "overview.journal_of", "unit", app_unit_name(name) + ".service")) + "</div>" +
             "<pre class=\"log\">" + escape_html(app_journal(name, 120)) + "</pre>"
     } else if rho_str_eq(tab, "env") && !is_keeper {
-        body = body + "<div class=\"rh-sec\">What it is started with</div>" + overview_environment(name) +
-            "<div class=\"rh-sec\">Its identity</div><div class=\"rh-row\"><b>Client</b><span>" + escape_html(field(app_client_wanted(path), 0)) +
-            "</span></div><div class=\"rh-actions\">" + overview_action(name, "rotate-secret", "New client secret", "quiet",
-            "Give " + name + " a new client secret and restart it?") + "</div>"
+        body = body + "<div class=\"rh-sec\">" + i18n_t(req, "overview.started_with") + "</div>" + overview_environment(req, name) +
+            "<div class=\"rh-sec\">" + i18n_t(req, "overview.identity") + "</div><div class=\"rh-row\"><b>" + i18n_t(req, "overview.client") +
+            "</b><span>" + escape_html(field(app_client_wanted(path), 0)) +
+            "</span></div><div class=\"rh-actions\">" + overview_action(name, "rotate-secret", i18n_t(req, "overview.new_secret"), "quiet",
+            keeper_t1(req, "overview.new_secret_confirm", "name", name)) + "</div>"
     } else {
         let port: string = app_port_of(name)
         body = body + "<div class=\"rh-actions\">"
         if port != "" && !rho_str_eq(state, "not-built") {
-            body = body + open_link(name, path)
+            body = body + open_link(req, name, path)
         }
-        body = body + "<a class=\"button quiet its-page\" href=\"/apps/" + escape_html(name) + "\">Its page</a></div>"
-        body = body + "<div class=\"rh-sec\">Where</div>" +
-            overview_row("Folder", path) + overview_row("Port", port) + overview_row("Route", app_route(path))
+        body = body + "<a class=\"button quiet its-page\" href=\"/apps/" + escape_html(name) + "\">" + i18n_t(req, "overview.its_page") + "</a></div>"
+        body = body + "<div class=\"rh-sec\">" + i18n_t(req, "overview.where") + "</div>" +
+            overview_row(i18n_t(req, "common.folder"), path) + overview_row(i18n_t(req, "common.port"), port) +
+            overview_row(i18n_t(req, "overview.route"), app_route(path))
         if !is_keeper {
-            body = body + overview_row("Unit", app_unit_name(name) + ".service")
+            body = body + overview_row(i18n_t(req, "overview.unit"), app_unit_name(name) + ".service")
             if app_released(name) {
                 var release: string = app_release_in_use(name)
                 if release == "" {
-                    release = "none yet: the next redeploy makes one"
+                    release = i18n_t(req, "overview.release_none")
                 }
-                body = body + overview_row("Release", release) + overview_row("Runs from", app_run_dir(name))
+                body = body + overview_row(i18n_t(req, "overview.release"), release) + overview_row(i18n_t(req, "overview.runs_from"), app_run_dir(name))
             }
             let job: string = job_running_for(name)
             if job != "" {
-                body = body + "<div class=\"rh-impact\"><b>" + escape_html(job_action_words(job_meta(job, 1))) +
-                    "</b><span>A job is running; <a href=\"/jobs/" + escape_html(job) + "\">its log</a>.</span></div>"
+                body = body + "<div class=\"rh-impact\"><b>" + escape_html(job_action_words(keeper_lang(req), job_meta(job, 1))) +
+                    "</b><span>" + i18n_t(req, "overview.job_running") + " <a href=\"/jobs/" + escape_html(job) + "\">" +
+                    i18n_t(req, "overview.job_log") + "</a>.</span></div>"
             }
-            body = body + "<div class=\"rh-sec\">Actions</div><div class=\"rh-actions\">"
+            body = body + "<div class=\"rh-sec\">" + i18n_t(req, "common.actions") + "</div><div class=\"rh-actions\">"
             if rho_str_eq(state, "running") || rho_str_eq(state, "starting") {
-                body = body + overview_action(name, "restart", "Restart", "quiet", "") +
-                    overview_action(name, "stop", "Stop", "quiet", "")
+                body = body + overview_action(name, "restart", i18n_t(req, "common.restart"), "quiet", "") +
+                    overview_action(name, "stop", i18n_t(req, "common.stop"), "quiet", "")
             } else {
-                body = body + overview_action(name, "start", "Start", "", "")
+                body = body + overview_action(name, "start", i18n_t(req, "common.start"), "", "")
             }
             let update: string = package_update(name)
             if update != "" {
-                body = body + overview_action(name, "update", "Update to " + update, "", "Update " + name + " to " + update + " and restart it?")
+                body = body + overview_action(name, "update", keeper_t1(req, "overview.update_to", "version", update), "",
+                    keeper_t2(req, "overview.update_confirm", "name", name, "version", update))
             }
-            body = body + overview_action(name, "build", "Build", "quiet", "") +
-                overview_action(name, "redeploy", "Redeploy", "quiet", "Build " + name + ", deploy it and restart it?")
+            body = body + overview_action(name, "build", i18n_t(req, "common.build"), "quiet", "") +
+                overview_action(name, "redeploy", i18n_t(req, "common.redeploy"), "quiet", keeper_t1(req, "overview.redeploy_confirm", "name", name))
             if app_released(name) && rho_strlen(str_trim(app_releases(name))) > 0 && rho_str_index_of(str_trim(app_releases(name)), "\n") > 0 {
-                body = body + overview_action(name, "rollback", "Roll back", "quiet", "Put " + name + "'s previous release back in use and restart it?")
+                body = body + overview_action(name, "rollback", i18n_t(req, "overview.rollback"), "quiet", keeper_t1(req, "overview.rollback_confirm", "name", name))
             }
             body = body + "</div>" +
-                "<div class=\"rh-impact\"><b>What these do</b><span>Build leaves what runs alone; Restart runs the release in use; Redeploy builds, makes a release of the build, puts it in use, restarts and waits for it to answer; Roll back puts the previous release back in use.</span></div>"
+                "<div class=\"rh-impact\"><b>" + i18n_t(req, "overview.what_these_do") + "</b><span>" + i18n_t(req, "overview.what_these_do_body") + "</span></div>"
         }
     }
     var foot: string = ""
     if !is_keeper {
-        foot = "<div class=\"rh-foot\"><form method=\"post\" action=\"/applications/uninstall\" onsubmit=\"return confirm('Take " +
-            escape_html(name) + " out of the keeper?')\"><input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) +
-            "\"><button type=\"submit\" class=\"danger small\">Uninstall</button></form></div>"
+        foot = "<div class=\"rh-foot\"><form method=\"post\" action=\"/applications/uninstall\" onsubmit=\"return confirm(" +
+            escape_html(json_string(keeper_t1(req, "overview.uninstall_confirm", "name", name))) + ")\"><input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) +
+            "\"><button type=\"submit\" class=\"danger small\">" + i18n_t(req, "common.uninstall") + "</button></form></div>"
     }
     return head + tabs + "<div class=\"rh-body\">" + body + "</div>" + foot
 }
@@ -336,13 +362,13 @@ fn overview_inspector(name: string, tab: string, notice: string) string {
 fn overview_inspector_endpoint(req: Request) Response {
     let name: string = param(req, "name")
     if !catalog_has(name) {
-        return html(status_not_found(), "<div class=\"rh-body\"><p>No such application.</p></div>")
+        return html(status_not_found(), "<div class=\"rh-body\"><p>" + i18n_t(req, "overview.no_such_app") + "</p></div>")
     }
     var tab: string = query_str(req, "tab")
     if !rho_str_eq(tab, "log") && !rho_str_eq(tab, "env") && !rho_str_eq(tab, "deps") && !rho_str_eq(tab, "clients") && !rho_str_eq(tab, "topics") {
         tab = "overview"
     }
-    return html(status_ok(), overview_inspector(name, tab, ""))
+    return html(status_ok(), overview_inspector(req, name, tab, ""))
 }
 
 // overview_action_endpoint does what an inspector button says and answers the
@@ -354,53 +380,53 @@ fn overview_action_endpoint(req: Request) Response {
     let name: string = param(req, "name")
     let action: string = param(req, "action")
     if !catalog_has(name) {
-        return html(status_not_found(), "<div class=\"rh-body\"><p>No such application.</p></div>")
+        return html(status_not_found(), "<div class=\"rh-body\"><p>" + i18n_t(req, "overview.no_such_app") + "</p></div>")
     }
     var message: string = ""
     if rho_str_eq(action, "start") {
-        message = app_start(name)
+        message = app_start(keeper_lang(req), name)
     } else if rho_str_eq(action, "stop") {
-        message = app_stop(name)
+        message = app_stop(keeper_lang(req), name)
     } else if rho_str_eq(action, "restart") {
-        message = app_restart(name)
+        message = app_restart(keeper_lang(req), name)
     } else if rho_str_eq(action, "redeploy") {
-        message = app_redeploy(name)
+        message = app_redeploy(keeper_lang(req), name)
     } else if rho_str_eq(action, "build") {
-        message = app_build_job(name)
+        message = app_build_job(keeper_lang(req), name)
     } else if rho_str_eq(action, "rollback") {
-        message = app_rollback(name)
+        message = app_rollback(keeper_lang(req), name)
     } else if rho_str_eq(action, "add-device") || rho_str_eq(action, "remove-device") || rho_str_eq(action, "listen") {
         if !keeper_allowed(req, "admin") {
-            return html(status_ok(), overview_inspector(name, "clients", "Broker users are an admin's to change."))
+            return html(status_ok(), overview_inspector(req, name, "clients", i18n_t(req, "overview.broker_admin_only")))
         }
-        return html(status_ok(), overview_inspector(name, "clients", mqtt_client_action(req, action)))
+        return html(status_ok(), overview_inspector(req, name, "clients", mqtt_client_action(req, action)))
     } else if rho_str_eq(action, "update") {
         if !keeper_allowed(req, "admin") {
-            return html(status_ok(), overview_inspector(name, "overview", "Updating needs an admin."))
+            return html(status_ok(), overview_inspector(req, name, "overview", i18n_t(req, "overview.update_admin_only")))
         }
-        message = package_apply_update(name)
+        message = package_apply_update(keeper_lang(req), name)
     } else if rho_str_eq(action, "rotate-secret") {
         if !keeper_allowed(req, "admin") {
-            return html(status_ok(), overview_inspector(name, "env", "A new secret needs an admin."))
+            return html(status_ok(), overview_inspector(req, name, "env", i18n_t(req, "overview.secret_admin_only")))
         }
         if app_provision_client_with(name, app_path(name), true) == "" {
-            message = "The new secret could not be made; see the keeper's log."
+            message = i18n_t(req, "overview.secret_failed")
         } else {
             app_write_environment(name)
-            message = "It has a new client secret. " + app_restart(name)
+            message = i18n_t(req, "overview.secret_done") + " " + app_restart(keeper_lang(req), name)
         }
-        return html(status_ok(), overview_inspector(name, "env", message))
+        return html(status_ok(), overview_inspector(req, name, "env", message))
     } else if rho_str_eq(action, "install-dep") {
         // Installing on the machine is an admin's to do.
         if !keeper_allowed(req, "admin") {
-            return html(status_ok(), overview_inspector(name, "deps", "Installing on the machine needs an admin."))
+            return html(status_ok(), overview_inspector(req, name, "deps", i18n_t(req, "overview.install_admin_only")))
         }
-        message = deps_install_job(name, query_str(req, "module"), query_str(req, "dep"))
-        return html(status_ok(), overview_inspector(name, "deps", message))
+        message = deps_install_job(keeper_lang(req), name, query_str(req, "module"), query_str(req, "dep"))
+        return html(status_ok(), overview_inspector(req, name, "deps", message))
     } else {
-        message = "Unknown action."
+        message = i18n_t(req, "overview.unknown_action")
     }
-    return html(status_ok(), overview_inspector(name, "overview", message))
+    return html(status_ok(), overview_inspector(req, name, "overview", message))
 }
 
 /* -------------------------------------------------------------------------- */
@@ -418,23 +444,24 @@ fn jobs_page(req: Request) Response {
             continue
         }
         let status: string = job_status(id)
-        var pill: string = "<span class=\"rh-pill ok\">done</span>"
+        var pill: string = "<span class=\"rh-pill ok\">" + i18n_t(req, "jobs.status.done") + "</span>"
         if rho_str_eq(status, "running") {
-            pill = "<span class=\"rh-pill busy\">running</span>"
+            pill = "<span class=\"rh-pill busy\">" + i18n_t(req, "jobs.status.running") + "</span>"
         } else if rho_str_eq(status, "failed") {
-            pill = "<span class=\"rh-pill bad\">failed</span>"
+            pill = "<span class=\"rh-pill bad\">" + i18n_t(req, "jobs.status.failed") + "</span>"
         }
         let started: string = job_meta(id, 2)
-        rows = rows + "<tr><td><a href=\"/jobs/" + escape_html(id) + "\">" + escape_html(job_action_words(job_meta(id, 1))) +
+        rows = rows + "<tr><td><a href=\"/jobs/" + escape_html(id) + "\">" + escape_html(job_action_words(keeper_lang(req), job_meta(id, 1))) +
             " " + escape_html(job_meta(id, 0)) + "</a></td><td>" + pill + "</td><td>" + escape_html(job_reason(id)) +
             "</td><td><span class=\"local-time\" data-ms=\"" + escape_html(started) + "000\">" + escape_html(started) + "</span></td></tr>"
     }
     if rows == "" {
-        rows = "<tr><td colspan=\"4\" class=\"rh-empty\">No jobs yet. Builds and redeploys appear here.</td></tr>"
+        rows = "<tr><td colspan=\"4\" class=\"rh-empty\">" + i18n_t(req, "jobs.none_yet") + "</td></tr>"
     }
-    let body: string = "<div class=\"rh-h\"><h1>Jobs</h1><span>builds, redeploys and starts that needed a build</span></div>" +
-        "<table><thead><tr><th>Job</th><th>Outcome</th><th>Why</th><th>Started</th></tr></thead><tbody>" + rows + "</tbody></table>"
-    return page(req, "Jobs", body)
+    let body: string = "<div class=\"rh-h\"><h1>" + i18n_t(req, "jobs.title") + "</h1><span>" + i18n_t(req, "jobs.subtitle") + "</span></div>" +
+        "<table><thead><tr><th>" + i18n_t(req, "jobs.job") + "</th><th>" + i18n_t(req, "jobs.outcome") + "</th><th>" +
+        i18n_t(req, "jobs.why") + "</th><th>" + i18n_t(req, "jobs.started") + "</th></tr></thead><tbody>" + rows + "</tbody></table>"
+    return page(req, i18n_t(req, "jobs.title"), body)
 }
 
 // app_page is an application's own page in the keeper: what the inspector shows,
@@ -443,14 +470,15 @@ fn jobs_page(req: Request) Response {
 fn app_page(req: Request) Response {
     let name: string = param(req, "name")
     if !catalog_has(name) {
-        return page_status(req, status_not_found(), "Application", "<h1>Application</h1><p>No such application.</p>")
+        return page_status(req, status_not_found(), i18n_t(req, "overview.application"), "<h1>" + i18n_t(req, "overview.application") + "</h1><p>" +
+            i18n_t(req, "overview.no_such_app") + "</p>")
     }
     var tab: string = query_str(req, "tab")
     if !rho_str_eq(tab, "log") && !rho_str_eq(tab, "env") && !rho_str_eq(tab, "deps") {
         tab = "overview"
     }
     let title: string = app_title(name, app_path(name))
-    let body: string = "<div class=\"rh-crumbs\"><a href=\"/applications\">Applications</a> / " + escape_html(title) + "</div>" +
-        "<div class=\"rh-ins rh-ins-page\" id=\"ins\">" + overview_inspector(name, tab, "") + "</div>"
+    let body: string = "<div class=\"rh-crumbs\"><a href=\"/applications\">" + i18n_t(req, "nav.applications") + "</a> / " + escape_html(title) + "</div>" +
+        "<div class=\"rh-ins rh-ins-page\" id=\"ins\">" + overview_inspector(req, name, tab, "") + "</div>"
     return page(req, title, body)
 }

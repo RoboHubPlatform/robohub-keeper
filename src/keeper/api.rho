@@ -91,17 +91,17 @@ fn api_app_action(req: Request) Response {
     }
     var message: string = ""
     if rho_str_eq(action, "start") {
-        message = app_start(name)
+        message = app_start("en", name)
     } else if rho_str_eq(action, "stop") {
-        message = app_stop(name)
+        message = app_stop("en", name)
     } else if rho_str_eq(action, "restart") {
-        message = app_restart(name)
+        message = app_restart("en", name)
     } else if rho_str_eq(action, "redeploy") {
-        message = app_redeploy(name)
+        message = app_redeploy("en", name)
     } else if rho_str_eq(action, "build") {
-        message = app_build_job(name)
+        message = app_build_job("en", name)
     } else if rho_str_eq(action, "rollback") {
-        message = app_rollback(name)
+        message = app_rollback("en", name)
     } else {
         return api_error(status_bad_request(), "the actions are start, stop, restart, redeploy, rollback and build")
     }

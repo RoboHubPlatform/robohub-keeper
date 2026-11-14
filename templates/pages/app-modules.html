@@ -1,15 +1,10 @@
-<h1>App modules</h1>
-<p>Reusable application modules with a backend, pages and storage of their own. They are
-installed under <code>modules/</code> and listed in
-<code>modules/registry.yml</code>. A module has no port of its own: every
-application that includes it serves its routes on its own router.</p>
+<h1>{{t "nav.app_modules"}}</h1>
+<p>{{t "app_modules.intro_1"}} <code>modules/</code> {{t "app_modules.intro_2"}} <code>modules/registry.yml</code>{{t "app_modules.intro_3"}}</p>
 {{{ notice }}}
 <div class="rh-grid">
 {{{ rows }}}
 </div>
 
-<h2 class="app-install">Install a module</h2>
-<p>Clone a module from a git URL, or install one that already exists on this
-machine. A module is a Rho application whose manifest carries a
-<code>module_app</code> block.</p>
+<h2 class="app-install">{{t "app_modules.install_heading"}}</h2>
+<p>{{t "app_modules.install_intro_1"}} <code>module_app</code>{{t "app_modules.install_intro_2"}}</p>
 {{{ install_form }}}

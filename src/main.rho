@@ -14,6 +14,7 @@ module keeper
 
 // The RoboHub keeper: a local dashboard for the ecosystem.
 
+include "keeper/text.rho"
 include "keeper/storage.rho"
 include "keeper/apps_text.rho"
 include "forms"
@@ -146,27 +147,27 @@ fn modules_page(req: Request) Response {
 }
 
 // registry_section is the orchestrator's registry, for the Applications page.
-fn registry_section() string {
-    return template_fill(template_get("modules"), vars("rows", module_rows()))
+fn registry_section(req: Request) string {
+    return template_fill(template_get("modules"), vars("rows", module_rows(req)) + i18n_vars(req))
 }
 
 fn module_page(req: Request) Response {
     let name: string = param(req, "name")
     let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
     if !valid_name(name) || !rho_path_exists(entry) {
-        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>Unknown module: " + escape_html(name) + "</p><p><a href='/modules'>Back</a></p>")
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>" + escape_html(keeper_t1(req, "registry.unknown", "name", name)) + "</p><p><a href='/modules'>" + i18n_t(req, "common.back") + "</a></p>")
     }
     let role: string = yaml.value(entry, "role")
     let path: string = resolve_path(yaml.value(entry, "path"))
     let git: string = yaml.value(entry, "git")
     let summary: string = yaml.value(entry, "summary")
-    let installed: string = "no"
+    let installed: string = i18n_t(req, "common.no")
     let version: string = ""
     if rho_path_exists(path + "/module.yml") {
-        installed = "yes"
+        installed = i18n_t(req, "common.yes")
         version = yaml.value(path + "/module.yml", "module.version")
     }
-    let info: string = template_fill(template_get("module-detail"), vars("name", name) + vars("version", version) + vars("role", role) + vars("path", path) + vars("git", git) + vars("summary", summary) + vars("installed", installed) + vars("docs_link", "<a href='/docs/" + name + "'>Documentation</a>"))
+    let info: string = template_fill(template_get("module-detail"), vars("name", name) + vars("version", version) + vars("role", role) + vars("path", path) + vars("git", git) + vars("summary", summary) + vars("installed", installed) + vars("docs_link", "<a href='/docs/" + name + "'>" + i18n_t(req, "common.documentation") + "</a>") + i18n_vars(req))
     return page(req, name, info)
 }
 
@@ -184,7 +185,7 @@ fn registry_entry(name: string) string {
 }
 
 fn registry_back(req: Request, status: u32, title: string, message: string) Response {
-    return page_status(req, status, title, "<p>" + escape_html(message) + "</p><p><a href='/modules'>Back</a></p>")
+    return page_status(req, status, title, "<p>" + escape_html(message) + "</p><p><a href='/modules'>" + i18n_t(req, "common.back") + "</a></p>")
 }
 
 // The checkouts the keeper fetched itself, one path per line. Only these are
@@ -228,25 +229,25 @@ fn install_page(req: Request) Response {
     let name: string = str_trim(form_field(request_body(req), "module"))
     let entry: string = registry_entry(name)
     if entry == "" {
-        return registry_back(req, status_not_found(), title, "Unknown module: " + name)
+        return registry_back(req, status_not_found(), title, keeper_t1(req, "registry.unknown", "name", name))
     }
     let git_url: string = yaml.value(entry, "git")
     let path: string = resolve_path(yaml.value(entry, "path"))
     if rho_path_exists(path + "/module.yml") {
-        return registry_back(req, status_ok(), title, name + " is already installed.")
+        return registry_back(req, status_ok(), title, keeper_t1(req, "registry.already_installed", "name", name))
     }
     if !arg_ok(git_url) || !arg_ok(path) {
-        return registry_back(req, status_bad_request(), title, "The registry entry for " + name + " does not name a plain git URL and path.")
+        return registry_back(req, status_bad_request(), title, keeper_t1(req, "registry.bad_entry", "name", name))
     }
     ensure_keeper_state()
     let output: string = apps_report("clone-" + name)
     let code: u32 = rho_exec_args("git", "clone\n--\n" + git_url + "\n" + path + "\n", output)
     if code != 0 {
-        return registry_back(req, status_internal(), title, "Failed to clone " + name + ".")
+        return registry_back(req, status_internal(), title, keeper_t1(req, "registry.clone_failed", "name", name))
     }
     fetched_set(path, true)
     info("keeper", "fetched " + name + " into " + path)
-    return registry_back(req, status_created(), title, "Installed " + name + ".")
+    return registry_back(req, status_created(), title, keeper_t1(req, "registry.installed_msg", "name", name))
 }
 
 fn uninstall_page(req: Request) Response {
@@ -257,28 +258,28 @@ fn uninstall_page(req: Request) Response {
     let name: string = str_trim(form_field(request_body(req), "module"))
     let entry: string = registry_entry(name)
     if entry == "" {
-        return registry_back(req, status_not_found(), title, "Unknown module: " + name)
+        return registry_back(req, status_not_found(), title, keeper_t1(req, "registry.unknown", "name", name))
     }
     let path: string = resolve_path(yaml.value(entry, "path"))
     if !rho_path_exists(path + "/module.yml") {
-        return registry_back(req, status_ok(), title, name + " is not installed.")
+        return registry_back(req, status_ok(), title, keeper_t1(req, "registry.not_installed", "name", name))
     }
     if !fetched_by_keeper(path) {
-        return registry_back(req, status_conflict(), title, name + " at " + path + " was not fetched by the keeper, so the keeper leaves it alone. Remove the folder yourself if you mean to.")
+        return registry_back(req, status_conflict(), title, keeper_t2(req, "registry.not_fetched", "name", name, "path", path))
     }
     let output: string = apps_report("uninstall-" + name)
     let code: u32 = rho_exec_args("rm", "-rf\n--\n" + path + "\n", output)
     if code != 0 {
-        return registry_back(req, status_internal(), title, "Failed to uninstall " + name + ".")
+        return registry_back(req, status_internal(), title, keeper_t1(req, "registry.uninstall_failed", "name", name))
     }
     fetched_set(path, false)
     info("keeper", "removed " + name + " from " + path)
-    return registry_back(req, status_ok(), title, "Uninstalled " + name + ".")
+    return registry_back(req, status_ok(), title, keeper_t1(req, "registry.uninstalled", "name", name))
 }
 
 fn docs_page(req: Request) Response {
     let rows: string = docs_rows()
-    let body: string = template_fill(template_get("docs"), vars("rows", rows))
+    let body: string = template_fill(template_get("docs"), vars("rows", rows) + i18n_vars(req))
     return page(req, i18n_t(req, "page.docs"), body)
 }
 
@@ -286,7 +287,7 @@ fn doc_page(req: Request) Response {
     let path: string = param(req, "path")
     // A page is a name under the docs tree: never a way out of it.
     if rho_str_index_of(path, "..") >= 0 || rho_str_starts_with(path, "/") || rho_str_index_of(path, "\\") >= 0 {
-        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p><a href='/docs'>All docs</a></p>")
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p><a href='/docs'>" + i18n_t(req, "common.all_docs") + "</a></p>")
     }
     // The path from the URL may or may not have the docs/ prefix.
     var full_path: string = path
@@ -306,7 +307,7 @@ fn doc_page(req: Request) Response {
         content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + path + "/docs/index.md")
     }
     if content == "" {
-        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>No documentation has been built for " + escape_html(path) + ".</p><p><a href='/docs'>All docs</a></p>")
+        return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>" + escape_html(keeper_t1(req, "docs.not_built", "path", path)) + "</p><p><a href='/docs'>" + i18n_t(req, "common.all_docs") + "</a></p>")
     }
     return page(req, path, content)
 }
@@ -420,7 +421,7 @@ fn resolve_path(path: string) string {
     return root + "/" + path
 }
 
-fn module_rows() string {
+fn module_rows(req: Request) string {
     // Discover modules from the registry directory
     let listing: string = ""
     let reg_dir: string = robohub_root() + "/registry/modules"
@@ -451,21 +452,21 @@ fn module_rows() string {
         let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
         let role: string = yaml.value(entry, "role")
         let path: string = resolve_path(yaml.value(entry, "path"))
-        let installed: string = "no"
+        let installed: string = i18n_t(req, "common.no")
         let version: string = ""
-        var badge: string = "<form method='post' action='/install'><input type='hidden' name='module' value='" + name + "'><button type='submit'>Install</button></form>"
+        var badge: string = "<form method='post' action='/install'><input type='hidden' name='module' value='" + name + "'><button type='submit'>" + i18n_t(req, "common.install") + "</button></form>"
         if !valid_name(name) {
             continue
         }
         if rho_path_exists(path + "/module.yml") {
-            installed = "yes"
+            installed = i18n_t(req, "common.yes")
             version = yaml.value(path + "/module.yml", "module.version")
             badge = ""
             if fetched_by_keeper(path) {
-                badge = "<form method='post' action='/uninstall' onsubmit=\"return confirm('Remove this checkout?')\"><input type='hidden' name='module' value='" + name + "'><button type='submit' class='danger'>Uninstall</button></form>"
+                badge = "<form method='post' action='/uninstall' onsubmit=\"" + keeper_confirm(req, "registry.uninstall_confirm") + "\"><input type='hidden' name='module' value='" + name + "'><button type='submit' class='danger'>" + i18n_t(req, "common.uninstall") + "</button></form>"
             }
         }
-        let row: string = template_fill(template_get("module-row"), vars("name", name) + vars("role", role) + vars("version", version) + vars("installed", installed) + vars("badge", badge))
+        let row: string = template_fill(template_get("module-row"), vars("name", name) + vars("role", role) + vars("version", version) + vars("installed", installed) + vars("badge", badge) + i18n_vars(req))
         result = result + row
     }
     return result

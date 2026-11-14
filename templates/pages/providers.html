@@ -1,17 +1,11 @@
-<h1>Providers</h1>
-<p>Providers are Rho modules under <code>providers/</code>. Each one implements an
-interface, such as the alert interface's channels; an application that depends on
-a provider binds it in its <code>module.yml</code>. This page manages the
-installed provider set, the same way the Plugins page manages the installed
-plugins.</p>
+<h1>{{t "page.providers"}}</h1>
+<p>{{t "providers.intro_1"}} <code>providers/</code>{{t "providers.intro_2"}} <code>module.yml</code>{{t "providers.intro_3"}}</p>
 {{{ notice }}}
 <div class="rh-grid">
 {{{ rows }}}
 </div>
 
-<h2 class="app-install">Install a provider</h2>
-<p>Clone a provider from a git URL, or install one that already exists on this
-machine. A provider is a module whose manifest lists the interface it
-<code>implements</code>.</p>
+<h2 class="app-install">{{t "providers.install_heading"}}</h2>
+<p>{{t "providers.install_intro_1"}} <code>implements</code>{{t "providers.install_intro_2"}}</p>
 {{{ install_form }}}
-<p><small>Installed into <code>{{ root }}</code>.</small></p>
+<p><small>{{t "plugins.installed_into"}} <code>{{ root }}</code>.</small></p>

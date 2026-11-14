@@ -193,7 +193,7 @@ fn auth_history(name: string, outcome: string) void {
 }
 
 // auth_history_rows are a person's last sign-ins, newest first, as inspector rows.
-fn auth_history_rows(name: string, limit: u32) string {
+fn auth_history_rows(req: Request, name: string, limit: u32) string {
     var lines: string = ""
     var rest: string = rho_read_text(auth_history_file())
     while rest != "" {
@@ -214,12 +214,21 @@ fn auth_history_rows(name: string, limit: u32) string {
         if !rho_str_eq(field(line, 2), "signed in") {
             tone = "bad"
         }
-        out = out + "<div class=\"rh-row " + tone + "\"><b>" + escape_html(field(line, 2)) + "</b><span class=\"local-time\" data-ms=\"" +
+        // The outcome is stored in English; it is said in the reader's language.
+        var outcome: string = field(line, 2)
+        if rho_str_eq(outcome, "signed in") {
+            outcome = i18n_t(req, "auth.outcome.signed_in")
+        } else if rho_str_eq(outcome, "wrong") {
+            outcome = i18n_t(req, "auth.outcome.wrong")
+        } else if rho_str_eq(outcome, "locked") {
+            outcome = i18n_t(req, "auth.outcome.locked")
+        }
+        out = out + "<div class=\"rh-row " + tone + "\"><b>" + escape_html(outcome) + "</b><span class=\"local-time\" data-ms=\"" +
             escape_html(field(line, 0)) + "000\">" + escape_html(field(line, 0)) + "</span></div>"
         count = count + 1
     }
     if out == "" {
-        return "<p class=\"rh-empty\">No sign-ins yet.</p>"
+        return "<p class=\"rh-empty\">" + i18n_t(req, "auth.no_signins") + "</p>"
     }
     return out
 }
@@ -497,11 +506,11 @@ fn auth_open_session(name: string, role: string, return_to: string, audience: st
 // auth_page is the sign-in page: setup when nobody has an account yet, the
 // sign-in form otherwise, on the RoboHub look.
 fn auth_page(req: Request, status: u32, return_to: string, audience: string, next: string, notice: string) Response {
-    var to: string = "the keeper on this machine"
+    var to: string = i18n_t(req, "auth.to_keeper")
     if audience != "" && !rho_str_eq(audience, "keeper") {
         let path: string = app_path(audience)
         if path != "" {
-            to = app_title(audience, path) + " on this machine"
+            to = keeper_t1(req, "auth.to_app", "app", app_title(audience, path))
         }
     }
     var message: string = ""
@@ -517,7 +526,7 @@ fn auth_page(req: Request, status: u32, return_to: string, audience: string, nex
         vars("to", to) + vars("notice", message) + vars("setup", setup) +
         vars("master_file", auth_master_file()) +
         vars("return_to", return_to) + vars("audience", audience) + vars("next", next))
-    return html(status, keeper_translate(req, body))
+    return html(status, body)
 }
 
 // auth_ticket mints the one-use ticket an application exchanges for its own
@@ -563,10 +572,10 @@ fn auth_login(req: Request) Response {
     let audience: string = query_str(req, "audience")
     let next: string = query_str(req, "next")
     if return_to != "" && !auth_target_ok(req, return_to, audience) {
-        return html(status_bad_request(), "<p>That application is not one this keeper signs in to.</p>")
+        return html(status_bad_request(), "<p>" + i18n_t(req, "auth.bad_target") + "</p>")
     }
     if !auth_plain(next) {
-        return html(status_bad_request(), "<p>The page to return to is not a plain address.</p>")
+        return html(status_bad_request(), "<p>" + i18n_t(req, "auth.bad_next") + "</p>")
     }
     if auth_session_valid(req) {
         // A direct keeper login has no application to return to. Sending it
@@ -577,13 +586,13 @@ fn auth_login(req: Request) Response {
         }
         let ticket: string = auth_ticket(req, return_to, audience)
         if rho_str_eq(ticket, "-") {
-            return page_status(req, status_forbidden(), "No access",
-                "<h1>No access</h1><div class=\"notice warn\">You have no access to that application. An admin can grant it under Users &amp; access.</div>")
+            return page_status(req, status_forbidden(), i18n_t(req, "auth.no_access"),
+                "<h1>" + i18n_t(req, "auth.no_access") + "</h1><div class=\"notice warn\">" + escape_html(i18n_t(req, "auth.no_access_body")) + "</div>")
         }
         if ticket != "" {
             return redirect(return_to + "?ticket=" + ticket + "&next=" + str_url_encode(next))
         }
-        return html(status_internal(), "<p>The ticket could not be minted.</p>")
+        return html(status_internal(), "<p>" + i18n_t(req, "auth.ticket_failed") + "</p>")
     }
     return auth_page(req, status_ok(), return_to, audience, next, "")
 }
@@ -605,7 +614,7 @@ fn auth_login_post(req: Request) Response {
     let audience: string = form_field(body, "audience")
     let next: string = form_field(body, "next")
     if (return_to != "" && !auth_target_ok(req, return_to, audience)) || !auth_plain(next) || !auth_plain(audience) {
-        return html(status_bad_request(), "<p>That sign-in request is not one this keeper answers.</p>")
+        return html(status_bad_request(), "<p>" + i18n_t(req, "auth.bad_request") + "</p>")
     }
     let name: string = str_trim(form_field(body, "name"))
     let supplied: string = auth_clean(form_field(body, "token"))
@@ -617,11 +626,11 @@ fn auth_login_post(req: Request) Response {
         if wait_token > 0 {
             auth_history("-token", "locked")
             return auth_page(req, status_ok(), return_to, audience, next,
-                "Too many wrong attempts. Try again in " + rho_int_to_str((wait_token + 59) / 60) + " minutes.")
+                keeper_t1(req, "auth.locked", "minutes", rho_int_to_str((wait_token + 59) / 60)))
         }
         if !auth_same(supplied, auth_clean(rho_read_text(auth_master_file()))) {
             auth_failed("-token")
-            return auth_page(req, status_ok(), return_to, audience, next, "That is not the access token in " + auth_master_file() + ".")
+            return auth_page(req, status_ok(), return_to, audience, next, keeper_t1(req, "auth.wrong_token", "file", auth_master_file()))
         }
         auth_keys_ensure()
         auth_succeeded("-token")
@@ -631,13 +640,13 @@ fn auth_login_post(req: Request) Response {
     if wait > 0 {
         auth_history(name, "locked")
         return auth_page(req, status_ok(), return_to, audience, next,
-            "Too many wrong attempts. Try again in " + rho_int_to_str((wait + 59) / 60) + " minutes.")
+            keeper_t1(req, "auth.locked", "minutes", rho_int_to_str((wait + 59) / 60)))
     }
     let role: string = people_verify(name, form_field(body, "password"))
     if role == "" {
         auth_failed(name)
         warn("keeper", "sign-in refused for " + name)
-        return auth_page(req, status_ok(), return_to, audience, next, "That name and password do not match.")
+        return auth_page(req, status_ok(), return_to, audience, next, i18n_t(req, "auth.wrong_password"))
     }
     auth_succeeded(name)
     return auth_open_session(name, role, return_to, audience, next)
@@ -690,10 +699,11 @@ fn auth_token_render(req: Request, message: string, token: string) Response {
     }
     var token_block: string = ""
     if token != "" {
-        token_block = template_fill(template_get("auth-token-block"), vars("token", token))
+        token_block = template_fill(template_get("auth-token-block"), vars("token", token) + i18n_vars(req))
     }
     let body: string = template_fill(template_get("auth-token"),
-        vars("notice", notice) + vars("token_block", token_block))
+        vars("notice", notice) + vars("token_block", token_block) + i18n_vars(req) +
+        vars("rotate_confirm", json_string(i18n_t(req, "auth.token.rotate_confirm"))))
     return page(req, i18n_t(req, "page.access_token"), body)
 }
 
@@ -717,19 +727,19 @@ fn auth_token_post(req: Request) Response {
     // Changing the token proves the old one, so a session left open on a
     // borrowed screen cannot lock its owner out.
     if !auth_same(current, auth_clean(rho_read_text(auth_master_file()))) {
-        return auth_token_page_message(req, "The current access token is not right.")
+        return auth_token_page_message(req, i18n_t(req, "auth.token.current_wrong"))
     }
     if rho_strlen(token) < 16 {
-        return auth_token_page_message(req, "Use an access token of at least 16 characters.")
+        return auth_token_page_message(req, i18n_t(req, "auth.token.too_short"))
     }
     if !rho_str_eq(token, confirm) {
-        return auth_token_page_message(req, "The two tokens do not match.")
+        return auth_token_page_message(req, i18n_t(req, "auth.token.mismatch"))
     }
     ignore_u32(rho_exec_args("mkdir", "-p\n" + auth_dir() + "\n", auth_report("auth-mkdir")))
     ignore_bool(rho_write_secret(auth_master_file(), token + "\n"))
     auth_keep_only_session(auth_session_id(req))
     info("keeper", "access token updated; other sessions closed")
-    return auth_token_render(req, "Access token updated. Every other session was signed out; this one stays.", token)
+    return auth_token_render(req, i18n_t(req, "auth.token.updated"), token)
 }
 
 // auth_keep_only_session closes every keeper session but the one named, which is
@@ -825,9 +835,9 @@ fn auth_rotate_key(req: Request) Response {
     }
     let code: u32 = rho_exec_args("rho", "auth\nkeygen\n--dir\n" + auth_dir() + "\n--force\n", auth_report("auth-keygen"))
     if code != 0 {
-        return auth_token_page_message(req, "A new key could not be made; see " + auth_report("auth-keygen") + ".")
+        return auth_token_page_message(req, keeper_t1(req, "auth.key.failed", "file", auth_report("auth-keygen")))
     }
     info("keeper", "the signing key was rotated")
     keeper_event("keys.rotated", "", "The signing key was rotated.")
-    return auth_token_page_message(req, "The signing key is new. Applications fetch it with the next ticket they see.")
+    return auth_token_page_message(req, i18n_t(req, "auth.key.rotated"))
 }

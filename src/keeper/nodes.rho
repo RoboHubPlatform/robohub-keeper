@@ -35,16 +35,16 @@ fn node_record(device: string) string {
     return rho_read_text(path)
 }
 
-fn node_status(device: string) string {
+fn node_status(req: Request, device: string) string {
     if rho_path_exists(node_path(device)) {
         return template_fill(template_get("status"),
-            vars("__locale", "en") + vars("tone", "running") + vars("label", "enrolled"))
+            vars("tone", "running") + vars("label", i18n_t(req, "nodes.enrolled")))
     }
     return template_fill(template_get("status"),
-        vars("__locale", "en") + vars("tone", "not-built") + vars("label", "revoked"))
+        vars("tone", "not-built") + vars("label", i18n_t(req, "nodes.revoked_state")))
 }
 
-fn node_rows() string {
+fn node_rows(req: Request) string {
     let report: string = apps_report("node-list")
     ignore_u32(rho_exec_args("ls", node_dir() + "\n", report))
     var out: string = ""
@@ -70,10 +70,11 @@ fn node_rows() string {
             vars("area", field(record, 3)) +
             vars("node", field(record, 4)) +
             vars("created", field(record, 6)) +
-            vars("status", node_status(device)))
+            vars("status", node_status(req, device)) + i18n_vars(req) +
+            vars("revoke_confirm", json_string(keeper_t1(req, "nodes.revoke_confirm", "device", device))))
     }
     if out == "" {
-        out = "<tr><td colspan=\"6\">No enrolled nodes.</td></tr>"
+        out = "<tr><td colspan=\"6\">" + i18n_t(req, "nodes.none") + "</td></tr>"
     }
     return out
 }
@@ -85,7 +86,7 @@ fn keeper_nodes_page_message(req: Request, message: string) Response {
             vars("message", message))
     }
     let body: string = template_fill(template_get("nodes"),
-        i18n_vars(req) + vars("notice", notice) + vars("rows", node_rows()))
+        i18n_vars(req) + vars("notice", notice) + vars("rows", node_rows(req)))
     return page(req, i18n_t(req, "page.nodes"), body)
 }
 
@@ -100,11 +101,11 @@ fn keeper_nodes_revoke(req: Request) Response {
     let body: string = request_body(req)
     let device: string = str_trim(form_field(body, "device"))
     if node_record(device) == "" {
-        return keeper_nodes_page_message(req, "That node is not enrolled.")
+        return keeper_nodes_page_message(req, i18n_t(req, "nodes.not_enrolled"))
     }
     ignore_u32(rho_exec_args("rm", "-f\n" + node_path(device) + "\n", apps_report("node-revoke")))
     info("keeper", "revoked node " + device)
-    return keeper_nodes_page_message(req, "Node " + device + " was revoked.")
+    return keeper_nodes_page_message(req, keeper_t1(req, "nodes.revoked", "device", device))
 }
 
 fn keeper_nodes_rotate(req: Request) Response {
@@ -115,11 +116,11 @@ fn keeper_nodes_rotate(req: Request) Response {
     let device: string = str_trim(form_field(body, "device"))
     let record: string = node_record(device)
     if record == "" {
-        return keeper_nodes_page_message(req, "That node is not enrolled.")
+        return keeper_nodes_page_message(req, i18n_t(req, "nodes.not_enrolled"))
     }
     let credential: string = rho_random_hex(32)
     if rho_strlen(credential) != 64 {
-        return keeper_nodes_page_message(req, "Could not generate a new credential.")
+        return keeper_nodes_page_message(req, i18n_t(req, "nodes.credential_failed"))
     }
     let updated: string = field(record, 0) + "|" + field(record, 1) + "|" + field(record, 2) +
         "|" + field(record, 3) + "|" + field(record, 4) + "|" + credential +
@@ -127,7 +128,7 @@ fn keeper_nodes_rotate(req: Request) Response {
     ignore_bool(rho_write_secret(node_path(device), updated))
     ignore_u32(rho_exec_args("chmod", "600\n" + node_path(device) + "\n", apps_report("node-chmod")))
     info("keeper", "rotated credential for node " + device)
-    return keeper_nodes_page_message(req, "New credential for " + device + ": " + credential)
+    return keeper_nodes_page_message(req, keeper_t2(req, "nodes.new_credential", "device", device, "credential", credential))
 }
 
 // keeper_node_verify is the contract a gateway or firmware calls before it

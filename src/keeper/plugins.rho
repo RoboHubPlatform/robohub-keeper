@@ -54,36 +54,39 @@ fn plugin_state_set(name: string, enabled: string) void {
     ignore_bool(rho_write_text(file, out))
 }
 
-fn plugin_action_forms(name: string, enabled: bool) string {
+fn plugin_action_forms(req: Request, name: string, enabled: bool) string {
     var enabled_flag: string = ""
     if enabled {
         enabled_flag = "true"
     }
-    return template_fill(template_get("plugin-actions"),
+    return template_fill(template_get("plugin-actions"), i18n_vars(req) +
+        vars("confirm_uninstall", i18n_t(req, "plugins.uninstall_confirm")) +
         vars("name", name) +
         vars("enabled", enabled_flag))
 }
 
-fn plugin_row_line(line: string) string {
+fn plugin_row_line(req: Request, line: string) string {
     let name: string = field(line, 0)
     let enabled: bool = keeper_plugin_enabled(name)
-    var status: string = plugin_status("stopped", "disabled")
+    var status: string = plugin_status("stopped", i18n_t(req, "plugins.state_disabled"))
     if enabled {
-        status = plugin_status("running", "enabled")
+        status = plugin_status("running", i18n_t(req, "plugins.state_enabled"))
     }
+    var summary: string = field(line, 3)
     if field(line, 5) == "false" {
-        status = plugin_status("not-built", "missing")
+        status = plugin_status("not-built", i18n_t(req, "plugins.state_missing"))
+        summary = i18n_t(req, "plugins.not_on_disk")
     }
     return template_fill(template_get("plugin-row"),
         vars("name", name) +
         vars("kind", field(line, 1)) +
         vars("transport", field(line, 2)) +
-        vars("summary", field(line, 3)) +
+        vars("summary", summary) +
         vars("status", status) +
-        vars("actions", plugin_action_forms(name, enabled)))
+        vars("actions", plugin_action_forms(req, name, enabled)))
 }
 
-fn plugin_row_html(name: string) string {
+fn plugin_row_html(req: Request, name: string) string {
     var rest: string = plugin_rows(plugin_root())
     while rho_strlen(rest) > 0 {
         let at: i32 = rho_str_index_of(rest, "\n")
@@ -95,13 +98,13 @@ fn plugin_row_html(name: string) string {
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if field(line, 0) == name {
-            return plugin_row_line(line)
+            return plugin_row_line(req, line)
         }
     }
     return ""
 }
 
-fn plugin_rows_html() string {
+fn plugin_rows_html(req: Request) string {
     var out: string = ""
     var rest: string = plugin_rows(plugin_root())
     while rho_strlen(rest) > 0 {
@@ -114,22 +117,22 @@ fn plugin_rows_html() string {
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if line != "" {
-            out = out + plugin_row_line(line)
+            out = out + plugin_row_line(req, line)
         }
     }
     if out == "" {
-        out = "<tr><td colspan=\"6\">No plugins were found under plugins/.</td></tr>"
+        out = "<tr><td colspan=\"6\">" + i18n_t(req, "plugins.none") + "</td></tr>"
     }
     return out
 }
 
-fn channel_row_html(name: string) string {
+fn channel_row_html(req: Request, name: string) string {
     let enabled: bool = alert.enabled(name)
     var enabled_flag: string = ""
-    var status: string = plugin_status("stopped", "disabled")
+    var status: string = plugin_status("stopped", i18n_t(req, "plugins.state_disabled"))
     if enabled {
         enabled_flag = "true"
-        status = plugin_status("running", "enabled")
+        status = plugin_status("running", i18n_t(req, "plugins.state_enabled"))
     }
     var threshold: string = alert.config(name, "severity_threshold")
     if threshold == "" {
@@ -138,12 +141,13 @@ fn channel_row_html(name: string) string {
     return template_fill(template_get("channel-row"),
         vars("name", name) +
         vars("threshold", threshold) +
+        vars("threshold_label", keeper_t1(req, "plugins.channel_from", "threshold", threshold)) +
         vars("status", status) +
         vars("actions", template_fill(template_get("channel-actions"),
-            vars("name", name) + vars("enabled", enabled_flag))))
+            i18n_vars(req) + vars("name", name) + vars("enabled", enabled_flag))))
 }
 
-fn channel_rows_html() string {
+fn channel_rows_html(req: Request) string {
     var out: string = ""
     var rest: string = alert.providers()
     while rest != "" {
@@ -156,11 +160,11 @@ fn channel_rows_html() string {
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if name != "" {
-            out = out + channel_row_html(name)
+            out = out + channel_row_html(req, name)
         }
     }
     if out == "" {
-        out = "<tr><td colspan=\"4\">The keeper binds no alert channel.</td></tr>"
+        out = "<tr><td colspan=\"4\">" + i18n_t(req, "plugins.no_channel") + "</td></tr>"
     }
     return out
 }
@@ -174,10 +178,10 @@ fn plugins_page_message(req: Request, message: string) Response {
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
-    let body: string = template_fill(template_get("plugins"),
-        vars("notice", notice) + vars("channels", channel_rows_html()) +
-        vars("rows", plugin_rows_html()) +
-        vars("root", plugin_root()) + vars("install_form", keeper_install_form("/plugins/install", "robohub-auth", "https://github.com/RoboHubPlatform/robohub-plugin or /path/to/plugin", "A git URL, or a folder with a plugin module.yml.")))
+    let body: string = template_fill(template_get("plugins"), i18n_vars(req) +
+        vars("notice", notice) + vars("channels", channel_rows_html(req)) +
+        vars("rows", plugin_rows_html(req)) +
+        vars("root", plugin_root()) + vars("install_form", keeper_install_form(req, "/plugins/install", "robohub-auth", i18n_t(req, "plugins.source_hint"), i18n_t(req, "plugins.source_help"))))
     return page(req, i18n_t(req, "page.plugins"), body)
 }
 
@@ -198,30 +202,33 @@ fn plugins_toggle(req: Request) Response {
             value = "false"
         }
         if !alert.configure(name, "enabled", value) {
-            return plugins_page_message(req, "The setting for " + name + " could not be saved.")
+            return plugins_page_message(req, keeper_t1(req, "plugins.setting_not_saved", "name", name))
         }
         info("keeper", "alert channel " + name + " enabled=" + value)
         if htmx_is_request(req) {
-            return html(status_ok(), channel_row_html(name))
+            return html(status_ok(), channel_row_html(req, name))
         }
-        return plugins_page_message(req, name + " is " + value_word(value) + " for the keeper.")
+        if value == "false" {
+            return plugins_page_message(req, keeper_t1(req, "plugins.channel_disabled", "name", name))
+        }
+        return plugins_page_message(req, keeper_t1(req, "plugins.channel_enabled", "name", name))
     }
     if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
-        return plugins_page_message(req, "No such plugin: " + name)
+        return plugins_page_message(req, keeper_t1(req, "plugins.no_such", "name", name))
     }
     plugin_state_set(name, enabled)
     if enabled == "0" {
         info("keeper", "disabled plugin " + name)
         if htmx_is_request(req) {
-            return html(status_ok(), plugin_row_html(name))
+            return html(status_ok(), plugin_row_html(req, name))
         }
-        return plugins_page_message(req, name + " is disabled for the keeper.")
+        return plugins_page_message(req, keeper_t1(req, "plugins.channel_disabled", "name", name))
     }
     info("keeper", "enabled plugin " + name)
     if htmx_is_request(req) {
-        return html(status_ok(), plugin_row_html(name))
+        return html(status_ok(), plugin_row_html(req, name))
     }
-    return plugins_page_message(req, name + " is enabled for the keeper.")
+    return plugins_page_message(req, keeper_t1(req, "plugins.channel_enabled", "name", name))
 }
 
 fn plugins_test(req: Request) Response {
@@ -231,25 +238,17 @@ fn plugins_test(req: Request) Response {
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
     if !keeper_alert_bound(name) {
-        return plugins_page_message(req, "No such alert channel: " + name)
+        return plugins_page_message(req, keeper_t1(req, "plugins.no_such_channel", "name", name))
     }
     let sent: u32 = alert.test(name, "Test alert from the RoboHub keeper")
     if sent == 0 {
-        return plugins_page_message(req, "The test alert through " + name +
-            " was not delivered. Its settings are incomplete or its program failed.")
+        return plugins_page_message(req, keeper_t1(req, "plugins.test_not_delivered", "name", name))
     }
     info("keeper", "sent a test alert through " + name)
     if htmx_is_request(req) {
-        return html(status_ok(), channel_row_html(name))
+        return html(status_ok(), channel_row_html(req, name))
     }
-    return plugins_page_message(req, "The test alert was handed to " + name + ".")
-}
-
-fn value_word(value: string) string {
-    if value == "false" {
-        return "disabled"
-    }
-    return "enabled"
+    return plugins_page_message(req, keeper_t1(req, "plugins.test_handed", "name", name))
 }
 
 fn plugin_source_name(source: string) string {
@@ -284,22 +283,22 @@ fn plugins_install(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
+        return html(status_forbidden(), "<p>" + i18n_t(req, "plugins.csrf_nothing_installed") + "</p>")
     }
     var name: string = str_trim(form_field(body, "name"))
     let source: string = str_trim(form_field(body, "source"))
     if source == "" {
-        return plugins_page_message(req, "Name a plugin to install.")
+        return plugins_page_message(req, i18n_t(req, "plugins.name_one"))
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return plugins_page_message(req, "The plugin name can use letters, digits, '-', '_' and '.' only.")
+        return plugins_page_message(req, i18n_t(req, "plugins.bad_name"))
     }
     let target: string = plugin_root() + "/" + name
     if rho_path_exists(target) {
-        return plugins_page_message(req, name + " is already installed.")
+        return plugins_page_message(req, keeper_t1(req, "plugins.already_installed", "name", name))
     }
     ignore_u32(rho_exec_args("mkdir", "-p\n" + plugin_root() + "\n", apps_report("mkdir-plugins")))
     var code: u32 = 0
@@ -309,23 +308,23 @@ fn plugins_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return plugins_page_message(req, "No plugin module.yml at " + path + ".")
+            return plugins_page_message(req, keeper_t1(req, "plugins.no_manifest", "path", path))
         }
         code = rho_exec_args("cp", "-r\n" + path + "\n" + target + "\n",
             apps_report("install-plugin-" + name))
     }
     if code != 0 {
-        return plugins_page_message(req, "Could not install " + source + ".")
+        return plugins_page_message(req, keeper_t1(req, "plugins.could_not_install", "source", source))
     }
     // A plugin says what kind it is: `module.plugin_kind`, as every plugin here
     // is written, or a `plugin:` block.
     if plugin_field(target + "/module.yml", "kind") == "" {
         ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n", apps_report("remove-not-plugin")))
-        return plugins_page_message(req, source + " is not a plugin module.")
+        return plugins_page_message(req, keeper_t1(req, "plugins.not_a_plugin", "source", source))
     }
     ignore_bool(plugin_db_add(plugin_root(), name))
     info("keeper", "installed plugin " + name)
-    return plugins_page_message(req, name + " was installed. It is disabled until enabled.")
+    return plugins_page_message(req, keeper_t1(req, "plugins.installed_disabled", "name", name))
 }
 
 fn plugins_uninstall(req: Request) Response {
@@ -335,7 +334,7 @@ fn plugins_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
     if !valid_name(name) || !rho_path_exists(plugin_manifest(plugin_root(), name)) {
-        return plugins_page_message(req, "No such plugin: " + name)
+        return plugins_page_message(req, keeper_t1(req, "plugins.no_such", "name", name))
     }
     let target: string = plugin_root() + "/" + name
     ignore_bool(plugin_db_remove(plugin_root(), name))
@@ -344,5 +343,5 @@ fn plugins_uninstall(req: Request) Response {
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return plugins_page_message(req, name + " was uninstalled.")
+    return plugins_page_message(req, keeper_t1(req, "plugins.uninstalled", "name", name))
 }

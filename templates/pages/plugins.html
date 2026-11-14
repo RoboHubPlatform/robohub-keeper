@@ -1,24 +1,18 @@
-<h1>Plugins</h1>
+<h1>{{t "page.plugins"}}</h1>
 {{{ notice }}}
-<h2>Alert channels</h2>
-<p>The channels the keeper's alerts go to: the providers of the alert interface
-its <code>module.yml</code> binds. Switching one off, or changing its settings on
-the Settings page, changes this installation only. A channel is added by binding
-its provider and rebuilding the keeper.</p>
+<h2>{{t "plugins.alert_channels"}}</h2>
+<p>{{t "plugins.alert_channels_intro_1"}} <code>module.yml</code>{{t "plugins.alert_channels_intro_2"}}</p>
 <div class="rh-grid">
 {{{ channels }}}
 </div>
 
-<h2>Installed plugins</h2>
-<p>Plugins are Rho modules under <code>plugins/</code>. This page manages the
-keeper's own set. Enabling or disabling here changes only the keeper, leaving
-the manifest it was installed with intact.</p>
+<h2>{{t "plugins.installed"}}</h2>
+<p>{{t "plugins.installed_intro_1"}} <code>plugins/</code>{{t "plugins.installed_intro_2"}}</p>
 <div class="rh-grid">
 {{{ rows }}}
 </div>
 
-<h2 class="app-install">Install a plugin</h2>
-<p>Clone a plugin from a git URL, or install one that already exists on this
-machine. A plugin is a module whose manifest says <code>type: plugin</code>.</p>
+<h2 class="app-install">{{t "plugins.install_heading"}}</h2>
+<p>{{t "plugins.install_intro"}} <code>type: plugin</code>.</p>
 {{{ install_form }}}
-<p><small>Installed into <code>{{ root }}</code>.</small></p>
+<p><small>{{t "plugins.installed_into"}} <code>{{ root }}</code>.</small></p>

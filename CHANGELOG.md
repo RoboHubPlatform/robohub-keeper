@@ -346,3 +346,7 @@ From a security review.
 ## [0.9.10] - 2026-11-14
 
 Its function for a hosted app's workspace is `keeper_app_workspace`, apart from the toolchain's `app_workspace()`; HTML is escaped by `escape_html` (rho 0.8.0).
+
+## [0.9.11] - 2026-11-14
+
+Every page, fragment, notice and confirmation of the keeper — the sign-in page included — is written with i18n keys (609 in each of English and Romanian, the same set), where hard-coded English was translated afterwards by matching whole phrases, which missed about four in ten, any message with a value in it and every confirmation. The phrase catalog and its pass are gone. Messages the keeper keeps (job reasons, the sign-in history, logs) stay English and are translated when shown; API answers stay English.

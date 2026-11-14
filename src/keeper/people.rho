@@ -121,9 +121,9 @@ fn field_tab(line: string, index: u32) string {
 }
 
 // people_add adds a person and answers "" or why not.
-fn people_add(name: string, display: string, role: string, grants: string, password: string) string {
+fn people_add(req: Request, name: string, display: string, role: string, grants: string, password: string) string {
     if !valid_name(name) || !people_value_ok(display) || !people_value_ok(grants) {
-        return "A name is lowercase letters, digits, '.', '_' or '-'."
+        return i18n_t(req, "people.name_rule")
     }
     var args: string = "add\n--name\n" + name + "\n--role\n" + role + "\n"
     if display != "" {
@@ -140,9 +140,9 @@ fn people_add(name: string, display: string, role: string, grants: string, passw
     return ""
 }
 
-fn people_set(name: string, display: string, role: string, grants: string) string {
+fn people_set(req: Request, name: string, display: string, role: string, grants: string) string {
     if !people_has(name) || !people_value_ok(display) || !people_value_ok(grants) {
-        return "That is not a person here."
+        return i18n_t(req, "people.not_a_person")
     }
     var args: string = "set\n--name\n" + name + "\n"
     if display != "" { args = args + "--display\n" + display + "\n" }
@@ -157,9 +157,9 @@ fn people_set(name: string, display: string, role: string, grants: string) strin
     return ""
 }
 
-fn people_passwd(name: string, password: string) string {
+fn people_passwd(req: Request, name: string, password: string) string {
     if !people_has(name) {
-        return "That is not a person here."
+        return i18n_t(req, "people.not_a_person")
     }
     let answer: string = people_run("passwd\n--name\n" + name + "\n", password)
     if rho_str_starts_with(answer, "!") {
@@ -168,9 +168,9 @@ fn people_passwd(name: string, password: string) string {
     return ""
 }
 
-fn people_remove(name: string) string {
+fn people_remove(req: Request, name: string) string {
     if !people_has(name) {
-        return "That is not a person here."
+        return i18n_t(req, "people.not_a_person")
     }
     let answer: string = people_run("remove\n--name\n" + name + "\n", "")
     if rho_str_starts_with(answer, "!") {
@@ -216,9 +216,17 @@ fn keeper_allowed(req: Request, need: string) bool {
 }
 
 fn keeper_refused(req: Request) Response {
-    return page_status(req, status_forbidden(), "Not allowed",
-        "<h1>Not allowed</h1><div class=\"notice warn\">Your role (" + escape_html(people_role(req)) +
-        ") does not allow that. An admin can change it under Users &amp; access.</div>")
+    return page_status(req, status_forbidden(), i18n_t(req, "people.not_allowed"),
+        "<h1>" + i18n_t(req, "people.not_allowed") + "</h1><div class=\"notice warn\">" +
+        escape_html(keeper_t1(req, "people.role_refused", "role", people_role_label(req, people_role(req)))) + "</div>")
+}
+
+// people_role_label is a role as a person reads it; the stored word stays English.
+fn people_role_label(req: Request, role: string) string {
+    if rho_str_eq(role, "admin") { return i18n_t(req, "people.role.admin") }
+    if rho_str_eq(role, "operator") { return i18n_t(req, "people.role.operator") }
+    if rho_str_eq(role, "viewer") { return i18n_t(req, "people.role.viewer") }
+    return role
 }
 
 // people_scopes_for is what a person's ticket for an application carries: every
@@ -296,9 +304,9 @@ fn people_sign_out(name: string) void {
     keeper_event("person.signed-out", "", name + " was signed out everywhere.")
 }
 
-fn people_grant_chips(name: string) string {
+fn people_grant_chips(req: Request, name: string) string {
     if rho_str_eq(people_get(name, "role"), "admin") {
-        return "<span class=\"rh-tag ok\">every application</span>"
+        return "<span class=\"rh-tag ok\">" + i18n_t(req, "people.every_application") + "</span>"
     }
     var out: string = ""
     var rest: string = people_get(name, "grants") + ","
@@ -312,13 +320,14 @@ fn people_grant_chips(name: string) string {
         }
     }
     if out == "" {
-        return "<span class=\"rh-tag miss\">no application</span>"
+        return "<span class=\"rh-tag miss\">" + i18n_t(req, "people.no_application") + "</span>"
     }
     return "<span class=\"rh-tags\">" + out + "</span>"
 }
 
-fn people_role_options(selected: string) string {
-    return "admin|Admin — everything,operator|Operator — runs the applications,viewer|Viewer — reads"
+fn people_role_options(req: Request, selected: string) string {
+    return "admin|" + i18n_t(req, "people.role_option.admin") + ",operator|" + i18n_t(req, "people.role_option.operator") +
+        ",viewer|" + i18n_t(req, "people.role_option.viewer")
 }
 
 // people_apps are the applications a person can be granted, one per line: the
@@ -355,19 +364,19 @@ fn people_app_grants(name: string, app: string) string {
 }
 
 // people_cell is one cell of the matrix: what a person may do in one application.
-fn people_cell(name: string, app: string) string {
+fn people_cell(req: Request, name: string, app: string) string {
     if rho_str_eq(people_get(name, "role"), "admin") {
-        return "<span class=\"rh-tag ok\">all</span>"
+        return "<span class=\"rh-tag ok\">" + i18n_t(req, "people.cell.all") + "</span>"
     }
     let grants: string = people_app_grants(name, app)
     if grants == "" {
-        return "<span class=\"rh-tag miss\" style=\"border-style:dashed\">no access</span>"
+        return "<span class=\"rh-tag miss\" style=\"border-style:dashed\">" + i18n_t(req, "people.cell.none") + "</span>"
     }
     if rho_str_eq(grants, app + ":*") {
-        return "<span class=\"rh-tag ok\">all</span>"
+        return "<span class=\"rh-tag ok\">" + i18n_t(req, "people.cell.all") + "</span>"
     }
     if rho_str_eq(grants, app + ":read") {
-        return "<span class=\"rh-tag\">read</span>"
+        return "<span class=\"rh-tag\">" + i18n_t(req, "people.cell.read") + "</span>"
     }
     return "<span class=\"rh-tag\" title=\"" + escape_html(grants) + "\">" + escape_html(grants) + "</span>"
 }
@@ -376,7 +385,8 @@ fn people_cell(name: string, app: string) string {
 // in each application, their password, and signing them out or removing them.
 fn people_inspector(req: Request, name: string, notice: string) string {
     if !people_has(name) {
-        return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">Person</div><h2>Choose a person</h2><div class=\"rh-state\">Their access appears here.</div></div>"
+        return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">" + i18n_t(req, "people.person") + "</div><h2>" + i18n_t(req, "people.choose") +
+            "</h2><div class=\"rh-state\">" + i18n_t(req, "people.choose_hint") + "</div></div>"
     }
     let role: string = people_get(name, "role")
     var role_seg: string = ""
@@ -386,7 +396,7 @@ fn people_inspector(req: Request, name: string, notice: string) string {
         if i == 1 { r = "operator" } else if i == 2 { r = "viewer" }
         var checked: string = ""
         if rho_str_eq(r, role) { checked = " checked" }
-        role_seg = role_seg + "<label class=\"check\"><input type=\"radio\" name=\"role\" value=\"" + r + "\"" + checked + "> " + r + "</label>"
+        role_seg = role_seg + "<label class=\"check\"><input type=\"radio\" name=\"role\" value=\"" + r + "\"" + checked + "> " + people_role_label(req, r) + "</label>"
         i = i + 1
     }
     var apps: string = ""
@@ -404,8 +414,8 @@ fn people_inspector(req: Request, name: string, notice: string) string {
         var k: u32 = 0
         while k < 4 {
             var v: string = "none"
-            var label: string = "No access"
-            if k == 1 { v = "read"; label = "Read" } else if k == 2 { v = "all"; label = "Everything" } else if k == 3 { v = "custom"; label = "Particular…" }
+            var label: string = i18n_t(req, "people.grant.none")
+            if k == 1 { v = "read"; label = i18n_t(req, "people.grant.read") } else if k == 2 { v = "all"; label = i18n_t(req, "people.grant.all") } else if k == 3 { v = "custom"; label = i18n_t(req, "people.grant.custom") }
             var sel: string = ""
             if rho_str_eq(v, choice) { sel = " selected" }
             options = options + "<option value=\"" + v + "\"" + sel + ">" + label + "</option>"
@@ -425,21 +435,21 @@ fn people_inspector(req: Request, name: string, notice: string) string {
     let base: string = "/people/" + escape_html(name)
     var remove: string = ""
     if !rho_str_eq(name, people_subject(req)) {
-        remove = "<form method=\"post\" action=\"" + base + "/remove\" onsubmit=\"return confirm('Remove " + escape_html(name) + "?')\">" + forms_csrf_field() +
-            "<button type=\"submit\" class=\"danger small\">Remove</button></form>"
+        remove = "<form method=\"post\" action=\"" + base + "/remove\" onsubmit=\"return confirm(" + escape_html(json_string(keeper_t1(req, "people.remove_confirm", "name", name))) + ")\">" + forms_csrf_field() +
+            "<button type=\"submit\" class=\"danger small\">" + i18n_t(req, "common.remove") + "</button></form>"
     }
-    return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">Person · " + escape_html(role) + "</div><h2>" + escape_html(people_get(name, "display")) +
-        "</h2><div class=\"rh-state\"><code>" + escape_html(name) + "</code><span>" + rho_int_to_str(open) + " open sessions</span></div></div>" +
+    return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">" + i18n_t(req, "people.person") + " · " + escape_html(people_role_label(req, role)) + "</div><h2>" + escape_html(people_get(name, "display")) +
+        "</h2><div class=\"rh-state\"><code>" + escape_html(name) + "</code><span>" + escape_html(keeper_t1(req, "people.open_sessions", "count", rho_int_to_str(open))) + "</span></div></div>" +
         "<form method=\"post\" action=\"" + base + "/save\" class=\"rh-body\">" + forms_csrf_field() + message +
-        "<label>Shown as<input name=\"display\" value=\"" + escape_html(people_get(name, "display")) + "\"></label>" +
-        "<div class=\"rh-sec\">Role</div><div class=\"rh-actions\">" + role_seg + "</div>" +
-        "<div class=\"rh-sec\">Applications</div>" + apps +
-        "<div class=\"rh-impact\"><b>Applying this change</b><span>Their next sign-in to an application carries the new grants; an admin reaches every application whatever is set here.</span></div>" +
-        "<label>New password<input name=\"password\" type=\"password\" autocomplete=\"new-password\"><small>Empty keeps the password.</small></label>" +
-        "<div class=\"rh-actions\"><button type=\"submit\">Save</button></div>" +
-        "<div class=\"rh-sec\">Sign-ins</div>" + auth_history_rows(name, 8) + "</form>" +
+        "<label>" + i18n_t(req, "people.shown_as") + "<input name=\"display\" value=\"" + escape_html(people_get(name, "display")) + "\"></label>" +
+        "<div class=\"rh-sec\">" + i18n_t(req, "common.role") + "</div><div class=\"rh-actions\">" + role_seg + "</div>" +
+        "<div class=\"rh-sec\">" + i18n_t(req, "people.applications") + "</div>" + apps +
+        "<div class=\"rh-impact\"><b>" + i18n_t(req, "people.applying") + "</b><span>" + i18n_t(req, "people.applying_body") + "</span></div>" +
+        "<label>" + i18n_t(req, "people.new_password") + "<input name=\"password\" type=\"password\" autocomplete=\"new-password\"><small>" + i18n_t(req, "people.empty_keeps") + "</small></label>" +
+        "<div class=\"rh-actions\"><button type=\"submit\">" + i18n_t(req, "common.save") + "</button></div>" +
+        "<div class=\"rh-sec\">" + i18n_t(req, "people.signins") + "</div>" + auth_history_rows(req, name, 8) + "</form>" +
         "<div class=\"rh-foot\"><form method=\"post\" action=\"" + base + "/signout\">" + forms_csrf_field() +
-        "<button type=\"submit\" class=\"quiet small\">Sign out everywhere</button></form>" + remove + "</div>"
+        "<button type=\"submit\" class=\"quiet small\">" + i18n_t(req, "people.sign_out_everywhere") + "</button></form>" + remove + "</div>"
 }
 
 // people_grants_from is the grants a saved inspector says: one choice per
@@ -477,7 +487,7 @@ fn people_page_for(req: Request, notice: string, who: string) Response {
     }
     var selected: string = who
     let apps: string = people_apps()
-    var head: string = "<th>Person</th><th>Role</th>"
+    var head: string = "<th>" + i18n_t(req, "people.person") + "</th><th>" + i18n_t(req, "common.role") + "</th>"
     var rest: string = apps
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
@@ -485,7 +495,7 @@ fn people_page_for(req: Request, notice: string, who: string) Response {
         if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
         if app != "" { head = head + "<th>" + escape_html(app_title(app, app_path(app))) + "</th>" }
     }
-    head = head + "<th>Signed in</th>"
+    head = head + "<th>" + i18n_t(req, "people.signed_in") + "</th>"
     var rows: string = ""
     var people: string = people_names()
     while people != "" {
@@ -502,14 +512,14 @@ fn people_page_for(req: Request, notice: string, who: string) Response {
             let cat: i32 = rho_str_index_of(cols, "\n")
             var app: string = cols
             if cat < 0 { cols = "" } else { app = rho_str_slice(cols, 0, u32(cat)); cols = rho_str_slice(cols, u32(cat) + 1, u32(rho_strlen(cols)) - u32(cat) - 1) }
-            if app != "" { cells = cells + "<td>" + people_cell(name, app) + "</td>" }
+            if app != "" { cells = cells + "<td>" + people_cell(req, name, app) + "</td>" }
         }
         let open: u32 = people_sessions(name)
         var signed_in: string = "—"
-        if open > 0 { signed_in = rho_int_to_str(open) + " open" }
+        if open > 0 { signed_in = escape_html(keeper_t1(req, "people.open_count", "count", rho_int_to_str(open))) }
         rows = rows + "<tr" + style + " hx-get=\"/people/" + escape_html(name) + "/inspect\" hx-target=\"#ins\" hx-swap=\"innerHTML\" style=\"cursor:pointer\">" +
             "<td><b>" + escape_html(people_get(name, "display")) + "</b><br><small><code>" + escape_html(name) + "</code></small></td>" +
-            "<td><span class=\"rh-pill\">" + escape_html(people_get(name, "role")) + "</span></td>" + cells + "<td>" + signed_in + "</td></tr>"
+            "<td><span class=\"rh-pill\">" + escape_html(people_role_label(req, people_get(name, "role"))) + "</span></td>" + cells + "<td>" + signed_in + "</td></tr>"
     }
     // Signed in with the access token, the admin is nobody in the list: say so,
     // in the list, and offer to make them the account they are.
@@ -521,34 +531,34 @@ fn people_page_for(req: Request, notice: string, who: string) Response {
         while cols != "" {
             let cat: i32 = rho_str_index_of(cols, "\n")
             if cat < 0 { cols = "" } else { cols = rho_str_slice(cols, u32(cat) + 1, u32(rho_strlen(cols)) - u32(cat) - 1) }
-            cells = cells + "<td><span class=\"rh-tag ok\">all</span></td>"
+            cells = cells + "<td><span class=\"rh-tag ok\">" + i18n_t(req, "people.cell.all") + "</span></td>"
         }
-        rows = "<tr style=\"outline:2px dashed var(--warn);outline-offset:-2px\"><td><b>You</b><br><small>signed in with the access token</small></td>" +
-            "<td><span class=\"rh-pill\">admin</span></td>" + cells + "<td>this session</td></tr>" + rows
+        rows = "<tr style=\"outline:2px dashed var(--warn);outline-offset:-2px\"><td><b>" + i18n_t(req, "people.you") + "</b><br><small>" + i18n_t(req, "people.you_token") + "</small></td>" +
+            "<td><span class=\"rh-pill\">" + i18n_t(req, "people.role.admin") + "</span></td>" + cells + "<td>" + i18n_t(req, "people.this_session") + "</td></tr>" + rows
         var mine: FormField[4]
-        mine[0] = FormField{ "name", "text", "Your name", "Lowercase letters, digits, '.', '_' or '-'.", "alex", true, "", "", "", "", "" }
-        mine[1] = FormField{ "display", "text", "Shown as", "", "Alex", false, "", "", "", "", "" }
-        mine[2] = FormField{ "password", "password", "Password", "At least 10 characters.", "", true, "", "", "", "", "" }
-        mine[3] = FormField{ "confirm", "password", "The same again", "", "", true, "", "", "", "", "" }
-        claim = "<div class=\"panel-form\"><div class=\"rh-kick\">You</div><h2 style=\"margin-top:.3rem\">Make your account</h2>" +
-            "<p>You are signed in with the access token, which is nobody in particular. Make the admin account you are; this session becomes it, and you sign in with it from now on.</p>" +
+        mine[0] = FormField{ "name", "text", i18n_t(req, "people.your_name"), i18n_t(req, "people.name_help"), "alex", true, "", "", "", "", "" }
+        mine[1] = FormField{ "display", "text", i18n_t(req, "people.shown_as"), "", "Alex", false, "", "", "", "", "" }
+        mine[2] = FormField{ "password", "password", i18n_t(req, "common.password"), i18n_t(req, "people.password_help"), "", true, "", "", "", "", "" }
+        mine[3] = FormField{ "confirm", "password", i18n_t(req, "people.same_again"), "", "", true, "", "", "", "", "" }
+        claim = "<div class=\"panel-form\"><div class=\"rh-kick\">" + i18n_t(req, "people.you") + "</div><h2 style=\"margin-top:.3rem\">" + i18n_t(req, "people.claim_title") + "</h2>" +
+            "<p>" + i18n_t(req, "people.claim_body") + "</p>" +
             "<form method=\"post\" action=\"/people/claim\">" + forms_csrf_field() + forms_body(mine, 4) +
-            "<div class=\"form-actions\"><button type=\"submit\">Make my account</button></div></form></div>"
+            "<div class=\"form-actions\"><button type=\"submit\">" + i18n_t(req, "people.claim_submit") + "</button></div></form></div>"
     }
     var add: FormField[5]
-    add[0] = FormField{ "name", "text", "Name", "Lowercase letters, digits, '.', '_' or '-'.", "ana", true, "", "", "", "", "" }
-    add[1] = FormField{ "display", "text", "Shown as", "", "Ana", false, "", "", "", "", "" }
-    add[2] = FormField{ "role", "select", "Role", "", "", true, "", people_role_options(""), "operator", "", "" }
-    add[3] = FormField{ "grants", "text", "Grants", "What they may use: mesh:*, mesh:greenhouse, aquarium:read.", "aquarium:*", false, "", "", "", "", "" }
-    add[4] = FormField{ "password", "password", "Password", "At least 10 characters; they can change it.", "", true, "", "", "", "", "" }
+    add[0] = FormField{ "name", "text", i18n_t(req, "common.name"), i18n_t(req, "people.name_help"), "ana", true, "", "", "", "", "" }
+    add[1] = FormField{ "display", "text", i18n_t(req, "people.shown_as"), "", "Ana", false, "", "", "", "", "" }
+    add[2] = FormField{ "role", "select", i18n_t(req, "common.role"), "", "", true, "", people_role_options(req, ""), "operator", "", "" }
+    add[3] = FormField{ "grants", "text", i18n_t(req, "people.grants"), i18n_t(req, "people.grants_help"), "aquarium:*", false, "", "", "", "", "" }
+    add[4] = FormField{ "password", "password", i18n_t(req, "common.password"), i18n_t(req, "people.password_help_add"), "", true, "", "", "", "", "" }
     let body: string = "<div class=\"rh-split\"><section class=\"rh-canvas\">" +
-        "<div class=\"rh-h\"><h1>Users &amp; access</h1><span>who signs in, and what each may use</span></div>" +
-        "<p>An admin does everything; an operator runs the applications; a viewer reads. A ticket for an application carries only that person's grants for it.</p>" +
+        "<div class=\"rh-h\"><h1>" + escape_html(i18n_t(req, "people.title")) + "</h1><span>" + i18n_t(req, "people.subtitle") + "</span></div>" +
+        "<p>" + i18n_t(req, "people.intro") + "</p>" +
         "<table><thead><tr>" + head + "</tr></thead><tbody>" + rows + "</tbody></table>" + claim +
-        "<details class=\"panel-form\"><summary class=\"button quiet small\">+ Add a person</summary><form method=\"post\" action=\"/people/add\">" + forms_csrf_field() + forms_body(add, 5) +
-        "<div class=\"form-actions\"><button type=\"submit\">Add</button></div></form></details></section>" +
+        "<details class=\"panel-form\"><summary class=\"button quiet small\">+ " + i18n_t(req, "people.add") + "</summary><form method=\"post\" action=\"/people/add\">" + forms_csrf_field() + forms_body(add, 5) +
+        "<div class=\"form-actions\"><button type=\"submit\">" + i18n_t(req, "common.add") + "</button></div></form></details></section>" +
         "<aside class=\"rh-ins\" id=\"ins\">" + people_inspector(req, selected, notice) + "</aside></div>"
-    return page(req, "Users & access", body)
+    return page(req, i18n_t(req, "people.title"), body)
 }
 
 fn people_inspect(req: Request) Response {
@@ -568,15 +578,15 @@ fn people_add_post(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return people_page_message(req, "That form was not drawn by this keeper.")
+        return people_page_message(req, i18n_t(req, "common.csrf_refused"))
     }
     let name: string = str_trim(form_field(body, "name"))
-    let failure: string = people_add(name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")),
+    let failure: string = people_add(req, name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")),
         str_trim(form_field(body, "grants")), form_field(body, "password"))
     if failure != "" {
         return people_page_message(req, failure)
     }
-    return people_page_for(req, name + " can sign in now.", name)
+    return people_page_for(req, keeper_t1(req, "people.added", "name", name), name)
 }
 
 // people_action_post saves, signs out or removes one person.
@@ -586,12 +596,12 @@ fn people_action_post(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return people_page_message(req, "That form was not drawn by this keeper.")
+        return people_page_message(req, i18n_t(req, "common.csrf_refused"))
     }
     let name: string = param(req, "name")
     let action: string = param(req, "action")
     if !people_has(name) {
-        return people_page_message(req, "That is not a person here.")
+        return people_page_message(req, i18n_t(req, "people.not_a_person"))
     }
     var failure: string = ""
     var done: string = ""
@@ -600,26 +610,26 @@ fn people_action_post(req: Request) Response {
         if rho_str_index_of(body, "app_") >= 0 {
             grants = people_grants_from(body)
         }
-        failure = people_set(name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")), grants)
+        failure = people_set(req, name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")), grants)
         let password: string = form_field(body, "password")
         if failure == "" && password != "" {
-            failure = people_passwd(name, password)
+            failure = people_passwd(req, name, password)
         }
-        done = name + " was changed. Their next sign-in to an application carries the new grants."
+        done = keeper_t1(req, "people.changed", "name", name)
     } else if rho_str_eq(action, "signout") {
         people_sign_out(name)
-        done = name + " was signed out of the keeper; every application signs them out within a minute."
+        done = keeper_t1(req, "people.signed_out", "name", name)
     } else if rho_str_eq(action, "remove") {
         if rho_str_eq(name, people_subject(req)) {
-            return people_page_message(req, "You cannot remove yourself.")
+            return people_page_message(req, i18n_t(req, "people.remove_self"))
         }
-        failure = people_remove(name)
+        failure = people_remove(req, name)
         if failure == "" {
             people_sign_out(name)
         }
-        done = name + " was removed and signed out everywhere."
+        done = keeper_t1(req, "people.removed", "name", name)
     } else {
-        failure = "Unknown action."
+        failure = i18n_t(req, "people.unknown_action")
     }
     if failure != "" {
         return people_page_for(req, failure, name)
@@ -634,22 +644,22 @@ fn people_action_post(req: Request) Response {
 fn account_page_message(req: Request, notice: string) Response {
     let name: string = people_subject(req)
     if !people_has(name) {
-        return page(req, "Account", "<h1>Account</h1><p>This session is not a person's; nothing to change here.</p>")
+        return page(req, i18n_t(req, "account.title"), "<h1>" + i18n_t(req, "account.title") + "</h1><p>" + i18n_t(req, "account.not_person") + "</p>")
     }
     var fields: FormField[3]
-    fields[0] = FormField{ "current", "password", "Current password", "", "", true, "", "", "", "", "" }
-    fields[1] = FormField{ "password", "password", "New password", "At least 10 characters.", "", true, "", "", "", "", "" }
-    fields[2] = FormField{ "confirm", "password", "The same again", "", "", true, "", "", "", "", "" }
+    fields[0] = FormField{ "current", "password", i18n_t(req, "account.current_password"), "", "", true, "", "", "", "", "" }
+    fields[1] = FormField{ "password", "password", i18n_t(req, "people.new_password"), i18n_t(req, "people.password_help"), "", true, "", "", "", "", "" }
+    fields[2] = FormField{ "confirm", "password", i18n_t(req, "people.same_again"), "", "", true, "", "", "", "", "" }
     var message: string = ""
     if notice != "" {
         message = "<div class=\"notice\">" + escape_html(notice) + "</div>"
     }
     let body: string = "<div class=\"rh-h\"><h1>" + escape_html(people_get(name, "display")) + "</h1><span>" + escape_html(name) + " · " +
-        escape_html(people_get(name, "role")) + "</span></div>" + message +
-        "<div class=\"rh-sec\">What you may use</div><p>" + people_grant_chips(name) + "</p>" +
-        "<h2>Change your password</h2><form class=\"panel-form\" method=\"post\" action=\"/account\" style=\"max-width:32rem\">" +
-        forms_csrf_field() + forms_body(fields, 3) + "<div class=\"form-actions\"><button type=\"submit\">Change it</button></div></form>"
-    return page(req, "Account", body)
+        escape_html(people_role_label(req, people_get(name, "role"))) + "</span></div>" + message +
+        "<div class=\"rh-sec\">" + i18n_t(req, "account.may_use") + "</div><p>" + people_grant_chips(req, name) + "</p>" +
+        "<h2>" + i18n_t(req, "account.change_password") + "</h2><form class=\"panel-form\" method=\"post\" action=\"/account\" style=\"max-width:32rem\">" +
+        forms_csrf_field() + forms_body(fields, 3) + "<div class=\"form-actions\"><button type=\"submit\">" + i18n_t(req, "account.change_it") + "</button></div></form>"
+    return page(req, i18n_t(req, "account.title"), body)
 }
 
 fn account_page(req: Request) Response {
@@ -660,19 +670,19 @@ fn account_post(req: Request) Response {
     let name: string = people_subject(req)
     let body: string = request_body(req)
     if !people_has(name) || !forms_csrf_ok(body) {
-        return account_page_message(req, "That form was not drawn by this keeper.")
+        return account_page_message(req, i18n_t(req, "common.csrf_refused"))
     }
     if people_verify(name, form_field(body, "current")) == "" {
-        return account_page_message(req, "The current password is not right.")
+        return account_page_message(req, i18n_t(req, "account.current_wrong"))
     }
     if !rho_str_eq(form_field(body, "password"), form_field(body, "confirm")) {
-        return account_page_message(req, "The two new passwords are not the same.")
+        return account_page_message(req, i18n_t(req, "account.mismatch"))
     }
-    let failure: string = people_passwd(name, form_field(body, "password"))
+    let failure: string = people_passwd(req, name, form_field(body, "password"))
     if failure != "" {
         return account_page_message(req, failure)
     }
-    return account_page_message(req, "Your password was changed.")
+    return account_page_message(req, i18n_t(req, "account.changed"))
 }
 
 // people_claim makes the admin account of someone signed in with the access
@@ -683,17 +693,17 @@ fn people_claim(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return people_page_message(req, "That form was not drawn by this keeper.")
+        return people_page_message(req, i18n_t(req, "common.csrf_refused"))
     }
     if people_has(people_subject(req)) {
-        return people_page_message(req, "You already have an account.")
+        return people_page_message(req, i18n_t(req, "people.claim_exists"))
     }
     let name: string = str_trim(form_field(body, "name"))
     if !rho_str_eq(form_field(body, "password"), form_field(body, "confirm")) {
-        return people_page_message(req, "The two passwords are not the same.")
+        return people_page_message(req, i18n_t(req, "people.password_mismatch"))
     }
     auth_keys_ensure()
-    let failure: string = people_add(name, str_trim(form_field(body, "display")), "admin", "", form_field(body, "password"))
+    let failure: string = people_add(req, name, str_trim(form_field(body, "display")), "admin", "", form_field(body, "password"))
     if failure != "" {
         return people_page_message(req, failure)
     }

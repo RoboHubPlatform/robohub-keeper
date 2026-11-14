@@ -153,22 +153,26 @@ fn provider_db_add(root: string, name: string) bool {
     return rho_write_text(path, out)
 }
 
-fn provider_row_line(line: string) string {
+fn provider_row_line(req: Request, line: string) string {
     let name: string = field(line, 0)
-    var status: string = provider_status(false)
+    var status: string = provider_status(req, false)
+    var summary: string = i18n_t(req, "plugins.not_on_disk")
     if field(line, 5) != "false" {
-        status = provider_status(true)
+        status = provider_status(req, true)
+        summary = field(line, 3)
     }
     return template_fill(template_get("provider-row"),
         vars("name", name) +
         vars("contract", field(line, 1)) +
+        vars("implements", keeper_t1(req, "providers.implements", "contract", field(line, 1))) +
         vars("transport", field(line, 2)) +
-        vars("summary", field(line, 3)) +
+        vars("summary", summary) +
         vars("status", status) +
-        vars("actions", template_fill(template_get("provider-actions"), vars("name", name))))
+        vars("actions", template_fill(template_get("provider-actions"), i18n_vars(req) +
+            vars("confirm_uninstall", i18n_t(req, "providers.uninstall_confirm")) + vars("name", name))))
 }
 
-fn provider_rows_html() string {
+fn provider_rows_html(req: Request) string {
     var out: string = ""
     var rest: string = provider_rows(provider_root())
     while rho_strlen(rest) > 0 {
@@ -181,21 +185,21 @@ fn provider_rows_html() string {
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if line != "" {
-            out = out + provider_row_line(line)
+            out = out + provider_row_line(req, line)
         }
     }
     if out == "" {
-        out = "<tr><td colspan=\"6\">No providers were found under providers/.</td></tr>"
+        out = "<tr><td colspan=\"6\">" + i18n_t(req, "providers.none") + "</td></tr>"
     }
     return out
 }
 
-fn provider_status(present: bool) string {
+fn provider_status(req: Request, present: bool) string {
     var tone: string = "not-built"
-    var label: string = "missing"
+    var label: string = i18n_t(req, "plugins.state_missing")
     if present {
         tone = "running"
-        label = "installed"
+        label = i18n_t(req, "plugins.state_installed")
     }
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
@@ -205,9 +209,9 @@ fn providers_page_message(req: Request, message: string) Response {
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
-    let body: string = template_fill(template_get("providers"),
-        vars("notice", notice) + vars("rows", provider_rows_html()) +
-        vars("root", provider_root()) + vars("install_form", keeper_install_form("/providers/install", "robohub-provider-mesh", "https://github.com/RoboHubPlatform/robohub-provider-mesh or /path/to/provider", "A git URL, or a folder with a provider module.yml.")))
+    let body: string = template_fill(template_get("providers"), i18n_vars(req) +
+        vars("notice", notice) + vars("rows", provider_rows_html(req)) +
+        vars("root", provider_root()) + vars("install_form", keeper_install_form(req, "/providers/install", "robohub-provider-mesh", i18n_t(req, "providers.source_hint"), i18n_t(req, "providers.source_help"))))
     return page(req, i18n_t(req, "page.providers"), body)
 }
 
@@ -221,22 +225,22 @@ fn providers_install(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
+        return html(status_forbidden(), "<p>" + i18n_t(req, "plugins.csrf_nothing_installed") + "</p>")
     }
     var name: string = str_trim(form_field(body, "name"))
     let source: string = str_trim(form_field(body, "source"))
     if source == "" {
-        return providers_page_message(req, "Name a provider to install.")
+        return providers_page_message(req, i18n_t(req, "providers.name_one"))
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return providers_page_message(req, "The provider name can use letters, digits, '-', '_' and '.' only.")
+        return providers_page_message(req, i18n_t(req, "providers.bad_name"))
     }
     let target: string = provider_root() + "/" + name
     if rho_path_exists(target) {
-        return providers_page_message(req, name + " is already installed.")
+        return providers_page_message(req, keeper_t1(req, "plugins.already_installed", "name", name))
     }
     ignore_u32(rho_exec_args("mkdir", "-p\n" + provider_root() + "\n", apps_report("mkdir-providers")))
     var code: u32 = 0
@@ -246,21 +250,21 @@ fn providers_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return providers_page_message(req, "No provider module.yml at " + path + ".")
+            return providers_page_message(req, keeper_t1(req, "providers.no_manifest", "path", path))
         }
         code = rho_exec_args("cp", "-r\n" + path + "\n" + target + "\n",
             apps_report("install-provider-" + name))
     }
     if code != 0 {
-        return providers_page_message(req, "Could not install " + source + ".")
+        return providers_page_message(req, keeper_t1(req, "plugins.could_not_install", "source", source))
     }
     if provider_contract(target + "/module.yml") == "" {
         ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n", apps_report("remove-not-provider")))
-        return providers_page_message(req, source + " is not a provider module.")
+        return providers_page_message(req, keeper_t1(req, "providers.not_a_provider", "source", source))
     }
     ignore_bool(provider_db_add(provider_root(), name))
     info("keeper", "installed provider " + name)
-    return providers_page_message(req, name + " was installed.")
+    return providers_page_message(req, keeper_t1(req, "providers.installed", "name", name))
 }
 
 fn providers_uninstall(req: Request) Response {
@@ -270,7 +274,7 @@ fn providers_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
     if !valid_name(name) || !rho_path_exists(plugin_manifest(provider_root(), name)) {
-        return providers_page_message(req, "No such provider: " + name)
+        return providers_page_message(req, keeper_t1(req, "providers.no_such", "name", name))
     }
     // The registry says which folder a provider is in: `robohub-provider-log`
     // lives in `log`. Read before the entry is removed.
@@ -281,5 +285,5 @@ fn providers_uninstall(req: Request) Response {
     if htmx_is_request(req) {
         return html(status_ok(), "")
     }
-    return providers_page_message(req, name + " was uninstalled.")
+    return providers_page_message(req, keeper_t1(req, "plugins.uninstalled", "name", name))
 }

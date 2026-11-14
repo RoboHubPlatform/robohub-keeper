@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{{ ui_head }}}
-<title>Sign in — RoboHub</title>
+<title>{{t "auth.sign_in"}} — RoboHub</title>
 <style>
   .rh-signin { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; background: radial-gradient(circle at 30% 20%, var(--teal-soft), transparent 55%), var(--surface); }
   .rh-signin-card { width: min(23rem, 100%); background: var(--raised); border: 1px solid var(--line); border-radius: 14px; padding: 1.5rem 1.5rem 1.3rem; display: grid; gap: .85rem; box-shadow: var(--shadow); }
@@ -19,40 +19,40 @@
   <div class="rh-signin-card">
     <span class="rh-brand">Robo<em>Hub</em></span>
 {{#if setup}}
-    <span class="rh-kick">First run</span>
-    <h1>Sign in with the access token</h1>
-    <p>Nobody has an account on this keeper yet. The access token in <code>{{ master_file }}</code> is the admin's: paste it here. Accounts for other people are made afterwards, under Users &amp; access.</p>
+    <span class="rh-kick">{{t "auth.first_run"}}</span>
+    <h1>{{t "auth.setup_title"}}</h1>
+    <p>{{t "auth.setup_body_before"}} <code>{{ master_file }}</code> {{t "auth.setup_body_after"}}</p>
     {{{ notice }}}
     <form method="post" action="/auth/login">
       <input type="hidden" name="return_to" value="{{ return_to }}">
       <input type="hidden" name="audience" value="{{ audience }}">
       <input type="hidden" name="next" value="{{ next }}">
-      <label>Access token<input name="token" type="password" autocomplete="off" autofocus></label>
-      <button type="submit">Sign in</button>
+      <label>{{t "auth.access_token"}}<input name="token" type="password" autocomplete="off" autofocus></label>
+      <button type="submit">{{t "auth.sign_in"}}</button>
     </form>
 {{else}}
-    <h1>Sign in</h1>
-    <p>to {{ to }}</p>
+    <h1>{{t "auth.sign_in"}}</h1>
+    <p>{{t "auth.to" to=to}}</p>
     {{{ notice }}}
     <form method="post" action="/auth/login">
       <input type="hidden" name="return_to" value="{{ return_to }}">
       <input type="hidden" name="audience" value="{{ audience }}">
       <input type="hidden" name="next" value="{{ next }}">
-      <label>Name<input name="name" autocomplete="username" autofocus></label>
-      <label>Password<input name="password" type="password" autocomplete="current-password"></label>
-      <button type="submit">Sign in</button>
+      <label>{{t "common.name"}}<input name="name" autocomplete="username" autofocus></label>
+      <label>{{t "common.password"}}<input name="password" type="password" autocomplete="current-password"></label>
+      <button type="submit">{{t "auth.sign_in"}}</button>
     </form>
     <details>
-      <summary class="button quiet small">The admin's access token instead</summary>
+      <summary class="button quiet small">{{t "auth.token_instead"}}</summary>
       <form method="post" action="/auth/login" style="margin-top:.6rem">
         <input type="hidden" name="return_to" value="{{ return_to }}">
         <input type="hidden" name="audience" value="{{ audience }}">
         <input type="hidden" name="next" value="{{ next }}">
-        <label>Access token<input name="token" type="password" autocomplete="off"><small>The one in {{ master_file }}.</small></label>
-        <button type="submit">Sign in as admin</button>
+        <label>{{t "auth.access_token"}}<input name="token" type="password" autocomplete="off"><small>{{t "auth.token_file" file=master_file}}</small></label>
+        <button type="submit">{{t "auth.sign_in_admin"}}</button>
       </form>
     </details>
-    <p>Signed in once, you are signed in to every RoboHub application you may use.</p>
+    <p>{{t "auth.single_sign_on"}}</p>
 {{/if}}
   </div>
 </main>

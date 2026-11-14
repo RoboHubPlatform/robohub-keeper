@@ -140,21 +140,22 @@ fn app_module_description(manifest: string) string {
     return description
 }
 
-fn app_module_actions(name: string, location: string, enabled: bool) string {
+fn app_module_actions(req: Request, name: string, location: string, enabled: bool) string {
     // A module can be included by more than one application, so there is no
     // single host to open from here. The registry lists the installed module;
     // the application that uses it serves its routes.
-    return template_fill(template_get("app-module-actions"), vars("name", name))
+    return template_fill(template_get("app-module-actions"), i18n_vars(req) +
+        vars("confirm_uninstall", i18n_t(req, "app_modules.uninstall_confirm")) + vars("name", name))
 }
 
-fn app_module_row_line(line: string) string {
+fn app_module_row_line(req: Request, line: string) string {
     let name: string = field(line, 0)
     let location: string = field(line, 1)
     let enabled: bool = rho_str_eq(field(line, 2), "true")
     let manifest: string = app_module_manifest(name, location)
     let present: bool = rho_path_exists(manifest)
     var title: string = name
-    var description: string = "not found on disk"
+    var description: string = i18n_t(req, "plugins.not_on_disk")
     var category: string = ""
     var version: string = ""
     if present {
@@ -172,11 +173,11 @@ fn app_module_row_line(line: string) string {
         vars("category", category) +
         vars("description", description) +
         vars("version", version) +
-        vars("status", app_module_status(present)) +
-        vars("actions", app_module_actions(name, location, enabled)))
+        vars("status", app_module_status(req, present)) +
+        vars("actions", app_module_actions(req, name, location, enabled)))
 }
 
-fn app_module_rows() string {
+fn app_module_rows(req: Request) string {
     var out: string = ""
     var rest: string = app_module_entries()
     while rest != "" {
@@ -189,21 +190,21 @@ fn app_module_rows() string {
             rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
         }
         if line != "" {
-            out = out + app_module_row_line(line)
+            out = out + app_module_row_line(req, line)
         }
     }
     if out == "" {
-        out = "<tr><td colspan=\"7\">No modules were found under modules/.</td></tr>"
+        out = "<tr><td colspan=\"7\">" + i18n_t(req, "app_modules.none") + "</td></tr>"
     }
     return out
 }
 
-fn app_module_status(present: bool) string {
+fn app_module_status(req: Request, present: bool) string {
     var tone: string = "not-built"
-    var label: string = "missing"
+    var label: string = i18n_t(req, "plugins.state_missing")
     if present {
         tone = "running"
-        label = "installed"
+        label = i18n_t(req, "plugins.state_installed")
     }
     return template_fill(template_get("status"), vars("tone", tone) + vars("label", label))
 }
@@ -213,9 +214,9 @@ fn app_modules_page_message(req: Request, message: string) Response {
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
-    let body: string = template_fill(template_get("app-modules"),
-        vars("notice", notice) + vars("rows", app_module_rows()) +
-        vars("install_form", keeper_install_form("/app-modules/install", "inventory", "https://github.com/RoboHubPlatform/robohub-inventory or /path/to/module", "A git URL, or a folder with a module.yml.")))
+    let body: string = template_fill(template_get("app-modules"), i18n_vars(req) +
+        vars("notice", notice) + vars("rows", app_module_rows(req)) +
+        vars("install_form", keeper_install_form(req, "/app-modules/install", "inventory", i18n_t(req, "app_modules.source_hint"), i18n_t(req, "app_modules.source_help"))))
     return page(req, i18n_t(req, "page.modules"), body)
 }
 
@@ -229,22 +230,22 @@ fn app_modules_install(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return html(status_forbidden(), "<p>That form was not drawn by this keeper; nothing was installed.</p>")
+        return html(status_forbidden(), "<p>" + i18n_t(req, "plugins.csrf_nothing_installed") + "</p>")
     }
     var name: string = str_trim(form_field(body, "name"))
     let source: string = str_trim(form_field(body, "source"))
     if source == "" {
-        return app_modules_page_message(req, "Name a module to install.")
+        return app_modules_page_message(req, i18n_t(req, "app_modules.name_one"))
     }
     if name == "" {
         name = plugin_source_name(source)
     }
     if !valid_name(name) {
-        return app_modules_page_message(req, "The module name can use letters, digits, '-', '_' and '.' only.")
+        return app_modules_page_message(req, i18n_t(req, "app_modules.bad_name"))
     }
     let target: string = app_modules_root() + "/" + name
     if rho_path_exists(target) {
-        return app_modules_page_message(req, name + " is already installed.")
+        return app_modules_page_message(req, keeper_t1(req, "plugins.already_installed", "name", name))
     }
     ignore_u32(rho_exec_args("mkdir", "-p\n" + app_modules_root() + "\n", apps_report("mkdir-micro-apps")))
     var code: u32 = 0
@@ -254,23 +255,23 @@ fn app_modules_install(req: Request) Response {
     } else {
         let path: string = resolve_path(source)
         if !rho_path_exists(path + "/module.yml") {
-            return app_modules_page_message(req, "No module.yml at " + path + ".")
+            return app_modules_page_message(req, keeper_t1(req, "app_modules.no_manifest", "path", path))
         }
         code = rho_exec_args("cp", "-r\n" + path + "\n" + target + "\n",
             apps_report("install-module-" + name))
     }
     if code != 0 {
-        return app_modules_page_message(req, "Could not install " + source + ".")
+        return app_modules_page_message(req, keeper_t1(req, "plugins.could_not_install", "source", source))
     }
     // A module says it is one: `module.type: module`.
     if yaml.value(target + "/module.yml", "module.type") != "module" {
         ignore_u32(rho_exec_args("rm", "-rf\n" + target + "\n",
             apps_report("remove-not-module")))
-        return app_modules_page_message(req, source + " is not a module.")
+        return app_modules_page_message(req, keeper_t1(req, "app_modules.not_a_module", "source", source))
     }
     ignore_bool(app_module_add(name))
     info("keeper", "installed module " + name)
-    return app_modules_page_message(req, name + " was installed.")
+    return app_modules_page_message(req, keeper_t1(req, "providers.installed", "name", name))
 }
 
 // app_module_users is the installed applications whose manifest names a module —
@@ -305,7 +306,7 @@ fn app_modules_uninstall(req: Request) Response {
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
     if !valid_name(name) {
-        return app_modules_page_message(req, "No such module: " + name)
+        return app_modules_page_message(req, keeper_t1(req, "app_modules.no_such", "name", name))
     }
     let location: string = name
     var rest: string = app_module_entries()
@@ -327,19 +328,19 @@ fn app_modules_uninstall(req: Request) Response {
     // they use would fail their next build. It is refused while any does.
     let users: string = app_module_users(name)
     if users != "" {
-        return app_modules_page_message(req, name + " is used by " + users + ": it was not uninstalled.")
+        return app_modules_page_message(req, keeper_t2(req, "app_modules.used_by", "name", name, "users", users))
     }
     let target: string = app_modules_root() + "/" + location
     ignore_bool(app_module_remove_entry(name))
     // Only a folder the keeper fetched is the keeper's to delete; a checkout a
     // person made is left where it is, and only unlisted.
-    var message: string = name + " was uninstalled."
+    var message: string = keeper_t1(req, "plugins.uninstalled", "name", name)
     if fetched_by_keeper(target) {
         ignore_u32(rho_exec_args("rm", "-rf\n--\n" + target + "\n",
             apps_report("uninstall-module-" + name)))
         fetched_set(target, false)
     } else {
-        message = name + " was unlisted; its folder was not fetched by the keeper and was left in place."
+        message = keeper_t1(req, "app_modules.unlisted", "name", name)
     }
     info("keeper", "uninstalled module " + name)
     if htmx_is_request(req) {

@@ -132,26 +132,26 @@ fn package_path(name: string, version: string) string {
 // package_fetch installs a version of a published application into the local
 // registry when it is not there, selects it, and answers where it is, or "!" and
 // why not. An empty version is the newest the registry has.
-fn package_fetch(name: string, wanted: string) string {
+fn package_fetch(lang: string, name: string, wanted: string) string {
     if !valid_name(name) || (wanted != "" && !arg_ok(wanted)) {
-        return "!That is not a package name."
+        return "!" + keeper_say(lang, "packages.not_a_name")
     }
     var version: string = wanted
     if version == "" {
         version = packages_latest_in(packages_search(name), name)
         if version == "" {
-            return "!The Rho registry has no package called " + name + "."
+            return "!" + keeper_say1(lang, "packages.not_in_registry", "name", name)
         }
     }
     var path: string = package_path(name, version)
     if path == "" {
         let report: string = apps_report("packages-install-" + name)
         if rho_exec_args("rho", "module\ninstall\n" + name + "@" + version + "\n", report) != 0 {
-            return "!" + name + "@" + version + " could not be installed: " + first_line(rho_read_text(report))
+            return "!" + keeper_say2(lang, "packages.install_failed", "package", name + "@" + version, "reason", first_line(rho_read_text(report)))
         }
         path = package_path(name, version)
         if path == "" {
-            return "!" + name + "@" + version + " was installed but is not where the registry said."
+            return "!" + keeper_say1(lang, "packages.misplaced", "package", name + "@" + version)
         }
     }
     ignore_u32(rho_exec_args("rho", "module\nactivate\n" + name + "@" + version + "\n", apps_report("packages-activate-" + name)))
@@ -162,12 +162,12 @@ fn package_fetch(name: string, wanted: string) string {
 // package_apply_update updates a published application to a newer version: the
 // catalogue points at it, the unit is written again and the application
 // restarted. The old version stays installed, so going back is selecting it.
-fn package_apply_update(name: string) string {
+fn package_apply_update(lang: string, name: string) string {
     let latest: string = package_update(name)
     if latest == "" {
-        return name + " is the newest version there is."
+        return keeper_say1(lang, "packages.newest", "name", name)
     }
-    let path: string = package_fetch(name, latest)
+    let path: string = package_fetch(lang, name, latest)
     if rho_str_starts_with(path, "!") {
         return rho_str_slice(path, 1, u32(rho_strlen(path)) - 1)
     }
@@ -176,5 +176,5 @@ fn package_apply_update(name: string) string {
     ignore_u32(rho_exec_args("rm", "-f\n" + packages_dir() + "/" + name + "\n", apps_report("packages-forget")))
     info("keeper", name + " was updated to " + latest)
     keeper_event("app.updated", name, name + " is now " + latest + ".")
-    return name + " is now " + latest + ". " + app_restart(name)
+    return keeper_say2(lang, "packages.updated", "name", name, "version", latest) + " " + app_restart(lang, name)
 }

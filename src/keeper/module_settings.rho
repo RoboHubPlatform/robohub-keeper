@@ -87,7 +87,7 @@ fn app_module_settings_save(req: Request) Response {
         return app_module_settings_page_message(req, i18n_t(req, "settings.csrf_refused"))
     }
     if !valid_name(name) {
-        return app_module_settings_page_message(req, "That is not a module name.")
+        return app_module_settings_page_message(req, i18n_t(req, "app_modules.settings_bad_module"))
     }
     let prefix: string = app_module_settings_prefix(name)
     var rest: string = settings_list(prefix)
@@ -115,7 +115,7 @@ fn app_module_settings_save(req: Request) Response {
             new_key = prefix + new_key
         }
         if !settings_key_ok(rho_str_slice(new_key, u32(rho_strlen(prefix)), u32(rho_strlen(new_key)) - u32(rho_strlen(prefix)))) {
-            return app_module_settings_page_message(req, "A setting's name uses letters, digits, '_', '-' and '.' only.")
+            return app_module_settings_page_message(req, i18n_t(req, "app_modules.settings_bad_key"))
         }
         settings_set(new_key, str_trim(form_field(body, "new_value")))
     }

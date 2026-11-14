@@ -1,26 +1,22 @@
-<h1>Recovery token</h1>
-<p>The access token makes the first admin when nobody has an account, and proves
-someone is at this machine. It is stored owner-only and is never shown here.</p>
+<h1>{{t "auth.token.title"}}</h1>
+<p>{{t "auth.token.intro"}}</p>
 {{{ notice }}}
 {{{ token_block }}}
 <style>.auth-token-row { display:flex; gap:.5rem; align-items:center; margin:.5rem 0; }.auth-token-row input { flex:1; min-width:0; }</style>
 <form class="panel-form" method="post" action="/auth/token">
   <div class="grid">
-    <label>Current access token<input name="current" type="password" autocomplete="current-password"></label>
-    <label>New access token<input name="token" type="password" autocomplete="new-password"></label>
-    <label>Confirm access token<input name="confirm" type="password" autocomplete="new-password"></label>
+    <label>{{t "auth.token.current"}}<input name="current" type="password" autocomplete="current-password"></label>
+    <label>{{t "auth.token.new"}}<input name="token" type="password" autocomplete="new-password"></label>
+    <label>{{t "auth.token.confirm"}}<input name="confirm" type="password" autocomplete="new-password"></label>
   </div>
   <div class="form-actions">
-    <button type="button" class="quiet" onclick="var a=new Uint8Array(24);crypto.getRandomValues(a);var t=Array.from(a,function(b){return b.toString(16).padStart(2,'0')}).join('');this.form.token.value=t;this.form.confirm.value=t;">Generate</button>
-    <button type="submit">Update token</button>
+    <button type="button" class="quiet" onclick="var a=new Uint8Array(24);crypto.getRandomValues(a);var t=Array.from(a,function(b){return b.toString(16).padStart(2,'0')}).join('');this.form.token.value=t;this.form.confirm.value=t;">{{t "auth.token.generate"}}</button>
+    <button type="submit">{{t "auth.token.update"}}</button>
   </div>
 </form>
 
-<h2>Signing key</h2>
-<p>Every sign-in ticket and service token is signed with the keeper's key. A new
-key makes every application fetch it the next time it sees a ticket signed with
-it; tickets signed with the old one stop working at once, and sessions already
-open in applications are not affected.</p>
-<form class="panel-form" method="post" action="/auth/rotate-key" onsubmit="return confirm('Make a new signing key?')">
-  <div class="form-actions"><button type="submit" class="quiet">Rotate the signing key</button></div>
+<h2>{{t "auth.key.title"}}</h2>
+<p>{{t "auth.key.intro"}}</p>
+<form class="panel-form" method="post" action="/auth/rotate-key" onsubmit="return confirm({{ rotate_confirm }})">
+  <div class="form-actions"><button type="submit" class="quiet">{{t "auth.key.rotate"}}</button></div>
 </form>
