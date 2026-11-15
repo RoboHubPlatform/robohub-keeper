@@ -63,7 +63,7 @@ fn records_in(dir: string, origin: string, report_name: string) string {
     var rest: string = rho_read_text(report)
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let name: string = ""
+        var name: string = ""
         if at < 0 {
             name = rest
             rest = ""
@@ -92,7 +92,7 @@ fn external_records() string {
     var rest: string = rho_read_text(applications_state_file())
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = ""
         if at < 0 {
             line = rest
             rest = ""
@@ -252,7 +252,7 @@ fn record_path(records: string, wanted: string) string {
     var rest: string = records
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = ""
         if at < 0 {
             line = rest
             rest = ""
@@ -285,7 +285,7 @@ fn record_origin(records: string, wanted: string) string {
     var rest: string = records
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = ""
         if at < 0 {
             line = rest
             rest = ""
@@ -319,7 +319,7 @@ fn app_path(name: string) string {
 }
 
 fn app_kind(path: string) string {
-    let k: string = yaml.value(manifest_of(path), "module.kind")
+    var k: string = yaml.value(manifest_of(path), "module.kind")
     if k == "" {
         k = yaml.value(manifest_of(path), "application.kind")
     }
@@ -327,7 +327,7 @@ fn app_kind(path: string) string {
 }
 
 fn app_title(name: string, path: string) string {
-    let title: string = yaml.value(manifest_of(path), "module.title")
+    var title: string = yaml.value(manifest_of(path), "module.title")
     if title == "" {
         title = yaml.value(manifest_of(path), "application.title")
     }
@@ -467,7 +467,7 @@ fn app_manifest_list(path: string, key: string) string {
 }
 
 fn app_port(path: string) string {
-    let port: string = yaml.value(manifest_of(path), "module.port")
+    var port: string = yaml.value(manifest_of(path), "module.port")
     if port == "" {
         port = yaml.value(manifest_of(path), "application.port")
     }
@@ -476,7 +476,7 @@ fn app_port(path: string) string {
 }
 
 fn app_route(path: string) string {
-    let address: string = yaml.value(manifest_of(path), "module.route")
+    var address: string = yaml.value(manifest_of(path), "module.route")
     if address == "" {
         address = yaml.value(manifest_of(path), "application.route")
     }
@@ -487,7 +487,7 @@ fn app_route(path: string) string {
 }
 
 fn app_command(name: string, path: string) string {
-    let command: string = yaml.value(manifest_of(path), "module.command")
+    var command: string = yaml.value(manifest_of(path), "module.command")
     if command == "" {
         command = yaml.value(manifest_of(path), "application.command")
     }
@@ -731,16 +731,16 @@ fn app_actions(req: Request, name: string, path: string, origin: string) string 
     if origin == "fetched" {
         hint = i18n_t(req, "apps.uninstall_hint_fetched")
     }
-    let running: string = ""
+    var running: string = ""
     let state: string = app_state(name)
     if rho_str_eq(state, "running") || rho_str_eq(state, "starting") {
         running = "true"
     }
-    let pinned_flag: string = ""
+    var pinned_flag: string = ""
     if pinned(name) {
         pinned_flag = "true"
     }
-    let is_keeper: string = ""
+    var is_keeper: string = ""
     if app_kind(path) == "keeper" {
         is_keeper = "true"
     }
@@ -798,7 +798,7 @@ fn applications_rows(req: Request) string {
     var rest: string = records
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = ""
         if at < 0 {
             line = rest
             rest = ""
@@ -890,7 +890,7 @@ fn applications_log(req: Request) Response {
 }
 
 fn applications_page_message(req: Request, message: string) Response {
-    let notice: string = ""
+    var notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
@@ -1217,7 +1217,7 @@ fn app_update_artifact(lang: string, name: string, path: string) string {
         ignore_bool(rho_write_text(app_artifact_dir(name) + "/previous", previous + "\n"))
     }
     ignore_string(app_restart(lang, name))
-    let timeout: u32 = u32(rho_int_from_str(app_artifact_value(inspected, "health_timeout")))
+    var timeout: u32 = u32(rho_int_from_str(app_artifact_value(inspected, "health_timeout")))
     if timeout == 0 { timeout = 20 }
     let port: string = app_port(path)
     if health != "" && port != "" {

@@ -52,7 +52,7 @@ fn provider_rows(root: string) string {
         var rest: string = entries
         while rest != "" {
             let at: i32 = rho_str_index_of(rest, "\n")
-            let line: string = ""
+            var line: string = ""
             if at < 0 {
                 line = rest
                 rest = ""
@@ -104,7 +104,7 @@ fn provider_rows(root: string) string {
     var rest: string = rho_read_text(report)
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let manifest: string = ""
+        var manifest: string = ""
         if at < 0 {
             manifest = rest
             rest = ""
@@ -205,7 +205,7 @@ fn provider_status(req: Request, present: bool) string {
 }
 
 fn providers_page_message(req: Request, message: string) Response {
-    let notice: string = ""
+    var notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }

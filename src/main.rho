@@ -166,8 +166,8 @@ fn module_page(req: Request) Response {
     let path: string = resolve_path(yaml.value(entry, "path"))
     let git: string = yaml.value(entry, "git")
     let summary: string = yaml.value(entry, "summary")
-    let installed: string = i18n_t(req, "common.no")
-    let version: string = ""
+    var installed: string = i18n_t(req, "common.no")
+    var version: string = ""
     if rho_path_exists(path + "/module.yml") {
         installed = i18n_t(req, "common.yes")
         version = yaml.value(path + "/module.yml", "module.version")
@@ -301,7 +301,7 @@ fn doc_page(req: Request) Response {
     }
     // The page is the one the generator wrote, so a page served here and a page
     // a build writes are the same page.
-    let content: string = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + full_path + ".md")
+    var content: string = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + full_path + ".md")
     if content == "" {
         content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + full_path + "/index.md")
     }
@@ -324,7 +324,7 @@ fn docs_rows() string {
     var rest: string = listing
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = ""
         if at < 0 {
             line = rest
             rest = ""
@@ -356,7 +356,7 @@ fn docs_rows() string {
         // The store lists paths relative to the tree root, which includes
         // docs/ as a directory. Strip the docs/ segment, keeping what is
         // before and after it.
-        let link: string = path
+        var link: string = path
         // Strip docs/ from the beginning (orchestrator's own docs)
         if rho_str_index_of(link, "docs/") == 0 {
             link = rho_str_slice(link, 5, u32(rho_strlen(link)) - 5)
@@ -376,7 +376,7 @@ fn docs_rows() string {
         if rho_str_index_of(link, ".md") >= 0 {
             link = rho_str_slice(link, 0, u32(rho_str_index_of(link, ".md")))
         }
-        let link_name: string = link
+        var link_name: string = link
         let slash: i32 = rho_str_index_of(link_name, "/")
         if slash >= 0 {
             link_name = rho_str_slice(link_name, 0, u32(slash))
@@ -428,7 +428,7 @@ fn resolve_path(path: string) string {
 
 fn module_rows(req: Request) string {
     // Discover modules from the registry directory
-    let listing: string = ""
+    var listing: string = ""
     let reg_dir: string = robohub_root() + "/registry/modules"
     let code: u32 = rho_exec_args("ls", reg_dir + "\n", "build/reports/ls-modules.txt")
     if code == 0 {
@@ -438,7 +438,7 @@ fn module_rows(req: Request) string {
     var rest: string = listing
     while rest != "" {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let filename: string = ""
+        var filename: string = ""
         if at < 0 {
             filename = rest
             rest = ""
@@ -457,8 +457,8 @@ fn module_rows(req: Request) string {
         let entry: string = robohub_root() + "/registry/modules/" + name + ".yml"
         let role: string = yaml.value(entry, "role")
         let path: string = resolve_path(yaml.value(entry, "path"))
-        let installed: string = i18n_t(req, "common.no")
-        let version: string = ""
+        var installed: string = i18n_t(req, "common.no")
+        var version: string = ""
         var badge: string = "<form method='post' action='/install'><input type='hidden' name='module' value='" + name + "'><button type='submit'>" + i18n_t(req, "common.install") + "</button></form>"
         if !valid_name(name) {
             continue

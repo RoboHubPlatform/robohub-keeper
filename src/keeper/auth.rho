@@ -42,7 +42,7 @@ fn auth_clean(text: string) string {
 }
 
 fn auth_dir() string {
-    let home: string = getenv("HOME")
+    var home: string = getenv("HOME")
     if home == "" {
         home = "."
     }
@@ -679,7 +679,7 @@ fn auth_logout(req: Request) Response {
                 continue
             }
             let first: i32 = rho_str_index_of(line, "|")
-            let id: string = line
+            var id: string = line
             if first >= 0 {
                 id = rho_str_slice(line, 0, u32(first))
             }
@@ -699,7 +699,7 @@ fn auth_logout(req: Request) Response {
 // The access-token settings page. The current token is never shown; a new one
 // is written owner-only, and the session that changed it stays valid.
 fn auth_token_render(req: Request, message: string, token: string) Response {
-    let notice: string = ""
+    var notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }

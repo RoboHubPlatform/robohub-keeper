@@ -370,3 +370,7 @@ The Applications page says how an application is run today: `kind: keeper-hosted
 ## [0.10.0] - 2026-11-14
 
 Enrollment trusts the token, not the node: the place a node is enrolled into is the one its token names, a token names a device and an expiry, an enrolled device is replaced only by a re-enroll token, and a token is spent once even when two requests race. Node credentials are stored salted and hashed. Enrollment and node verification are rate limited by the connection's own address (a forwarded address only from a proxy on this machine). Needs rho 0.9.0.
+
+## [0.10.1] - 2026-11-15
+
+Every `let` the code assigned to is declared with `var`, as rho 0.19.0 asks (assigning to a `let` is deprecated there and refused in the next minor release). Nothing else changes.

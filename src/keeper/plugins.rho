@@ -33,7 +33,7 @@ fn plugin_state_set(name: string, enabled: string) void {
     var rest: string = text
     while rho_strlen(rest) > 0 {
         let at: i32 = rho_str_index_of(rest, "\n")
-        let line: string = ""
+        var line: string = ""
         if at < 0 {
             line = rest
             rest = ""
@@ -174,7 +174,7 @@ fn plugin_status(tone: string, label: string) string {
 }
 
 fn plugins_page_message(req: Request, message: string) Response {
-    let notice: string = ""
+    var notice: string = ""
     if message != "" {
         notice = template_fill(template_get("notice"), vars("message", message))
     }
