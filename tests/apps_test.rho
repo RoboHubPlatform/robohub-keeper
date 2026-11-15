@@ -109,6 +109,7 @@ fn main() void {
     the_menu_holds_one_entry_per_line()
     a_form_body_is_decoded_once()
     whitespace_and_hex_are_values()
+    artifact_report_fields_are_read_and_suffixes_match()
     print("keeper apps text tests ok\n")
 }
 
