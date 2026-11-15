@@ -3,7 +3,8 @@
 #
 # The keeper builds beside robohub, which carries the shared modules it declares
 # under `deps: robohub:`, the alert contract and its providers, and the
-# orchestrator's registry the keeper reads.
+# orchestrator's registry the keeper reads; and beside robohub-mesh, the application its
+# smoke test signs in to.
 name: CI
 
 on:
@@ -18,6 +19,6 @@ jobs:
     uses: RoboHubPlatform/robohub/.github/workflows/robohub-ci.yml@main
     secrets: inherit
     with:
-      siblings: robohub
+      siblings: robohub robohub-mesh
       components: rho-auth rho-log
       build: .
