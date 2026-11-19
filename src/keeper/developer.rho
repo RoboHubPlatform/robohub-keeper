@@ -1,0 +1,1420 @@
+//
+// @file developer.rho
+// @brief The Developer section: the workspace's requirements, architecture decisions and their trace, through rho req.
+//
+// @module keeper.developer
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-19
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.developer
+
+// The Developer section shows and changes the requirements and architecture
+// decisions of the whole RoboHub workspace — every repository of the family —
+// through the rho-req component. Every page asks `rho req … --tsv` and every
+// change is `rho req new|edit|set-status|adr …`: the keeper never writes one of
+// those files itself, so a change made here is byte for byte the change the tool
+// makes from a terminal, comments and layout kept.
+//
+// Reading needs a signed-in person (the auth middleware sees to that); every
+// change, and a commit, needs a maintainer (dev_maintainer). A name a request
+// carries reaches rho req only after it is checked: a requirement id against the
+// id pattern, an ADR against its own, a repository against the family rho req
+// found, and a directory only ever as rho req gave it.
+
+import std.web.http
+
+/* -------------------------------------------------------------------------- */
+/*  Running rho req                                                           */
+/* -------------------------------------------------------------------------- */
+
+fn dev_state() string {
+    return keeper_state_dir() + "/developer"
+}
+
+// dev_scratch is a fresh file name in the section's state folder, for a
+// program's output or a temporary index.
+fn dev_scratch(name: string) string {
+    return dev_state() + "/" + name + "-" + rho_random_hex(8) + ".tmp"
+}
+
+fn dev_ensure_state() void {
+    ensure_keeper_state()
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dev_state() + "\n", apps_report("mkdir-developer")))
+}
+
+// dev_workspace is the folder that holds the family's repositories: what
+// ROBOHUB_WORKSPACE (or RHO_WORKSPACE) says, else the folder the orchestrator is
+// in.
+fn dev_workspace() string {
+    let workspace: string = getenv("ROBOHUB_WORKSPACE")
+    if workspace != "" {
+        return workspace
+    }
+    let rho_workspace: string = getenv("RHO_WORKSPACE")
+    if rho_workspace != "" {
+        return rho_workspace
+    }
+    var root: string = robohub_root()
+    if !rho_str_starts_with(root, "/") {
+        let real: string = str_trim(rho_exec_capture("realpath", root))
+        if rho_str_starts_with(real, "/") {
+            root = real
+        }
+    }
+    return dir_of(root)
+}
+
+// dev_start is the repository rho req starts from: the orchestrator, which is
+// the root of the family.
+fn dev_start() string {
+    let workspace: string = getenv("ROBOHUB_WORKSPACE")
+    if workspace != "" && rho_path_exists(workspace + "/robohub") {
+        return workspace + "/robohub"
+    }
+    return robohub_root()
+}
+
+// dev_run runs `rho req` with arguments (one per line) and the workspace said,
+// and answers "exit<TAB>N" and then what it printed.
+// @req KEEP-DEV-0001
+fn dev_run(args: string) string {
+    dev_ensure_state()
+    let report: string = dev_scratch("req")
+    let code: u32 = rho_exec_args("env", "ROBOHUB_WORKSPACE=" + dev_workspace() + "\nrho\nreq\n" + args, report)
+    let output: string = rho_read_text(report)
+    ignore_u32(rho_exec_args("rm", "-f\n" + report + "\n", apps_report("developer-rm")))
+    return "exit\t" + rho_int_to_str(code) + "\n" + output
+}
+
+// dev_read runs a reading command over the whole workspace.
+fn dev_read(command: string) string {
+    return dev_run(command + "--workspace\n--tsv\n--dir\n" + dev_start() + "\n")
+}
+
+// dev_missing is "" when rho req (with --tsv, rho-req 0.3.0 or later) can be
+// run, or the page that says how to install it.
+// @req KEEP-DEV-0008
+fn dev_missing(req: Request) string {
+    let help: string = dev_out(dev_run("--help\n"))
+    if rho_str_index_of(help, "usage: rho req") >= 0 && rho_str_index_of(help, "--tsv") >= 0 {
+        return ""
+    }
+    return "<div class=\"notice warn\"><p>" + i18n_t(req, "dev.missing") + "</p><p><code>rho module install rho-req</code></p><p>" +
+        i18n_t(req, "dev.missing_source") + "</p><p><code>rho module publish modules/components/rho-req --local</code></p></div>"
+}
+
+// dev_error_box is what a failed run said, as a notice.
+fn dev_error_box(req: Request, output: string) string {
+    var why: string = dev_errors(output)
+    if why == "" {
+        why = i18n_t(req, "dev.failed")
+    }
+    return "<div class=\"notice bad\" id=\"dev-error\"><b>" + i18n_t(req, "dev.tool_said") + "</b><pre>" + escape_html(why) + "</pre></div>"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Who may change what                                                       */
+/* -------------------------------------------------------------------------- */
+
+// dev_maintainer is whether a request may change requirements and decisions and
+// commit them: an admin, a person granted keeper:maintainer, or a ticket with
+// every scope.
+// @req KEEP-DEV-0002
+fn dev_maintainer(req: Request) bool {
+    let subject: string = people_subject(req)
+    if people_has(subject) {
+        return dev_maintainer_from(people_get(subject, "role"), people_get(subject, "grants"), "")
+    }
+    return dev_maintainer_from("", "", header_str(req, "X-Rho-Scopes"))
+}
+
+fn dev_refused(req: Request) Response {
+    return dev_page_status(req, status_forbidden(), "", i18n_t(req, "dev.refused_title"),
+        "<div class=\"notice warn\">" + i18n_t(req, "dev.refused") + "</div>")
+}
+
+// dev_csrf_refused is a maintainer's POST whose form token did not match.
+fn dev_csrf_refused(req: Request) Response {
+    return dev_page_status(req, status_forbidden(), "", i18n_t(req, "dev.refused_title"),
+        "<div class=\"notice warn\">" + i18n_t(req, "common.csrf_refused") + "</div>")
+}
+
+// dev_log records an id the section changed in a repository, for the commit's
+// message.
+fn dev_log(repo: string, id: string) void {
+    if valid_name(repo) && id != "" {
+        ignore_bool(rho_append_text(dev_state() + "/changes.txt", repo + "\t" + id + "\n"))
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The page                                                                  */
+/* -------------------------------------------------------------------------- */
+
+fn dev_nav(req: Request, active: string) string {
+    var out: string = "<nav class=\"dev-tabs\">"
+    var ids: string = "requirements,adr,trace,check,export,commit"
+    while ids != "" {
+        let at: i32 = rho_str_index_of(ids, ",")
+        var id: string = ids
+        if at < 0 { ids = "" } else {
+            id = rho_str_slice(ids, 0, u32(at))
+            ids = rho_str_slice(ids, u32(at) + 1, u32(rho_strlen(ids)) - u32(at) - 1)
+        }
+        var css: string = ""
+        if rho_str_eq(id, active) { css = " class=\"active\"" }
+        out = out + "<a href=\"/developer/" + id + "\"" + css + ">" + i18n_t(req, "dev.tab." + id) + "</a>"
+    }
+    return out + "</nav>"
+}
+
+fn dev_page_status(req: Request, status: u32, tab: string, title: string, content: string) Response {
+    var role: string = i18n_t(req, "dev.role.reader")
+    if dev_maintainer(req) {
+        role = i18n_t(req, "dev.role.maintainer")
+    }
+    let body: string = template_fill(template_get("developer"), i18n_vars(req) +
+        vars("title", title) + vars("nav", dev_nav(req, tab)) + vars("role", role) +
+        vars("workspace", dev_workspace()) + vars("content", content))
+    return page_status(req, status, title, body)
+}
+
+fn dev_page(req: Request, tab: string, title: string, content: string) Response {
+    return dev_page_status(req, status_ok(), tab, title, content)
+}
+
+// dev_unavailable is the page when rho req cannot be run: what to install.
+fn dev_unavailable(req: Request, tab: string, missing: string) Response {
+    return dev_page(req, tab, i18n_t(req, "page.developer"), missing)
+}
+
+fn dev_option(value: string, label: string, selected: string) string {
+    var mark: string = ""
+    if rho_str_eq(value, selected) { mark = " selected" }
+    return "<option value=\"" + escape_html(value) + "\"" + mark + ">" + escape_html(label) + "</option>"
+}
+
+// dev_options is a comma-separated list as options, the empty one first when
+// `any` is given.
+fn dev_options(list: string, selected: string, any: string) string {
+    var out: string = ""
+    if any != "" {
+        out = dev_option("", any, selected)
+    }
+    var rest: string = list
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var item: string = rest
+        if at < 0 { rest = "" } else {
+            item = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if item != "" {
+            out = out + dev_option(item, item, selected)
+        }
+    }
+    return out
+}
+
+fn dev_list_add(list: string, item: string) string {
+    if item == "" || dev_list_has(list, item) {
+        return list
+    }
+    if list == "" {
+        return item
+    }
+    return list + "," + item
+}
+
+// dev_status_tag is a status as a tag, coloured by how far it has got.
+fn dev_status_tag(status: string) string {
+    var tone: string = ""
+    if rho_str_eq(status, "verified") || rho_str_eq(status, "implemented") || rho_str_eq(status, "accepted") ||
+        rho_str_eq(status, "passing") || rho_str_eq(status, "pass") {
+        tone = " ok"
+    } else if rho_str_eq(status, "rejected") || rho_str_eq(status, "retired") || rho_str_eq(status, "superseded") ||
+        rho_str_eq(status, "failing") || rho_str_eq(status, "fail") || rho_str_eq(status, "none") {
+        tone = " miss"
+    }
+    return "<span class=\"rh-tag" + tone + "\">" + escape_html(status) + "</span>"
+}
+
+fn dev_req_link(id: string) string {
+    if !dev_id_ok(id) {
+        return escape_html(id)
+    }
+    return "<a href=\"/developer/requirements/" + escape_html(id) + "\">" + escape_html(id) + "</a>"
+}
+
+// dev_req_links is a comma-separated list of ids as links.
+fn dev_req_links(list: string) string {
+    var out: string = ""
+    var rest: string = list
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var id: string = rest
+        if at < 0 { rest = "" } else {
+            id = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if id != "" {
+            if out != "" { out = out + ", " }
+            out = out + dev_req_link(id)
+        }
+    }
+    return out
+}
+
+// dev_adr_link is an ADR reference as a link, read from the repository `from`.
+fn dev_adr_link(from: string, ref: string) string {
+    if !dev_adr_ok(ref) {
+        return escape_html(ref)
+    }
+    var repo: string = from
+    var id: string = ref
+    let colon: i32 = rho_str_index_of(ref, ":")
+    if colon >= 0 {
+        repo = rho_str_slice(ref, 0, u32(colon))
+        id = rho_str_slice(ref, u32(colon) + 1, u32(rho_strlen(ref)) - u32(colon) - 1)
+    }
+    return "<a href=\"/developer/adr/" + escape_html(repo) + "/" + escape_html(id) + "\">" + escape_html(ref) + "</a>"
+}
+
+fn dev_adr_links(from: string, list: string) string {
+    var out: string = ""
+    var rest: string = list
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        var ref: string = rest
+        if at < 0 { rest = "" } else {
+            ref = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if ref != "" {
+            if out != "" { out = out + ", " }
+            out = out + dev_adr_link(from, ref)
+        }
+    }
+    return out
+}
+
+// dev_place is repo/file:line.
+fn dev_place(repo: string, file: string, line: string) string {
+    var out: string = file
+    if repo != "" && file != "" {
+        out = repo + "/" + file
+    }
+    if line != "" && !rho_str_eq(line, "0") {
+        out = out + ":" + line
+    }
+    return out
+}
+
+// dev_repo_names is the family's repository names, comma separated.
+fn dev_repo_names(output: string) string {
+    var out: string = ""
+    var rest: string = dev_records(output, "repo")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        out = dev_list_add(out, dev_field(line, 1))
+    }
+    return out
+}
+
+// dev_repo_field is one field of a family repository's `repo` record.
+fn dev_repo_field(output: string, name: string, index: u32) string {
+    var rest: string = dev_records(output, "repo")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if rho_str_eq(dev_field(line, 1), name) {
+            return dev_field(line, index)
+        }
+    }
+    return ""
+}
+
+// dev_identity_note is a warning when the git identity a repository commits with
+// is not in the MAINTAINERS.yml that governs it: CI (`rho req check --base`)
+// refuses an approval such a commit carries.
+// @req KEEP-DEV-0006
+fn dev_identity_note(req: Request, repos: string, repo: string) string {
+    let dir: string = dev_repo_dir(repos, repo)
+    if dir == "" {
+        return ""
+    }
+    let identity: string = dev_git_identity(dir)
+    let name: string = tsv_field(identity, 0)
+    let email: string = tsv_field(identity, 1)
+    let maintainers: string = dev_repo_field(repos, repo, 5)
+    var listed: bool = false
+    if maintainers != "" {
+        listed = dev_maintainer_listed(rho_read_text(maintainers), name, email)
+    }
+    if listed {
+        return ""
+    }
+    var who: string = name + " <" + email + ">"
+    if name == "" && email == "" {
+        who = i18n_t(req, "dev.no_identity")
+    }
+    return "<div class=\"notice warn dev-identity\">" + escape_html(keeper_t2(req, "dev.identity_not_maintainer", "who", who, "repo", repo)) + "</div>"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Requirements                                                              */
+/* -------------------------------------------------------------------------- */
+
+fn developer_home(req: Request) Response {
+    return redirect("/developer/requirements")
+}
+
+fn developer_requirements(req: Request) Response {
+    let title: string = i18n_t(req, "dev.tab.requirements")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    let output: string = dev_read("list\n")
+    if !dev_ok(output) {
+        return dev_page(req, "requirements", title, dev_error_box(req, output))
+    }
+    let want_repo: string = query_str(req, "repo")
+    let want_level: string = query_str(req, "level")
+    let want_status: string = query_str(req, "status")
+    let want_tag: string = query_str(req, "tag")
+    let want_text: string = str_lower(str_trim(query_str(req, "q")))
+    var levels: string = ""
+    var tags: string = ""
+    var rows: string = ""
+    var shown: u32 = 0
+    var total: u32 = 0
+    var rest: string = dev_records(output, "req")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let id: string = dev_field(line, 1)
+        let repo: string = dev_field(line, 2)
+        let level: string = dev_field(line, 3)
+        let status: string = dev_field(line, 4)
+        let verification: string = dev_field(line, 5)
+        let req_title: string = dev_field(line, 6)
+        let req_tags: string = dev_field(line, 8)
+        levels = dev_list_add(levels, level)
+        var tag_rest: string = req_tags
+        while tag_rest != "" {
+            let comma: i32 = rho_str_index_of(tag_rest, ",")
+            var tag: string = tag_rest
+            if comma < 0 { tag_rest = "" } else {
+                tag = rho_str_slice(tag_rest, 0, u32(comma))
+                tag_rest = rho_str_slice(tag_rest, u32(comma) + 1, u32(rho_strlen(tag_rest)) - u32(comma) - 1)
+            }
+            tags = dev_list_add(tags, tag)
+        }
+        total = total + 1
+        if want_repo != "" && !rho_str_eq(repo, want_repo) { continue }
+        if want_level != "" && !rho_str_eq(level, want_level) { continue }
+        if want_status != "" && !rho_str_eq(status, want_status) { continue }
+        if want_tag != "" && !dev_list_has(req_tags, want_tag) { continue }
+        if want_text != "" && rho_str_index_of(str_lower(id + " " + req_title), want_text) < 0 { continue }
+        shown = shown + 1
+        var tag_html: string = ""
+        if req_tags != "" {
+            tag_html = "<span class=\"rh-tags\">"
+            var t_rest: string = req_tags
+            while t_rest != "" {
+                let comma: i32 = rho_str_index_of(t_rest, ",")
+                var tag: string = t_rest
+                if comma < 0 { t_rest = "" } else {
+                    tag = rho_str_slice(t_rest, 0, u32(comma))
+                    t_rest = rho_str_slice(t_rest, u32(comma) + 1, u32(rho_strlen(t_rest)) - u32(comma) - 1)
+                }
+                tag_html = tag_html + "<span class=\"rh-tag\">" + escape_html(tag) + "</span>"
+            }
+            tag_html = tag_html + "</span>"
+        }
+        rows = rows + "<tr class=\"dev-req\" data-id=\"" + escape_html(id) + "\"><td>" + dev_req_link(id) + "</td><td>" + escape_html(repo) +
+            "</td><td>" + escape_html(level) + "</td><td>" + dev_status_tag(status) + "</td><td>" + escape_html(verification) +
+            "</td><td>" + escape_html(req_title) + "</td><td>" + tag_html + "</td></tr>"
+    }
+    if rows == "" {
+        rows = "<tr><td colspan=\"7\">" + i18n_t(req, "dev.none_match") + "</td></tr>"
+    }
+    let filters: string = "<form method=\"get\" action=\"/developer/requirements\" class=\"dev-filters\">" +
+        "<label>" + i18n_t(req, "dev.repository") + "<select name=\"repo\">" + dev_options(dev_repo_names(output), want_repo, i18n_t(req, "dev.any")) + "</select></label>" +
+        "<label>" + i18n_t(req, "dev.level") + "<select name=\"level\">" + dev_options(levels, want_level, i18n_t(req, "dev.any")) + "</select></label>" +
+        "<label>" + i18n_t(req, "dev.status") + "<select name=\"status\">" + dev_options("draft,proposed,approved,implemented,verified,rejected,retired", want_status, i18n_t(req, "dev.any")) + "</select></label>" +
+        "<label>" + i18n_t(req, "dev.tag") + "<select name=\"tag\">" + dev_options(tags, want_tag, i18n_t(req, "dev.any")) + "</select></label>" +
+        "<label>" + i18n_t(req, "dev.text") + "<input name=\"q\" value=\"" + escape_html(query_str(req, "q")) + "\"></label>" +
+        "<button type=\"submit\" class=\"quiet\">" + i18n_t(req, "dev.filter") + "</button></form>"
+    var actions: string = ""
+    if dev_maintainer(req) {
+        actions = "<p class=\"dev-actions\"><a class=\"button\" href=\"/developer/new\">+ " + i18n_t(req, "dev.new_requirement") + "</a></p>"
+    }
+    let content: string = actions + filters +
+        "<p class=\"dev-count\">" + escape_html(keeper_t2(req, "dev.shown_of", "shown", rho_int_to_str(shown), "total", rho_int_to_str(total))) + "</p>" +
+        "<table class=\"dev-table\"><thead><tr><th>" + i18n_t(req, "dev.id") + "</th><th>" + i18n_t(req, "dev.repository") + "</th><th>" +
+        i18n_t(req, "dev.level") + "</th><th>" + i18n_t(req, "dev.status") + "</th><th>" + i18n_t(req, "dev.verification") + "</th><th>" +
+        i18n_t(req, "dev.title") + "</th><th>" + i18n_t(req, "dev.tags") + "</th></tr></thead><tbody>" + rows + "</tbody></table>"
+    return dev_page(req, "requirements", title, content)
+}
+
+// dev_show is `rho req show ID --tsv`.
+fn dev_show(id: string) string {
+    return dev_run("show\n" + id + "\n--tsv\n--dir\n" + dev_start() + "\n")
+}
+
+fn developer_requirement(req: Request) Response {
+    return dev_requirement_page(req, param(req, "id"), dev_done_notice(req))
+}
+
+// dev_done_notice is what a change that redirected here did, from ?done=.
+fn dev_done_notice(req: Request) string {
+    let done: string = query_str(req, "done")
+    if !dev_list_has("created,edited,reopened,unchanged", done) {
+        return ""
+    }
+    var tone: string = "notice"
+    if rho_str_eq(done, "reopened") {
+        tone = "notice warn"
+    }
+    return "<div class=\"" + tone + "\" id=\"dev-done\">" + i18n_t(req, "dev.done." + done) + "</div>"
+}
+
+fn dev_requirement_page(req: Request, id: string, notice: string) Response {
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    if !dev_id_ok(id) {
+        return dev_page_status(req, status_not_found(), "requirements", i18n_t(req, "page.not_found"),
+            "<div class=\"notice warn\">" + escape_html(keeper_t1(req, "dev.bad_id", "id", id)) + "</div>")
+    }
+    let shown: string = dev_show(id)
+    if !dev_ok(shown) {
+        return dev_page_status(req, status_not_found(), "requirements", id, dev_error_box(req, shown))
+    }
+    let r: string = dev_record(shown, "req")
+    let repo: string = dev_field(r, 2)
+    let status: string = dev_field(r, 4)
+    var facts: string = "<dl class=\"dev-facts\">" +
+        "<dt>" + i18n_t(req, "dev.status") + "</dt><dd>" + dev_status_tag(status) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.level") + "</dt><dd>" + escape_html(dev_field(r, 3)) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.verification") + "</dt><dd>" + escape_html(dev_field(r, 5)) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.repository") + "</dt><dd>" + escape_html(repo) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.file") + "</dt><dd><code>" + escape_html(dev_place(repo, dev_field(r, 9), dev_field(r, 10))) + "</code></dd>"
+    if dev_field(r, 11) != "" {
+        facts = facts + "<dt>" + i18n_t(req, "dev.owner") + "</dt><dd>" + escape_html(dev_field(r, 11)) + "</dd>"
+    }
+    if dev_field(r, 12) != "" {
+        facts = facts + "<dt>" + i18n_t(req, "dev.changed") + "</dt><dd>" + escape_html(dev_field(r, 12)) + "</dd>"
+    }
+    if dev_field(r, 8) != "" {
+        facts = facts + "<dt>" + i18n_t(req, "dev.tags") + "</dt><dd>" + escape_html(str_replace(dev_field(r, 8), ",", ", ")) + "</dd>"
+    }
+    facts = facts + "<dt>" + i18n_t(req, "dev.evidence") + "</dt><dd>" + dev_status_tag(dev_field(dev_record(shown, "evidence"), 1)) + "</dd></dl>"
+    var body: string = "<section class=\"dev-statement\"><h2>" + i18n_t(req, "dev.statement") + "</h2><p>" +
+        escape_html(dev_field(dev_record(shown, "statement"), 1)) + "</p>"
+    let rationale: string = dev_field(dev_record(shown, "rationale"), 1)
+    if rationale != "" {
+        body = body + "<h3>" + i18n_t(req, "dev.rationale") + "</h3><p>" + escape_html(rationale) + "</p>"
+    }
+    body = body + "</section>"
+    // Up and down the trace.
+    body = body + "<h2>" + i18n_t(req, "dev.satisfies") + "</h2>" + dev_tree(req, dev_records(shown, "up"), "dev.satisfies_none")
+    body = body + "<h2>" + i18n_t(req, "dev.satisfied_by") + "</h2>" + dev_tree(req, dev_records(shown, "down"), "dev.satisfied_by_none")
+    // Decisions.
+    var adrs: string = ""
+    var rest: string = dev_records(shown, "adr")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let adr_repo: string = dev_field(line, 1)
+        adrs = adrs + "<li>" + dev_adr_link(adr_repo, adr_repo + ":" + dev_field(line, 2)) + " " + escape_html(dev_field(line, 5)) + " " + dev_status_tag(dev_field(line, 3)) + "</li>"
+    }
+    if adrs == "" {
+        adrs = "<li>" + i18n_t(req, "dev.no_adrs") + "</li>"
+    }
+    body = body + "<h2>" + i18n_t(req, "dev.adrs") + "</h2><ul class=\"dev-list\">" + adrs + "</ul>"
+    // Code and tests.
+    var code: string = ""
+    rest = dev_records(shown, "code")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        code = code + "<li><code>" + escape_html(dev_place(dev_field(line, 1), dev_field(line, 2), dev_field(line, 3))) + "</code> " + escape_html(dev_field(line, 4)) + "</li>"
+    }
+    if code == "" {
+        code = "<li>" + i18n_t(req, "dev.no_code") + "</li>"
+    }
+    body = body + "<h2>" + i18n_t(req, "dev.code") + "</h2><ul class=\"dev-list\">" + code + "</ul>"
+    var tests: string = ""
+    rest = dev_records(shown, "test")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        var result: string = dev_field(line, 2)
+        if result == "" { result = "not run" }
+        tests = tests + "<li>" + dev_status_tag(result) + " <code>" + escape_html(dev_place(dev_field(line, 3), dev_field(line, 4), dev_field(line, 5))) + "</code> " + escape_html(dev_field(line, 6)) + "</li>"
+    }
+    if tests == "" {
+        tests = "<li>" + i18n_t(req, "dev.no_tests") + "</li>"
+    }
+    body = body + "<h2>" + i18n_t(req, "dev.tests") + "</h2><ul class=\"dev-list\">" + tests + "</ul>"
+    // What a maintainer may do with it.
+    var actions: string = ""
+    if dev_maintainer(req) {
+        var statuses: string = ""
+        var s_rest: string = "draft,proposed,approved,implemented,verified,rejected,retired"
+        while s_rest != "" {
+            let comma: i32 = rho_str_index_of(s_rest, ",")
+            var s: string = s_rest
+            if comma < 0 { s_rest = "" } else {
+                s = rho_str_slice(s_rest, 0, u32(comma))
+                s_rest = rho_str_slice(s_rest, u32(comma) + 1, u32(rho_strlen(s_rest)) - u32(comma) - 1)
+            }
+            statuses = statuses + dev_option(s, s, status)
+        }
+        actions = "<section class=\"dev-maintain\"><h2>" + i18n_t(req, "dev.maintain") + "</h2>" +
+            "<p><a class=\"button\" href=\"/developer/requirements/" + escape_html(id) + "/edit\">" + i18n_t(req, "dev.edit") + "</a></p>" +
+            "<form method=\"post\" action=\"/developer/requirements/" + escape_html(id) + "/status\" class=\"dev-status-form\">" + forms_csrf_field() +
+            "<label>" + i18n_t(req, "dev.new_status") + "<select name=\"status\">" + statuses + "</select></label>" +
+            "<button type=\"submit\">" + i18n_t(req, "dev.set_status") + "</button>" +
+            "<small>" + i18n_t(req, "dev.committed_hint") + "</small></form></section>"
+    }
+    var top: string = ""
+    if notice != "" {
+        top = notice
+    }
+    let content: string = top + "<p class=\"dev-back\"><a href=\"/developer/requirements\">← " + i18n_t(req, "dev.tab.requirements") + "</a></p>" +
+        "<h1 class=\"dev-title\"><code>" + escape_html(id) + "</code> " + escape_html(dev_field(r, 6)) + "</h1>" +
+        "<div class=\"dev-detail\"><div>" + body + "</div><aside>" + facts + actions + "</aside></div>"
+    return dev_page(req, "requirements", id, content)
+}
+
+// dev_tree is `up` or `down` records as an indented list of links.
+fn dev_tree(req: Request, records: string, empty_key: string) string {
+    if records == "" {
+        return "<p class=\"dev-empty\">" + i18n_t(req, empty_key) + "</p>"
+    }
+    var out: string = "<ul class=\"dev-tree\">"
+    var rest: string = records
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let depth: u32 = rho_int_from_str(dev_field(line, 1))
+        out = out + "<li style=\"margin-left:" + rho_int_to_str(depth * 18) + "px\">" + dev_req_link(dev_field(line, 2)) + " " +
+            escape_html(dev_field(line, 3)) + " <small>" + escape_html(dev_field(line, 4)) + "</small> " + dev_status_tag(dev_field(line, 5)) + "</li>"
+    }
+    return out + "</ul>"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  New, edit, status                                                         */
+/* -------------------------------------------------------------------------- */
+
+fn dev_text_field(name: string, label: string, value: string, hint: string) string {
+    var small: string = ""
+    if hint != "" {
+        small = "<small>" + escape_html(hint) + "</small>"
+    }
+    return "<label>" + escape_html(label) + "<input name=\"" + name + "\" value=\"" + escape_html(value) + "\">" + small + "</label>"
+}
+
+fn dev_area_field(name: string, label: string, value: string) string {
+    return "<label>" + escape_html(label) + "<textarea name=\"" + name + "\" rows=\"4\">" + escape_html(value) + "</textarea></label>"
+}
+
+fn developer_new_form(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    return dev_new_page(req, "", "")
+}
+
+// dev_new_page is the form for a new requirement, with what was typed and the
+// tool's error when it refused it.
+fn dev_new_page(req: Request, body: string, error: string) Response {
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    let output: string = dev_read("list\n")
+    var levels: string = ""
+    var rest: string = dev_records(output, "repo")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        var l_rest: string = dev_field(line, 6)
+        while l_rest != "" {
+            let comma: i32 = rho_str_index_of(l_rest, ",")
+            var level: string = l_rest
+            if comma < 0 { l_rest = "" } else {
+                level = rho_str_slice(l_rest, 0, u32(comma))
+                l_rest = rho_str_slice(l_rest, u32(comma) + 1, u32(rho_strlen(l_rest)) - u32(comma) - 1)
+            }
+            levels = dev_list_add(levels, level)
+        }
+    }
+    var repo: string = form_field(body, "repo")
+    if repo == "" { repo = query_str(req, "repo") }
+    var verification: string = form_field(body, "verification")
+    if verification == "" { verification = "test" }
+    let content: string = error + "<h1>" + i18n_t(req, "dev.new_requirement") + "</h1>" +
+        "<form method=\"post\" action=\"/developer/new\" class=\"dev-form\">" + forms_csrf_field() +
+        "<label>" + i18n_t(req, "dev.repository") + "<select name=\"repo\">" + dev_options(dev_repo_names(output), repo, "") + "</select></label>" +
+        "<label>" + i18n_t(req, "dev.level") + "<select name=\"level\">" + dev_options(levels, form_field(body, "level"), "") + "</select></label>" +
+        dev_text_field("prefix", i18n_t(req, "dev.prefix"), form_field(body, "prefix"), i18n_t(req, "dev.prefix_hint")) +
+        dev_text_field("title", i18n_t(req, "dev.title"), form_field(body, "title"), "") +
+        dev_area_field("statement", i18n_t(req, "dev.statement"), form_field(body, "statement")) +
+        dev_area_field("rationale", i18n_t(req, "dev.rationale"), form_field(body, "rationale")) +
+        dev_text_field("satisfies", i18n_t(req, "dev.satisfies"), form_field(body, "satisfies"), i18n_t(req, "dev.ids_hint")) +
+        dev_text_field("decided_by", i18n_t(req, "dev.decided_by"), form_field(body, "decided_by"), i18n_t(req, "dev.adrs_hint")) +
+        dev_text_field("owner", i18n_t(req, "dev.owner"), form_field(body, "owner"), "") +
+        dev_text_field("tags", i18n_t(req, "dev.tags"), form_field(body, "tags"), i18n_t(req, "dev.tags_hint")) +
+        "<label>" + i18n_t(req, "dev.verification") + "<select name=\"verification\">" + dev_options("test,analysis,inspection,demonstration", verification, "") + "</select></label>" +
+        "<label>" + i18n_t(req, "dev.status") + "<select name=\"status\">" + dev_options("draft,proposed", form_field(body, "status"), "") + "</select></label>" +
+        "<div class=\"form-actions\"><button type=\"submit\">" + i18n_t(req, "dev.create") + "</button> <a class=\"button quiet\" href=\"/developer/requirements\">" + i18n_t(req, "common.cancel") + "</a></div></form>"
+    return dev_page(req, "requirements", i18n_t(req, "dev.new_requirement"), content)
+}
+
+// dev_bad is a refused form value, as the error box a form shows.
+fn dev_bad(req: Request, key: string) string {
+    return "<div class=\"notice bad\" id=\"dev-error\">" + i18n_t(req, key) + "</div>"
+}
+
+// @req KEEP-DEV-0004
+fn developer_new_post(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return dev_csrf_refused(req)
+    }
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    let repos: string = dev_read("list\n")
+    let repo: string = str_trim(form_field(body, "repo"))
+    if !dev_repo_known(repos, repo) {
+        return dev_new_page(req, body, dev_bad(req, "dev.bad_repo"))
+    }
+    let level: string = str_trim(form_field(body, "level"))
+    let prefix: string = str_trim(form_field(body, "prefix"))
+    let satisfies: string = dev_list_clean(form_field(body, "satisfies"))
+    let decided: string = dev_list_clean(form_field(body, "decided_by"))
+    let tags: string = dev_list_clean(form_field(body, "tags"))
+    let verification: string = str_trim(form_field(body, "verification"))
+    var status: string = str_trim(form_field(body, "status"))
+    if status == "" { status = "draft" }
+    if !dev_word_ok(level) || (prefix != "" && !dev_prefix_ok(prefix)) || !dev_ids_ok(satisfies) || !dev_adrs_ok(decided) ||
+        !dev_tags_ok(tags) || !dev_verification_ok(verification) || !dev_list_has("draft,proposed", status) {
+        return dev_new_page(req, body, dev_bad(req, "dev.bad_values"))
+    }
+    var args: string = "new\n--tsv\n--dir\n" + dev_repo_dir(repos, repo) + "\n--level=" + level + "\n--title=" + dev_one_line(form_field(body, "title")) +
+        "\n--statement=" + dev_one_line(form_field(body, "statement")) + "\n--verification=" + verification + "\n--status=" + status + "\n"
+    if prefix != "" { args = args + "--prefix=" + prefix + "\n" }
+    let rationale: string = dev_one_line(form_field(body, "rationale"))
+    if rationale != "" { args = args + "--rationale=" + rationale + "\n" }
+    if satisfies != "" { args = args + "--satisfies=" + satisfies + "\n" }
+    if decided != "" { args = args + "--decided-by=" + decided + "\n" }
+    let owner: string = dev_one_line(form_field(body, "owner"))
+    if owner != "" { args = args + "--owner=" + owner + "\n" }
+    if tags != "" { args = args + "--tags=" + tags + "\n" }
+    rho_lock("developer")
+    let made: string = dev_run(args)
+    rho_unlock("developer")
+    let created: string = dev_record(made, "created")
+    if !dev_ok(made) || created == "" {
+        return dev_new_page(req, body, dev_error_box(req, made))
+    }
+    let id: string = dev_field(created, 1)
+    dev_log(dev_field(created, 2), id)
+    info("keeper", "developer: " + people_subject(req) + " added " + id + " to " + dev_field(created, 2) + "/" + dev_field(created, 3))
+    return redirect("/developer/requirements/" + id + "?done=created")
+}
+
+fn developer_edit_form(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    return dev_edit_page(req, param(req, "id"), "", "")
+}
+
+// dev_edit_value is what the edit form shows for a field: what was typed when the
+// tool refused it, else what the requirement says.
+fn dev_edit_value(body: string, name: string, current: string) string {
+    if body != "" {
+        return form_field(body, name)
+    }
+    return current
+}
+
+fn dev_edit_page(req: Request, id: string, body: string, error: string) Response {
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    if !dev_id_ok(id) {
+        return dev_page_status(req, status_not_found(), "requirements", i18n_t(req, "page.not_found"),
+            "<div class=\"notice warn\">" + escape_html(keeper_t1(req, "dev.bad_id", "id", id)) + "</div>")
+    }
+    let shown: string = dev_show(id)
+    if !dev_ok(shown) {
+        return dev_page_status(req, status_not_found(), "requirements", id, dev_error_box(req, shown))
+    }
+    let r: string = dev_record(shown, "req")
+    let content: string = error + "<p class=\"dev-back\"><a href=\"/developer/requirements/" + escape_html(id) + "\">← " + escape_html(id) + "</a></p>" +
+        "<h1>" + escape_html(keeper_t1(req, "dev.edit_title", "id", id)) + "</h1>" +
+        "<form method=\"post\" action=\"/developer/requirements/" + escape_html(id) + "/edit\" class=\"dev-form\">" + forms_csrf_field() +
+        dev_text_field("title", i18n_t(req, "dev.title"), dev_edit_value(body, "title", dev_field(r, 6)), "") +
+        dev_area_field("statement", i18n_t(req, "dev.statement"), dev_edit_value(body, "statement", dev_field(dev_record(shown, "statement"), 1))) +
+        dev_area_field("rationale", i18n_t(req, "dev.rationale"), dev_edit_value(body, "rationale", dev_field(dev_record(shown, "rationale"), 1))) +
+        dev_text_field("satisfies", i18n_t(req, "dev.satisfies"), dev_edit_value(body, "satisfies", str_replace(dev_field(r, 7), ",", ", ")), i18n_t(req, "dev.ids_hint")) +
+        dev_text_field("decided_by", i18n_t(req, "dev.decided_by"), dev_edit_value(body, "decided_by", str_replace(dev_field(dev_record(shown, "decided_by"), 1), ",", ", ")), i18n_t(req, "dev.adrs_hint")) +
+        dev_text_field("owner", i18n_t(req, "dev.owner"), dev_edit_value(body, "owner", dev_field(r, 11)), "") +
+        dev_text_field("tags", i18n_t(req, "dev.tags"), dev_edit_value(body, "tags", str_replace(dev_field(r, 8), ",", ", ")), i18n_t(req, "dev.tags_hint")) +
+        "<label>" + i18n_t(req, "dev.verification") + "<select name=\"verification\">" + dev_options("test,analysis,inspection,demonstration", dev_edit_value(body, "verification", dev_field(r, 5)), "") + "</select></label>" +
+        "<label class=\"check\"><input type=\"checkbox\" name=\"keep_status\" value=\"1\"> " + i18n_t(req, "dev.keep_status") + "</label>" +
+        "<div class=\"form-actions\"><button type=\"submit\">" + i18n_t(req, "common.save") + "</button> <a class=\"button quiet\" href=\"/developer/requirements/" + escape_html(id) + "\">" + i18n_t(req, "common.cancel") + "</a></div></form>"
+    return dev_page(req, "requirements", id, content)
+}
+
+// dev_edit_scalar is the edit argument for a scalar the form changed: a --set
+// when it has a value, a --remove of an optional key when it was emptied, and
+// nothing when it is what it was.
+fn dev_edit_scalar(key: string, typed: string, current: string, optional: bool) string {
+    let value: string = dev_one_line(typed)
+    if rho_str_eq(value, dev_one_line(current)) {
+        return ""
+    }
+    if value == "" {
+        if optional {
+            return "--remove\n" + key + "\n"
+        }
+        return ""
+    }
+    return "--set\n" + key + "=" + value + "\n"
+}
+
+// dev_edit_list is the same for a list: the whole list set, or removed.
+fn dev_edit_list(key: string, typed: string, current: string) string {
+    let value: string = dev_list_clean(typed)
+    if rho_str_eq(value, dev_list_clean(current)) {
+        return ""
+    }
+    if value == "" {
+        return "--remove\n" + key + "\n"
+    }
+    return "--set\n" + key + "=" + value + "\n"
+}
+
+// @req KEEP-DEV-0004
+fn developer_edit_post(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return dev_csrf_refused(req)
+    }
+    let id: string = param(req, "id")
+    if !dev_id_ok(id) {
+        return dev_edit_page(req, id, "", "")
+    }
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    let shown: string = dev_show(id)
+    if !dev_ok(shown) {
+        return dev_page_status(req, status_not_found(), "requirements", id, dev_error_box(req, shown))
+    }
+    let r: string = dev_record(shown, "req")
+    let satisfies: string = form_field(body, "satisfies")
+    let decided: string = form_field(body, "decided_by")
+    let tags: string = form_field(body, "tags")
+    let verification: string = str_trim(form_field(body, "verification"))
+    if !dev_ids_ok(satisfies) || !dev_adrs_ok(decided) || !dev_tags_ok(tags) || !dev_verification_ok(verification) {
+        return dev_edit_page(req, id, body, dev_bad(req, "dev.bad_values"))
+    }
+    var ops: string = dev_edit_scalar("title", form_field(body, "title"), dev_field(r, 6), false) +
+        dev_edit_scalar("statement", form_field(body, "statement"), dev_field(dev_record(shown, "statement"), 1), false) +
+        dev_edit_scalar("rationale", form_field(body, "rationale"), dev_field(dev_record(shown, "rationale"), 1), true) +
+        dev_edit_scalar("verification", verification, dev_field(r, 5), false) +
+        dev_edit_scalar("owner", form_field(body, "owner"), dev_field(r, 11), true) +
+        dev_edit_list("satisfies", satisfies, dev_field(r, 7)) +
+        dev_edit_list("decided_by", decided, dev_field(dev_record(shown, "decided_by"), 1)) +
+        dev_edit_list("tags", tags, dev_field(r, 8))
+    if ops == "" {
+        return redirect("/developer/requirements/" + id + "?done=unchanged")
+    }
+    if rho_str_eq(form_field(body, "keep_status"), "1") {
+        ops = ops + "--keep-status\n"
+    }
+    rho_lock("developer")
+    let edited: string = dev_run("edit\n" + id + "\n--tsv\n--dir\n" + dev_start() + "\n" + ops)
+    rho_unlock("developer")
+    let updated: string = dev_record(edited, "updated")
+    if !dev_ok(edited) || updated == "" {
+        return dev_edit_page(req, id, body, dev_error_box(req, edited))
+    }
+    dev_log(dev_field(r, 2), id)
+    info("keeper", "developer: " + people_subject(req) + " edited " + id)
+    if rho_str_eq(dev_field(updated, 4), "yes") {
+        return redirect("/developer/requirements/" + id + "?done=reopened")
+    }
+    return redirect("/developer/requirements/" + id + "?done=edited")
+}
+
+// @req KEEP-DEV-0004
+fn developer_status_post(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return dev_csrf_refused(req)
+    }
+    let id: string = param(req, "id")
+    let status: string = str_trim(form_field(body, "status"))
+    if !dev_id_ok(id) || !dev_status_ok(status) {
+        return dev_requirement_page(req, id, dev_bad(req, "dev.bad_values"))
+    }
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "requirements", missing)
+    }
+    rho_lock("developer")
+    let changed: string = dev_run("set-status\n" + id + "\n" + status + "\n--tsv\n--dir\n" + dev_start() + "\n")
+    rho_unlock("developer")
+    if !dev_ok(changed) || dev_record(changed, "updated") == "" {
+        return dev_requirement_page(req, id, dev_error_box(req, changed))
+    }
+    let shown: string = dev_show(id)
+    let repo: string = dev_field(dev_record(shown, "req"), 2)
+    dev_log(repo, id)
+    info("keeper", "developer: " + people_subject(req) + " set " + id + " to " + status)
+    var notice: string = "<div class=\"notice\" id=\"dev-done\">" + escape_html(keeper_t2(req, "dev.status_set", "id", id, "status", status)) + "</div>"
+    if dev_committed(status) {
+        notice = notice + dev_identity_note(req, dev_read("list\n"), repo)
+    }
+    return dev_requirement_page(req, id, notice)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Architecture decisions                                                    */
+/* -------------------------------------------------------------------------- */
+
+fn developer_adrs(req: Request) Response {
+    return dev_adrs_page(req, "", "")
+}
+
+fn dev_adrs_page(req: Request, body: string, notice: string) Response {
+    let title: string = i18n_t(req, "dev.tab.adr")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "adr", missing)
+    }
+    let output: string = dev_read("adr\nlist\n")
+    if !dev_ok(output) {
+        return dev_page(req, "adr", title, dev_error_box(req, output))
+    }
+    var content: string = notice
+    var repos: string = dev_repo_names(output)
+    var r_rest: string = repos
+    while r_rest != "" {
+        let comma: i32 = rho_str_index_of(r_rest, ",")
+        var repo: string = r_rest
+        if comma < 0 { r_rest = "" } else {
+            repo = rho_str_slice(r_rest, 0, u32(comma))
+            r_rest = rho_str_slice(r_rest, u32(comma) + 1, u32(rho_strlen(r_rest)) - u32(comma) - 1)
+        }
+        var rows: string = ""
+        var rest: string = dev_records(output, "adr")
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "\n")
+            let line: string = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            if !rho_str_eq(dev_field(line, 1), repo) { continue }
+            rows = rows + "<tr class=\"dev-adr\"><td>" + dev_adr_link(repo, dev_field(line, 2)) + "</td><td>" + dev_status_tag(dev_field(line, 3)) +
+                "</td><td>" + escape_html(dev_field(line, 4)) + "</td><td>" + escape_html(dev_field(line, 5)) + "</td><td>" + dev_req_links(dev_field(line, 6)) + "</td></tr>"
+        }
+        if rows == "" {
+            rows = "<tr><td colspan=\"5\">" + i18n_t(req, "dev.no_adrs") + "</td></tr>"
+        }
+        content = content + "<h2>" + escape_html(repo) + "</h2><table class=\"dev-table\"><thead><tr><th>" + i18n_t(req, "dev.id") + "</th><th>" +
+            i18n_t(req, "dev.status") + "</th><th>" + i18n_t(req, "dev.date") + "</th><th>" + i18n_t(req, "dev.title") + "</th><th>" +
+            i18n_t(req, "dev.requirements") + "</th></tr></thead><tbody>" + rows + "</tbody></table>"
+    }
+    if dev_maintainer(req) {
+        content = content + "<details class=\"panel-form dev-new-adr\"" + dev_open_if(body) + "><summary class=\"button quiet small\">+ " + i18n_t(req, "dev.new_adr") + "</summary>" +
+            "<form method=\"post\" action=\"/developer/adr/new\" class=\"dev-form\">" + forms_csrf_field() +
+            "<label>" + i18n_t(req, "dev.repository") + "<select name=\"repo\">" + dev_options(repos, form_field(body, "repo"), "") + "</select></label>" +
+            dev_text_field("title", i18n_t(req, "dev.title"), form_field(body, "title"), "") +
+            dev_text_field("requirements", i18n_t(req, "dev.requirements"), form_field(body, "requirements"), i18n_t(req, "dev.ids_hint")) +
+            "<p><small>" + i18n_t(req, "dev.adr_template_hint") + "</small></p>" +
+            "<div class=\"form-actions\"><button type=\"submit\">" + i18n_t(req, "dev.create") + "</button></div></form></details>"
+    }
+    return dev_page(req, "adr", title, content)
+}
+
+fn dev_open_if(body: string) string {
+    if body != "" {
+        return " open"
+    }
+    return ""
+}
+
+// @req KEEP-DEV-0004
+fn developer_adr_new(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return dev_csrf_refused(req)
+    }
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "adr", missing)
+    }
+    let repos: string = dev_read("adr\nlist\n")
+    let repo: string = str_trim(form_field(body, "repo"))
+    let requirements: string = dev_list_clean(form_field(body, "requirements"))
+    if !dev_repo_known(repos, repo) {
+        return dev_adrs_page(req, body, dev_bad(req, "dev.bad_repo"))
+    }
+    if !dev_ids_ok(requirements) {
+        return dev_adrs_page(req, body, dev_bad(req, "dev.bad_values"))
+    }
+    var args: string = "adr\nnew\n--tsv\n--dir\n" + dev_repo_dir(repos, repo) + "\n--title=" + dev_one_line(form_field(body, "title")) + "\n"
+    if requirements != "" {
+        args = args + "--requirements=" + requirements + "\n"
+    }
+    rho_lock("developer")
+    let made: string = dev_run(args)
+    rho_unlock("developer")
+    let created: string = dev_record(made, "created")
+    if !dev_ok(made) || created == "" {
+        return dev_adrs_page(req, body, dev_error_box(req, made))
+    }
+    info("keeper", "developer: " + people_subject(req) + " wrote " + repo + ":" + dev_field(created, 1))
+    return redirect("/developer/adr/" + repo + "/" + dev_field(created, 1) + "?done=created")
+}
+
+// dev_adr_record is an ADR's `adr` record from a listing, or "".
+fn dev_adr_record(listing: string, repo: string, id: string) string {
+    var rest: string = dev_records(listing, "adr")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if rho_str_eq(dev_field(line, 1), repo) && rho_str_eq(dev_field(line, 2), id) {
+            return line
+        }
+    }
+    return ""
+}
+
+// dev_adr_body is an ADR file's text after its front matter, written to a file
+// of its own so the documentation renderer shows the decision and not the YAML.
+fn dev_adr_body(path: string) string {
+    let text: string = rho_read_text(path)
+    if !rho_str_starts_with(text, "---\n") {
+        return text
+    }
+    let rest: string = rho_str_slice(text, 4, u32(rho_strlen(text)) - 4)
+    let end: i32 = rho_str_index_of(rest, "\n---\n")
+    if end < 0 {
+        return text
+    }
+    return rho_str_slice(rest, u32(end) + 5, u32(rho_strlen(rest)) - u32(end) - 5)
+}
+
+fn developer_adr(req: Request) Response {
+    return dev_adr_page(req, param(req, "repo"), param(req, "id"), dev_done_notice(req))
+}
+
+fn dev_adr_page(req: Request, repo: string, id: string, notice: string) Response {
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "adr", missing)
+    }
+    let listing: string = dev_read("adr\nlist\n")
+    if !dev_repo_known(listing, repo) || !dev_adr_local_ok(id) {
+        return dev_page_status(req, status_not_found(), "adr", i18n_t(req, "page.not_found"),
+            "<div class=\"notice warn\">" + escape_html(keeper_t1(req, "dev.bad_adr", "id", repo + ":" + id)) + "</div>")
+    }
+    let record: string = dev_adr_record(listing, repo, id)
+    let file: string = dev_field(record, 9)
+    if record == "" || !dev_adr_file_ok(file) {
+        return dev_page_status(req, status_not_found(), "adr", i18n_t(req, "page.not_found"),
+            "<div class=\"notice warn\">" + escape_html(keeper_t1(req, "dev.bad_adr", "id", repo + ":" + id)) + "</div>")
+    }
+    let path: string = dev_repo_dir(listing, repo) + "/" + file
+    dev_ensure_state()
+    let page_file: string = dev_scratch("adr") + ".md"
+    ignore_bool(rho_write_text(page_file, dev_adr_body(path)))
+    var rendered: string = docs_render_source(page_file)
+    ignore_u32(rho_exec_args("rm", "-f\n" + page_file + "\n", apps_report("developer-rm")))
+    if rendered == "" {
+        rendered = "<pre>" + escape_html(dev_adr_body(path)) + "</pre>"
+    }
+    let status: string = dev_field(record, 3)
+    let facts: string = "<dl class=\"dev-facts\"><dt>" + i18n_t(req, "dev.status") + "</dt><dd>" + dev_status_tag(status) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.date") + "</dt><dd>" + escape_html(dev_field(record, 4)) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.requirements") + "</dt><dd>" + dev_req_links(dev_field(record, 6)) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.supersedes") + "</dt><dd>" + dev_adr_links(repo, dev_field(record, 7)) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.superseded_by") + "</dt><dd>" + dev_adr_links(repo, dev_field(record, 8)) + "</dd>" +
+        "<dt>" + i18n_t(req, "dev.file") + "</dt><dd><code>" + escape_html(repo + "/" + file) + "</code></dd></dl>"
+    var actions: string = ""
+    if dev_maintainer(req) && !rho_str_eq(status, "superseded") {
+        let base: string = "/developer/adr/" + escape_html(repo) + "/" + escape_html(id)
+        actions = "<section class=\"dev-maintain\"><h2>" + i18n_t(req, "dev.maintain") + "</h2>" +
+            "<form method=\"post\" action=\"" + base + "/status\" class=\"dev-status-form\">" + forms_csrf_field() +
+            "<label>" + i18n_t(req, "dev.new_status") + "<select name=\"status\">" + dev_options("proposed,accepted,rejected", status, "") + "</select></label>" +
+            "<button type=\"submit\">" + i18n_t(req, "dev.set_status") + "</button><small>" + i18n_t(req, "dev.accept_hint") + "</small></form>" +
+            "<form method=\"post\" action=\"" + base + "/supersede\" class=\"dev-status-form\">" + forms_csrf_field() +
+            dev_text_field("by", i18n_t(req, "dev.supersede_by"), "", i18n_t(req, "dev.supersede_hint")) +
+            "<button type=\"submit\" class=\"quiet\">" + i18n_t(req, "dev.supersede") + "</button></form></section>"
+    }
+    let content: string = notice + "<p class=\"dev-back\"><a href=\"/developer/adr\">← " + i18n_t(req, "dev.tab.adr") + "</a></p>" +
+        "<h1 class=\"dev-title\"><code>" + escape_html(repo + ":" + id) + "</code> " + escape_html(dev_field(record, 5)) + "</h1>" +
+        "<div class=\"dev-detail\"><div class=\"dev-adr-body\">" + rendered + "</div><aside>" + facts + actions + "</aside></div>"
+    return dev_page(req, "adr", repo + ":" + id, content)
+}
+
+// @req KEEP-DEV-0004
+fn developer_adr_action(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return dev_csrf_refused(req)
+    }
+    let repo: string = param(req, "repo")
+    let id: string = param(req, "id")
+    let action: string = param(req, "action")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "adr", missing)
+    }
+    let listing: string = dev_read("adr\nlist\n")
+    if !dev_repo_known(listing, repo) || !dev_adr_local_ok(id) || dev_adr_record(listing, repo, id) == "" {
+        return dev_adr_page(req, repo, id, "")
+    }
+    let dir: string = dev_repo_dir(listing, repo)
+    var args: string = ""
+    var done: string = ""
+    if rho_str_eq(action, "status") {
+        let status: string = str_trim(form_field(body, "status"))
+        if !dev_adr_status_ok(status) {
+            return dev_adr_page(req, repo, id, dev_bad(req, "dev.bad_values"))
+        }
+        args = "adr\nset-status\n" + id + "\n" + status + "\n--tsv\n--dir\n" + dir + "\n"
+        done = keeper_t2(req, "dev.status_set", "id", repo + ":" + id, "status", status)
+    } else if rho_str_eq(action, "supersede") {
+        let by: string = str_trim(form_field(body, "by"))
+        if !dev_adr_ok(by) {
+            return dev_adr_page(req, repo, id, dev_bad(req, "dev.bad_values"))
+        }
+        args = "adr\nsupersede\n" + id + "\n" + by + "\n--tsv\n--dir\n" + dir + "\n"
+        done = keeper_t2(req, "dev.superseded", "id", repo + ":" + id, "by", by)
+    } else {
+        return dev_adr_page(req, repo, id, dev_bad(req, "dev.bad_values"))
+    }
+    rho_lock("developer")
+    let changed: string = dev_run(args)
+    rho_unlock("developer")
+    if !dev_ok(changed) {
+        return dev_adr_page(req, repo, id, dev_error_box(req, changed))
+    }
+    info("keeper", "developer: " + people_subject(req) + " " + action + " " + repo + ":" + id)
+    var notice: string = "<div class=\"notice\" id=\"dev-done\">" + escape_html(done) + "</div>"
+    if rho_str_eq(action, "status") && rho_str_eq(str_trim(form_field(body, "status")), "accepted") {
+        notice = notice + dev_identity_note(req, listing, repo)
+    }
+    return dev_adr_page(req, repo, id, notice)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Trace, check, export                                                      */
+/* -------------------------------------------------------------------------- */
+
+fn developer_trace(req: Request) Response {
+    let title: string = i18n_t(req, "dev.tab.trace")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "trace", missing)
+    }
+    let output: string = dev_read("trace\n--release\n")
+    let summary: string = dev_record(output, "summary")
+    if summary == "" {
+        return dev_page(req, "trace", title, dev_error_box(req, output))
+    }
+    let blocking: string = dev_field(summary, 1)
+    var gate: string = "<div class=\"notice dev-gate ok\" id=\"dev-release\">" + i18n_t(req, "dev.releasable") + "</div>"
+    if !rho_str_eq(dev_field(summary, 2), "yes") {
+        gate = "<div class=\"notice bad dev-gate\" id=\"dev-release\">" + escape_html(keeper_t1(req, "dev.not_releasable", "count", blocking)) + "</div>"
+    }
+    var rows: string = ""
+    var rest: string = dev_records(output, "row")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let id: string = dev_field(line, 1)
+        let repo: string = dev_field(line, 2)
+        // The tests behind the row, each with its result.
+        var tests: string = ""
+        var t_rest: string = dev_records(output, "test")
+        while t_rest != "" {
+            let t_at: i32 = rho_str_index_of(t_rest, "\n")
+            let t_line: string = rho_str_slice(t_rest, 0, u32(t_at))
+            t_rest = rho_str_slice(t_rest, u32(t_at) + 1, u32(rho_strlen(t_rest)) - u32(t_at) - 1)
+            if !rho_str_eq(dev_field(t_line, 1), id) { continue }
+            var result: string = dev_field(t_line, 2)
+            if result == "" { result = "not run" }
+            tests = tests + "<div>" + dev_status_tag(result) + " <small>" + escape_html(dev_field(t_line, 6)) + "</small></div>"
+        }
+        rows = rows + "<tr class=\"dev-row\" data-id=\"" + escape_html(id) + "\"><td>" + dev_req_link(id) + "</td><td>" + escape_html(repo) + "</td><td>" +
+            escape_html(dev_field(line, 3)) + "</td><td>" + dev_status_tag(dev_field(line, 4)) + "</td><td>" + dev_status_tag(dev_field(line, 6)) +
+            "</td><td>" + dev_req_links(dev_field(line, 8)) + "</td><td>" + dev_req_links(dev_field(line, 9)) + "</td><td>" + dev_adr_links(repo, dev_field(line, 10)) +
+            "</td><td>" + escape_html(dev_field(line, 11)) + "</td><td>" + tests + "</td></tr>"
+    }
+    var gaps: string = ""
+    rest = dev_records(output, "gap")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        var tone: string = "warn"
+        if rho_str_eq(dev_field(line, 2), "yes") { tone = "bad" }
+        gaps = gaps + "<div class=\"rh-row " + tone + " dev-gap\"><b>" + escape_html(dev_field(line, 1)) + "</b><span>" +
+            dev_req_link(dev_field(line, 3)) + " <code>" + escape_html(dev_place(dev_field(line, 4), dev_field(line, 5), dev_field(line, 6))) + "</code> " +
+            escape_html(dev_field(line, 7)) + "</span></div>"
+    }
+    if gaps == "" {
+        gaps = "<p class=\"dev-empty\">" + i18n_t(req, "dev.no_gaps") + "</p>"
+    }
+    let content: string = gate + "<table class=\"dev-table\"><thead><tr><th>" + i18n_t(req, "dev.id") + "</th><th>" + i18n_t(req, "dev.repository") +
+        "</th><th>" + i18n_t(req, "dev.level") + "</th><th>" + i18n_t(req, "dev.status") + "</th><th>" + i18n_t(req, "dev.evidence") + "</th><th>" +
+        i18n_t(req, "dev.satisfies") + "</th><th>" + i18n_t(req, "dev.satisfied_by") + "</th><th>" + i18n_t(req, "dev.adrs") + "</th><th>" +
+        i18n_t(req, "dev.code") + "</th><th>" + i18n_t(req, "dev.tests") + "</th></tr></thead><tbody>" + rows + "</tbody></table>" +
+        "<h2>" + i18n_t(req, "dev.gaps") + "</h2>" + gaps
+    return dev_page(req, "trace", title, content)
+}
+
+fn developer_check(req: Request) Response {
+    let title: string = i18n_t(req, "dev.tab.check")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "check", missing)
+    }
+    let output: string = dev_read("check\n")
+    let summary: string = dev_record(output, "summary")
+    if summary == "" {
+        return dev_page(req, "check", title, dev_error_box(req, output))
+    }
+    var head: string = "<div class=\"notice dev-check ok\" id=\"dev-check\">" +
+        escape_html(keeper_t3(req, "dev.check_clean", "requirements", dev_field(summary, 4), "errors", dev_field(summary, 2), "warnings", dev_field(summary, 3))) + "</div>"
+    if !rho_str_eq(dev_field(summary, 1), "yes") {
+        head = "<div class=\"notice bad dev-check\" id=\"dev-check\">" +
+            escape_html(keeper_t3(req, "dev.check_failed", "requirements", dev_field(summary, 4), "errors", dev_field(summary, 2), "warnings", dev_field(summary, 3))) + "</div>"
+    }
+    var rows: string = ""
+    var rest: string = dev_records(output, "issue")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        var tone: string = "warn"
+        if rho_str_eq(dev_field(line, 1), "error") { tone = "bad" }
+        rows = rows + "<div class=\"rh-row " + tone + " dev-issue\"><b>" + escape_html(dev_field(line, 1)) + "</b><span><code>" +
+            escape_html(dev_place(dev_field(line, 3), dev_field(line, 4), dev_field(line, 5))) + "</code> " + escape_html(dev_field(line, 7)) +
+            " <small>[" + escape_html(dev_field(line, 2)) + "]</small></span></div>"
+    }
+    return dev_page(req, "check", title, head + rows)
+}
+
+// dev_render writes `rho req render --workspace` to the section's state folder
+// and answers the file, or "" when it failed.
+fn dev_render() string {
+    dev_ensure_state()
+    let out: string = dev_state() + "/requirements.md"
+    let rendered: string = dev_run("render\n--workspace\n--dir\n" + dev_start() + "\n--out\n" + out + "\n")
+    if !dev_ok(rendered) {
+        return ""
+    }
+    return out
+}
+
+// @req KEEP-DEV-0007
+fn developer_export(req: Request) Response {
+    let title: string = i18n_t(req, "dev.tab.export")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "export", missing)
+    }
+    let file: string = dev_render()
+    if file == "" {
+        return dev_page(req, "export", title, "<div class=\"notice bad\">" + i18n_t(req, "dev.failed") + "</div>")
+    }
+    let shown: string = dev_state() + "/requirements-page.md"
+    ignore_bool(rho_write_text(shown, dev_without_anchors(rho_read_text(file))))
+    var rendered: string = docs_render_source(shown)
+    if rendered == "" {
+        rendered = "<pre>" + escape_html(rho_read_text(file)) + "</pre>"
+    }
+    let content: string = "<p class=\"dev-actions\"><a class=\"button\" href=\"/developer/export/requirements.md\" download>" + i18n_t(req, "dev.download") + "</a></p>" +
+        "<p>" + i18n_t(req, "dev.export_intro") + "</p><div class=\"dev-export\">" + rendered + "</div>"
+    return dev_page(req, "export", title, content)
+}
+
+fn developer_export_download(req: Request) Response {
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return text(status_not_found(), "rho req is not installed\n")
+    }
+    let file: string = dev_render()
+    if file == "" {
+        return text(status_internal(), "rho req render failed\n")
+    }
+    return Response{ status_ok(), rho_read_text(file), "text/markdown; charset=utf-8", "Content-Disposition: attachment; filename=\"requirements.md\"" }
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Commit                                                                    */
+/* -------------------------------------------------------------------------- */
+
+fn developer_commit(req: Request) Response {
+    return dev_commit_page(req, "")
+}
+
+fn dev_commit_page(req: Request, notice: string) Response {
+    let title: string = i18n_t(req, "dev.tab.commit")
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "commit", missing)
+    }
+    let repos: string = dev_read("list\n")
+    if dev_records(repos, "repo") == "" {
+        return dev_page(req, "commit", title, dev_error_box(req, repos))
+    }
+    let maintainer: bool = dev_maintainer(req)
+    var content: string = notice + "<p>" + i18n_t(req, "dev.commit_intro") + "</p>"
+    var rest: string = dev_records(repos, "repo")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let repo: string = dev_field(line, 1)
+        let dir: string = dev_field(line, 2)
+        let plan: string = dev_git_plan(dir)
+        content = content + "<section class=\"dev-commit\" data-repo=\"" + escape_html(repo) + "\"><h2>" + escape_html(repo) + "</h2>"
+        let failure: string = dev_plan_value(plan, "error")
+        if failure != "" {
+            content = content + "<div class=\"notice warn\">" + escape_html(failure) + "</div></section>"
+            continue
+        }
+        let changes: string = dev_plan_changes(plan)
+        if changes == "" {
+            content = content + "<p class=\"dev-empty\">" + i18n_t(req, "dev.nothing_changed") + "</p></section>"
+            continue
+        }
+        var list: string = ""
+        var c_rest: string = changes
+        while c_rest != "" {
+            let c_at: i32 = rho_str_index_of(c_rest, "\n")
+            let c_line: string = rho_str_slice(c_rest, 0, u32(c_at))
+            c_rest = rho_str_slice(c_rest, u32(c_at) + 1, u32(rho_strlen(c_rest)) - u32(c_at) - 1)
+            list = list + "<li><code>" + escape_html(tsv_field(c_line, 0)) + "</code> <code>" + escape_html(tsv_field(c_line, 1)) + "</code></li>"
+        }
+        let target: string = dev_plan_value(plan, "target")
+        var place_text: string = keeper_t1(req, "dev.commit_on_branch", "branch", target)
+        if rho_str_eq(dev_plan_value(plan, "mode"), "plumbing") {
+            place_text = keeper_t2(req, "dev.commit_to_branch", "branch", target, "current", dev_plan_value(plan, "current"))
+        }
+        let ids: string = dev_commit_ids(dev_change_ids(rho_read_text(dev_state() + "/changes.txt"), repo), changes)
+        let identity: string = dev_git_identity(dir)
+        content = content + "<ul class=\"dev-list dev-changes\">" + list + "</ul>" +
+            "<p>" + escape_html(place_text) + "</p>" +
+            "<p><small>" + escape_html(keeper_t2(req, "dev.commit_as", "who", tsv_field(identity, 0) + " <" + tsv_field(identity, 1) + ">", "ids", str_replace(ids, ",", ", "))) + "</small></p>" +
+            dev_identity_note(req, repos, repo)
+        if maintainer {
+            content = content + "<form method=\"post\" action=\"/developer/commit\" class=\"dev-commit-form\">" + forms_csrf_field() +
+                "<input type=\"hidden\" name=\"repo\" value=\"" + escape_html(repo) + "\">" +
+                "<input type=\"hidden\" name=\"changes\" value=\"" + escape_html(dev_fingerprint(changes)) + "\">" +
+                "<label class=\"check\"><input type=\"checkbox\" name=\"confirm\" value=\"yes\" required> " + i18n_t(req, "dev.commit_confirm") + "</label>" +
+                "<button type=\"submit\">" + i18n_t(req, "dev.commit") + "</button></form>"
+        }
+        content = content + "</section>"
+    }
+    return dev_page(req, "commit", title, content)
+}
+
+// @req KEEP-DEV-0005
+fn developer_commit_post(req: Request) Response {
+    if !dev_maintainer(req) {
+        return dev_refused(req)
+    }
+    let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return dev_csrf_refused(req)
+    }
+    if !rho_str_eq(form_field(body, "confirm"), "yes") {
+        return dev_commit_page(req, dev_bad(req, "dev.commit_unconfirmed"))
+    }
+    let missing: string = dev_missing(req)
+    if missing != "" {
+        return dev_unavailable(req, "commit", missing)
+    }
+    let repos: string = dev_read("list\n")
+    let repo: string = str_trim(form_field(body, "repo"))
+    if !dev_repo_known(repos, repo) {
+        return dev_commit_page(req, dev_bad(req, "dev.bad_repo"))
+    }
+    let dir: string = dev_repo_dir(repos, repo)
+    rho_lock("developer")
+    let plan: string = dev_git_plan(dir)
+    let changes: string = dev_plan_changes(plan)
+    if dev_plan_value(plan, "error") != "" || changes == "" || !rho_str_eq(dev_fingerprint(changes), form_field(body, "changes")) {
+        rho_unlock("developer")
+        return dev_commit_page(req, dev_bad(req, "dev.commit_moved"))
+    }
+    let log: string = rho_read_text(dev_state() + "/changes.txt")
+    let ids: string = dev_commit_ids(dev_change_ids(log, repo), changes)
+    let answer: string = first_line(dev_git_commit(dir, plan, dev_commit_message(ids, changes)))
+    if rho_str_starts_with(answer, "committed\t") {
+        ignore_bool(rho_write_text(dev_state() + "/changes.txt", dev_change_log_without(rho_read_text(dev_state() + "/changes.txt"), repo)))
+    }
+    rho_unlock("developer")
+    if !rho_str_starts_with(answer, "committed\t") {
+        return dev_commit_page(req, "<div class=\"notice bad\" id=\"dev-error\">" + escape_html(keeper_t1(req, "dev.commit_failed", "why", tsv_field(answer, 1))) + "</div>")
+    }
+    let branch: string = tsv_field(answer, 1)
+    let commit: string = tsv_field(answer, 2)
+    info("keeper", "developer: " + people_subject(req) + " committed " + ids + " in " + repo + " to " + branch + " (" + commit + ")")
+    var done: string = keeper_t3(req, "dev.committed_on", "repo", repo, "branch", branch, "commit", rho_str_slice(commit, 0, 12))
+    if rho_str_eq(tsv_field(answer, 3), "plumbing") {
+        done = keeper_t3(req, "dev.committed_to", "repo", repo, "branch", branch, "commit", rho_str_slice(commit, 0, 12))
+    }
+    return dev_commit_page(req, "<div class=\"notice\" id=\"dev-done\">" + escape_html(done) + "</div>")
+}

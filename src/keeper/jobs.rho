@@ -103,6 +103,7 @@ fn job_ids() string {
 // than half a minute ago and nothing holds its application's lock (the job was
 // killed, the machine restarted, or a second start lost the race for the lock).
 // A stale job is marked failed, so the application is not busy for ever.
+// @req KEEP-APPS-0008
 fn job_stale(id: string, name: string) bool {
     let started: u32 = rho_int_from_str(job_meta(id, 2))
     let now: u32 = auth_now()
@@ -128,6 +129,7 @@ fn job_running_for(name: string) string {
         if rho_str_eq(job_meta(id, 0), name) && rho_str_eq(job_status(id), "running") && !job_stale(id, name) {
             return id
         }
+        job_settle(id)
     }
     return ""
 }
@@ -166,10 +168,12 @@ fn job_health_lines(name: string) string {
 // kept by app_release_lines) is put back in use and restarted, and the new one
 // is marked .failed — so a bad build does not leave the application down, with
 // systemd restarting it in a loop.
+// @req KEEP-APPS-0010
 fn job_back_out_lines(name: string) string {
     let home: string = shell_quote(app_home(name))
     let unit: string = shell_quote(app_unit_name(name) + ".service")
     return "back_out() {\n" +
+        "  : > \"$(dirname \"$STATUS\")/backed_out\"\n" +
         "  journalctl --user -u " + unit + " -n 30 --no-pager -o short-iso || true\n" +
         "  if [ -n \"$PREV\" ] && [ -d \"$PREV\" ]; then\n" +
         "    touch \"$REL/.failed\"\n" +
@@ -183,6 +187,7 @@ fn job_back_out_lines(name: string) string {
 
 // job_health_or_back waits for an application as job_health_lines does, and
 // backs a release that does not answer out of use.
+// @req KEEP-APPS-0010
 fn job_health_or_back(name: string) string {
     let port: string = app_port_of(name)
     if port == "" {
@@ -212,6 +217,7 @@ fn job_build_lines(name: string) string {
 // job_start writes a job and starts it in the background. `body` is the shell
 // that does the work, with `finish <status> [reason]` to end it. It answers the
 // job's id, or "" when the application is already busy.
+// @req KEEP-APPS-0008
 fn job_start(name: string, action: string, body: string) string {
     if job_running_for(name) != "" {
         return ""
@@ -271,6 +277,7 @@ fn job_start_built(name: string) string {
 // job_rollback puts the release before the one in use back in use and restarts
 // the application on it; it answers the job's id, or "" when the application is
 // busy. With no earlier release it says so and changes nothing.
+// @req KEEP-APPS-0011
 fn job_rollback(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
     let home: string = shell_quote(app_home(name))
@@ -285,6 +292,57 @@ fn job_rollback(name: string) string {
         "echo \"Release $(basename \"$prev\") is in use again (was $(basename \"$cur\")).\"\n" +
         "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
         job_health_lines(name))
+}
+
+// job_alert_words is what an alert says about a failed job, or "" when the
+// failure is not one to raise: a job that starts or rolls back an application,
+// or a redeploy that got as far as restarting it and was backed out, leaves the
+// application other than the person asked for; a build, or a redeploy whose
+// build failed, touches nothing that runs, and the job says so on its own.
+// @req KEEP-PROV-0001
+fn job_alert_words(id: string) string {
+    if !rho_str_eq(job_status(id), "failed") {
+        return ""
+    }
+    let name: string = job_meta(id, 0)
+    let action: string = job_meta(id, 1)
+    var what: string = ""
+    if rho_str_eq(action, "start") {
+        what = "could not start"
+    } else if rho_str_eq(action, "rollback") {
+        what = "could not be rolled back"
+    } else if rho_str_eq(action, "redeploy") && rho_path_exists(job_dir(id) + "/backed_out") {
+        what = "could not be redeployed"
+    }
+    if what == "" {
+        return ""
+    }
+    return "Application " + name + " " + what + ": " + job_reason(id)
+}
+
+// job_settle says a job that ended once: to every open page, through the shared
+// notifications module, to the keeper's events, and — when it failed in a way
+// job_alert_words names — through the alert channels. The `announced` marker in
+// the job's folder is what keeps it to once, whichever page or request sees the
+// job end first.
+fn job_settle(id: string) void {
+    let status: string = job_status(id)
+    if rho_str_eq(status, "running") || status == "" || rho_path_exists(job_dir(id) + "/announced") {
+        return
+    }
+    ignore_bool(rho_write_text(job_dir(id) + "/announced", "\n"))
+    let words: string = job_meta(id, 0) + ": " + job_meta(id, 1)
+    if rho_str_eq(status, "failed") {
+        notification_live_event("err", words + " failed — " + job_reason(id))
+        keeper_event("job.failed", job_meta(id, 0), words + " failed — " + job_reason(id))
+        let alert_words: string = job_alert_words(id)
+        if alert_words != "" {
+            ignore_u32(keeper_alert("ERROR", alert_words, "app=" + job_meta(id, 0) + ",job=" + id))
+        }
+    } else {
+        notification_live_event("ok", words + " done")
+        keeper_event("job.done", job_meta(id, 0), words + " done")
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -332,19 +390,7 @@ fn jobs_strip(req: Request) string {
         var id: string = rest
         if at < 0 { rest = "" } else { id = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
         let status: string = job_status(id)
-        // A job that ended is said once, to every open page, through the shared
-        // notifications module.
-        if !rho_str_eq(status, "running") && status != "" && !rho_path_exists(job_dir(id) + "/announced") {
-            ignore_bool(rho_write_text(job_dir(id) + "/announced", "\n"))
-            let words: string = job_meta(id, 0) + ": " + job_meta(id, 1)
-            if rho_str_eq(status, "failed") {
-                notification_live_event("err", words + " failed — " + job_reason(id))
-                keeper_event("job.failed", job_meta(id, 0), words + " failed — " + job_reason(id))
-            } else {
-                notification_live_event("ok", words + " done")
-                keeper_event("job.done", job_meta(id, 0), words + " done")
-            }
-        }
+        job_settle(id)
         let name: string = escape_html(job_meta(id, 0))
         let link: string = "<a href=\"/jobs/" + escape_html(id) + "\">"
         if rho_str_eq(status, "running") {
@@ -390,6 +436,7 @@ fn job_page(req: Request) Response {
     return page(req, i18n_t(req, "jobs.job") + " " + id, body)
 }
 
+// @req KEEP-0015
 fn job_log_endpoint(req: Request) Response {
     let id: string = param(req, "id")
     if !job_id_ok(id) {

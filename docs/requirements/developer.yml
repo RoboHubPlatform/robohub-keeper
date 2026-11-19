@@ -1,0 +1,126 @@
+# The Developer section: src/keeper/developer.rho, developer_git.rho and
+# developer_text.rho, over `rho req`.
+level: SUB
+prefix: KEEP-DEV
+title: Developer section
+requirements:
+  - id: KEEP-DEV-0001
+    title: The section reads rho req's records, never its other output
+    statement: >
+      The Developer section shall read requirements, decisions, the trace and the
+      check from `rho req … --tsv` run over the whole workspace from the
+      orchestrator, taking as data only lines whose first field is a record kind
+      and showing the tool's errors as errors.
+    rationale: A line of standard error in the same stream must never be taken for a requirement.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [rho-req]
+    decided_by: [ADR-0005]
+
+  - id: KEEP-DEV-0002
+    title: Only a maintainer changes anything
+    statement: >
+      Every change in the section shall be a POST carrying the form's CSRF token
+      from a maintainer — an admin, a person granted `keeper:maintainer`, or a
+      ticket with every scope — read from the people store on every request, and
+      shall be answered 403 otherwise.
+    rationale: Requirements and decisions are the maintainer's to change; taking the grant away takes effect at once.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [maintainer, least-privilege]
+
+  - id: KEEP-DEV-0003
+    title: Nothing a request carries becomes a path or an option
+    statement: >
+      A requirement id shall be `PREFIX-NNNN`, a decision `ADR-NNNN` or
+      `<repo>:ADR-NNNN`, a status, verification and tag a value `rho req` knows,
+      and a repository one of the family `rho req` found, before any reaches the
+      tool, and a repository's folder shall be the one the tool reported.
+    rationale: The section runs programs on a maintainer's behalf; a typed value must not choose a file or a flag.
+    satisfies: [KEEP-0012, KEEP-0013]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [validation, security]
+
+  - id: KEEP-DEV-0004
+    title: Changes are made by rho req's own commands
+    statement: >
+      New requirements, edits (only the fields the form changed), statuses
+      (without `--force`), new decisions, decision statuses and supersessions
+      shall be made by the matching `rho req` command, and a refusal shall be
+      shown on the form with what was typed and nothing written.
+    rationale: The tool is the one authority on the files; the section never writes YAML of its own.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [rho-req]
+    decided_by: [ADR-0005]
+
+  - id: KEEP-DEV-0005
+    title: A commit carries exactly the section's files and is never pushed
+    statement: >
+      A commit from the section shall carry only the files under
+      `docs/requirements/` and `docs/architecture/` it lists, refused when they
+      are no longer those the page showed; on the default branch or a detached
+      HEAD it shall be built on a temporary index onto the branch
+      `requirements/<yyyy-mm-dd>` (or the next free `-N`) leaving the working copy
+      and index untouched, on another branch it shall be `git commit -- <files>`,
+      and it shall never be pushed.
+    rationale: The maintainer's other work in progress is never swept into a commit, and publishing stays a person's decision.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [git, commit]
+    decided_by: [ADR-0005]
+
+  - id: KEEP-DEV-0006
+    title: An identity CI would refuse is said
+    statement: >
+      After an approval and on the Commit page the section shall say when the git
+      identity a repository commits with is not in the `MAINTAINERS.yml` that
+      governs it.
+    rationale: An approval committed by someone CI does not know is refused there; better to know first.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [maintainers, governance]
+
+  - id: KEEP-DEV-0007
+    title: The export is rho req's Markdown
+    statement: >
+      The Export page shall show `rho req render --workspace` rendered, dropping
+      only its raw HTML anchors, and offer the same Markdown as a download.
+    rationale: The requirements can leave the keeper as a document without being committed.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [export]
+
+  - id: KEEP-DEV-0008
+    title: Without rho req the section says how to install it
+    statement: >
+      When `rho req` cannot be run the section shall say so and how to install
+      it, and change nothing.
+    rationale: A missing component is a page that helps, not an error.
+    satisfies: [KEEP-0012]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [rho-req]

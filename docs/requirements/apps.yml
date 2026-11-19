@@ -1,0 +1,258 @@
+# The catalogue, installing, the units, jobs, releases, updates, the proxy and
+# the menu: src/keeper/apps.rho, catalog.rho, supervisor.rho, jobs.rho,
+# packages.rho, api.rho and project.yml's app_proxy.
+level: SUB
+prefix: KEEP-APPS
+title: Applications
+requirements:
+  - id: KEEP-APPS-0001
+    title: The catalogue is what the keeper runs
+    statement: >
+      The keeper shall keep one record per application — origin, location,
+      version, port and unit — in `installed.yml` under its state folder, and its
+      pages and API shall list applications from that catalogue.
+    rationale: Scanning folders on every page made what the keeper runs depend on where things happen to be.
+    satisfies: [KEEP-0004]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [catalogue]
+    decided_by: [ADR-0001]
+
+  - id: KEEP-APPS-0002
+    title: Install takes the registry, the machine, a git URL or a folder
+    statement: >
+      An admin's install shall accept a registry package as `name` or
+      `name@version`, an application found on the machine, a git URL (cloned under
+      the applications home) or a folder (left where it is); it shall refuse a
+      form without the token of a form the keeper drew, a name already in the
+      catalogue, and anything whose manifest is not `kind: keeper-hosted`.
+    rationale: An install builds and runs what it names, so it must come from the keeper's own page and be an application.
+    satisfies: [KEEP-0004]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [install]
+
+  - id: KEEP-APPS-0003
+    title: An application gets its manifest's port or the next free one
+    statement: >
+      An installed application shall get the port its manifest names unless
+      another catalogued application or the keeper has it, and otherwise the
+      first port from 8500 that no catalogued application has and nothing answers
+      on.
+    rationale: Two applications must not fight over a port.
+    satisfies: [KEEP-0004]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [ports]
+
+  - id: KEEP-APPS-0004
+    title: The unit is the keeper's, written from the manifest
+    statement: >
+      The keeper shall write each application's systemd user unit with `After=`
+      and `Wants=` for the catalogued applications its `deploy.depends` names,
+      `Restart=on-failure` with `RestartSec=5`, `NoNewPrivileges=yes`,
+      `EnvironmentFile=` its `app.env` and `ExecStart=` the program of the
+      release in use, and shall write it again before a start or restart when it
+      no longer says that.
+    rationale: A moved folder or a new port is picked up without anyone editing a unit.
+    satisfies: [KEEP-0004, KEEP-0006]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [supervision, systemd]
+    decided_by: [ADR-0001]
+
+  - id: KEEP-APPS-0005
+    title: An application is told its contract in an owner-only file
+    statement: >
+      The keeper shall write each application's environment to an owner-only
+      `app.env` in its workspace — its name, workspace, `RHO_HTTP_ADDR`
+      (`127.0.0.1:<port>`, or `:<port>` when its manifest says `deploy.listen:
+      lan`), a random secret of at least 32 hex digits made once, the keeper's
+      URL and its client — with HOME and PATH quoted so systemd reads each whole.
+    rationale: What an application needs to know is told once, in a file no other user reads.
+    satisfies: [KEEP-0004, KEEP-0006]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [environment, secrets]
+
+  - id: KEEP-APPS-0006
+    title: An application's state comes from systemd and its health probe
+    statement: >
+      The keeper shall show each application as running (active and answering
+      `/healthz` or its first page), starting, failed, stopped, not built or no
+      service yet.
+    rationale: One word a person can act on, from what systemd and the application say.
+    satisfies: [KEEP-0004]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [supervision]
+
+  - id: KEEP-APPS-0007
+    title: A start starts what an application depends on first
+    statement: >
+      Starting an application shall first refuse it when a required program is
+      missing, then start each catalogued application its `deploy.depends` names
+      that is not running, refusing a dependency cycle, and shall build and start
+      an application that was never built as a job.
+    rationale: Aquarium without Mesh, or without the program it needs, fails in a way its journal says badly.
+    satisfies: [KEEP-0004, KEEP-0007]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [supervision, dependencies]
+
+  - id: KEEP-APPS-0008
+    title: Jobs run one at a time per application
+    statement: >
+      Building, redeploying, rolling back, installing a dependency and a start
+      that needs a build shall run as background jobs with a log and an outcome,
+      at most one at a time per application under a lock; a job still marked
+      running more than 30 seconds after it started while nothing holds the lock
+      shall be marked failed; the 40 newest jobs shall be kept.
+    rationale: Two builds of one application at once corrupt each other; a killed job must not keep it busy for ever.
+    satisfies: [KEEP-0004, KEEP-0015]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [jobs]
+
+  - id: KEEP-APPS-0009
+    title: A redeploy makes a release and switches to it in one rename
+    statement: >
+      A redeploy of an application built from a folder shall build it, copy its
+      program, `module.yml`, `static/` and the files `deploy.files` names into a
+      new release `<version>-<time>`, switch `current` to it in one rename and
+      restart the unit, and shall keep the three newest releases, never removing
+      the one in use or the one before it; a build that fails shall leave
+      `current` as it was.
+    rationale: What runs is never the folder a person is editing.
+    satisfies: [KEEP-0005]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [releases]
+    decided_by: [ADR-0002]
+
+  - id: KEEP-APPS-0010
+    title: A release that does not answer is taken back out of use
+    statement: >
+      When a new release cannot be restarted or does not answer `/healthz` within
+      40 seconds, the keeper shall mark it `.failed`, put the release that was in
+      use back, restart it, and end the job failed saying which release is back.
+    rationale: A bad build must not leave the application down with systemd restarting it in a loop.
+    satisfies: [KEEP-0005]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [releases, health]
+    decided_by: [ADR-0002]
+
+  - id: KEEP-APPS-0011
+    title: Roll back goes to the release before the one in use
+    statement: >
+      Roll back shall put in use the release made before the one in use, by the
+      time in its name, and restart the application, so that a second roll back
+      goes one release further back.
+    rationale: Going back must be one action, and repeating it must keep going back.
+    satisfies: [KEEP-0005]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [releases, rollback]
+    decided_by: [ADR-0002]
+
+  - id: KEEP-APPS-0012
+    title: Newer registry versions are offered and installed beside the old
+    statement: >
+      For an application installed from the Rho registry, the keeper shall ask the
+      registry for a newer version at most once an hour, offer it when there is
+      one, and on update install it, point the catalogue at it and restart the
+      application, leaving the previous version installed.
+    rationale: Staying current is one action, and the old version is there to go back to.
+    satisfies: [KEEP-0005]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [updates, registry]
+
+  - id: KEEP-APPS-0013
+    title: A staged artifact is used only when it verifies
+    statement: >
+      A redeploy shall use the newest archive for the application in
+      `incoming/` only when `rho artifact verify` accepts it against
+      `ROBOHUB_ARTIFACT_PUBKEY`, or by checksum alone when
+      `ROBOHUB_ARTIFACT_ALLOW_UNSIGNED=1`, and when the artifact names a health
+      path that does not answer within its timeout (20 seconds by default) the
+      previous program shall be put back and restarted.
+    rationale: Whoever can drop a file in a folder must not thereby run code.
+    satisfies: [KEEP-0005]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [artifacts, updates, security]
+
+  - id: KEEP-APPS-0014
+    title: Uninstall removes the program and keeps the data
+    statement: >
+      Uninstalling shall stop the application and remove its unit, its client,
+      its menu entry, its catalogue record, its releases, `app.env` and
+      `app.secret`, keep its workspace, and delete its folder only when the keeper
+      cloned it under the applications home; the keeper shall refuse to uninstall
+      itself.
+    rationale: Reinstalling starts afresh without losing history, and a person's checkout is never deleted.
+    satisfies: [KEEP-0004]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [uninstall, data]
+
+  - id: KEEP-APPS-0015
+    title: The proxy keeps the keeper's session from applications
+    statement: >
+      The keeper shall write `proxy.txt` (`name port` per line) whenever its list
+      of hosted applications changes, and serve `/app/<name>/` from that port
+      without forwarding the `keeper_session` cookie, with the application's
+      cookies scoped to its prefix and its links and form targets rewritten onto
+      it.
+    rationale: Cookies are scoped by host, not port; through the proxy no application sees another's or the admin's.
+    satisfies: [KEEP-0003]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [proxy, security]
+
+  - id: KEEP-APPS-0016
+    title: The menu and the switcher lead to every application
+    statement: >
+      An admin shall add an application to and remove it from the keeper's menu,
+      kept in `menu.txt`, and `/api/v1/switcher` shall list the applications with
+      their `/app/<name>/` paths without a session, readable cross-origin only by
+      pages of the keeper's own host.
+    rationale: Every application's top bar can show the switcher without another site reading it.
+    satisfies: [KEEP-0003]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [menu, switcher]

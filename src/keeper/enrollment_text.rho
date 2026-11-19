@@ -61,6 +61,7 @@ fn enrollment_digits(text: string) bool {
 // enrollment_token_problem is why a token line cannot enroll `device` at `now`,
 // or "" when it can. A token names its device and its expiry, and the placement
 // it carries is a placement: the node's request does not get to choose one.
+// @req KEEP-ENROLL-0001
 fn enrollment_token_problem(line: string, device: string, now: u32) string {
     if line == "" {
         return "unknown enrollment token"
@@ -98,6 +99,7 @@ fn enrollment_number_same(a: string, b: string) bool {
 // than its token's. A request that names none takes the token's; one that names
 // another is refused rather than corrected, so a node configured for the wrong
 // place hears so.
+// @req KEEP-ENROLL-0002
 fn enrollment_placement_differs(line: string, project: string, area: string, node: string) bool {
     if project != "" && !rho_str_eq(project, field(line, 2)) {
         return true
@@ -113,6 +115,7 @@ fn enrollment_placement_differs(line: string, project: string, area: string, nod
 
 // enrollment_mark_line is a token line with the used mark, keeping the flags
 // field where it is.
+// @req KEEP-ENROLL-0004
 fn enrollment_mark_line(line: string) string {
     if enrollment_token_used(line) {
         return line
@@ -141,6 +144,7 @@ fn enrollment_mark_line(line: string) string {
 /* -------------------------------------------------------------------------- */
 
 // secret_same compares two secrets without stopping at the first difference.
+// @req KEEP-ENROLL-0007
 fn secret_same(a: string, b: string) bool {
     let la: u32 = u32(rho_strlen(a))
     let lb: u32 = u32(rho_strlen(b))
@@ -172,6 +176,7 @@ fn credential_hashed(stored: string) bool {
 
 // credential_hash is a credential (hex) kept under a salt (hex):
 // `s1$<salt>$HMAC-SHA256(salt, credential)`, or "" when either is not hex.
+// @req KEEP-ENROLL-0005
 fn credential_hash(salt: string, credential: string) string {
     let mac: string = rho_hmac_sha256_hex(salt, credential)
     if rho_strlen(mac) != 64 || rho_strlen(salt) == 0 {
@@ -194,6 +199,7 @@ fn credential_salt(stored: string) string {
 // credential_matches is whether a presented credential is the stored one: a
 // salted hash is recomputed and compared, an entry from before hashing is
 // compared as it is. Both comparisons take as long whatever matched.
+// @req KEEP-ENROLL-0007
 fn credential_matches(stored: string, presented: string) bool {
     if presented == "" || stored == "" {
         return false
@@ -227,6 +233,7 @@ const RATE_SLOTS: u32 = 1021
 // proxy appended to X-Forwarded-For (its rightmost entry), else X-Real-IP, else
 // the connection itself ("direct"). A caller can write any of these headers,
 // which is why every endpoint also has a budget for all callers together.
+// @req KEEP-ENROLL-0006
 fn rate_client(forwarded: string, real: string) string {
     var value: string = ""
     if forwarded != "" {

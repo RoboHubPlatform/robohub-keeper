@@ -101,8 +101,26 @@ test fn whitespace_and_hex_are_values() void {
     print("[PASS] whitespace_and_hex_are_values\n")
 }
 
+// A person's name is lowercase, so two accounts cannot differ only by case.
+// @verifies KEEP-AUTH-0015
+test fn a_person_is_named_in_lowercase() void {
+    check(person_name_ok("ana"), "a lowercase name")
+    check(person_name_ok("ana.pop-2_b"), "digits, dots, dashes and underscores")
+    check(!person_name_ok("Ana"), "a capital letter")
+    check(!person_name_ok("ANA"), "capitals only")
+    check(!person_name_ok(""), "an empty name")
+    check(!person_name_ok("../ana"), "a path")
+    check(!person_name_ok("2ana"), "a digit first")
+    check(!person_name_ok(".ana"), "a dot first")
+    check(person_name_ok("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv"), "48 characters")
+    check(!person_name_ok("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvw"), "49 characters")
+    check(rho_str_eq(person_name_fold("Ana.POP"), "ana.pop"), "a name folds to lowercase")
+    print("[PASS] a_person_is_named_in_lowercase\n")
+}
+
 fn main() void {
     names_cannot_escape_the_applications_dir()
+    a_person_is_named_in_lowercase()
     slugs_keep_the_name_a_person_sees()
     a_git_url_names_the_repository()
     a_source_is_a_git_url_or_a_path()

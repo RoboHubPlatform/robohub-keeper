@@ -95,6 +95,7 @@ fn packages_latest_in(report: string, name: string) string {
 
 // package_update is the newer version a published application could update to,
 // or "". The registry is asked at most once an hour.
+// @req KEEP-APPS-0012
 fn package_update(name: string) string {
     if !rho_str_eq(catalog_get(name, "origin"), "registry") {
         return ""
@@ -132,6 +133,7 @@ fn package_path(name: string, version: string) string {
 // package_fetch installs a version of a published application into the local
 // registry when it is not there, selects it, and answers where it is, or "!" and
 // why not. An empty version is the newest the registry has.
+// @req KEEP-PROV-0001
 fn package_fetch(lang: string, name: string, wanted: string) string {
     if !valid_name(name) || (wanted != "" && !arg_ok(wanted)) {
         return "!" + keeper_say(lang, "packages.not_a_name")
@@ -147,10 +149,12 @@ fn package_fetch(lang: string, name: string, wanted: string) string {
     if path == "" {
         let report: string = apps_report("packages-install-" + name)
         if rho_exec_args("rho", "module\ninstall\n" + name + "@" + version + "\n", report) != 0 {
+            ignore_u32(keeper_alert("ERROR", "Package " + name + "@" + version + " could not be installed: " + first_line(rho_read_text(report)), "app=" + name))
             return "!" + keeper_say2(lang, "packages.install_failed", "package", name + "@" + version, "reason", first_line(rho_read_text(report)))
         }
         path = package_path(name, version)
         if path == "" {
+            ignore_u32(keeper_alert("ERROR", "Package " + name + "@" + version + " could not be installed: the registry put it somewhere the keeper cannot find", "app=" + name))
             return "!" + keeper_say1(lang, "packages.misplaced", "package", name + "@" + version)
         }
     }
@@ -162,6 +166,7 @@ fn package_fetch(lang: string, name: string, wanted: string) string {
 // package_apply_update updates a published application to a newer version: the
 // catalogue points at it, the unit is written again and the application
 // restarted. The old version stays installed, so going back is selecting it.
+// @req KEEP-APPS-0012
 fn package_apply_update(lang: string, name: string) string {
     let latest: string = package_update(name)
     if latest == "" {

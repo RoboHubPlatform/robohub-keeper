@@ -40,6 +40,9 @@ include "keeper/settings.rho"
 include "keeper/enrollment_text.rho"
 include "keeper/enrollment.rho"
 include "keeper/nodes.rho"
+include "keeper/developer_text.rho"
+include "keeper/developer_git.rho"
+include "keeper/developer.rho"
 include "htmx"
 include "ui"
 include "notifications"
@@ -145,6 +148,24 @@ route GET "/app-modules/settings" => app_module_settings_page
 route POST "/app-modules/settings" => app_module_settings_save
 route POST "/app-modules/install" => app_modules_install
 route POST "/app-modules/uninstall" => app_modules_uninstall
+route GET "/developer" => developer_home
+route GET "/developer/requirements" => developer_requirements
+route GET "/developer/requirements/{id}" => developer_requirement
+route GET "/developer/requirements/{id}/edit" => developer_edit_form
+route POST "/developer/requirements/{id}/edit" => developer_edit_post
+route POST "/developer/requirements/{id}/status" => developer_status_post
+route GET "/developer/new" => developer_new_form
+route POST "/developer/new" => developer_new_post
+route GET "/developer/adr" => developer_adrs
+route POST "/developer/adr/new" => developer_adr_new
+route GET "/developer/adr/{repo}/{id}" => developer_adr
+route POST "/developer/adr/{repo}/{id}/{action}" => developer_adr_action
+route GET "/developer/trace" => developer_trace
+route GET "/developer/check" => developer_check
+route GET "/developer/export" => developer_export
+route GET "/developer/export/requirements.md" => developer_export_download
+route GET "/developer/commit" => developer_commit
+route POST "/developer/commit" => developer_commit_post
 
 // modules_page is where the registry was: it is part of the Applications page now.
 fn modules_page(req: Request) Response {
@@ -230,6 +251,9 @@ fn install_page(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
     }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
+    }
     let title: string = i18n_t(req, "page.install")
     let name: string = str_trim(form_field(request_body(req), "module"))
     let entry: string = registry_entry(name)
@@ -258,6 +282,9 @@ fn install_page(req: Request) Response {
 fn uninstall_page(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let title: string = i18n_t(req, "page.uninstall")
     let name: string = str_trim(form_field(request_body(req), "module"))
@@ -288,6 +315,7 @@ fn docs_page(req: Request) Response {
     return page(req, i18n_t(req, "page.docs"), body)
 }
 
+// @req KEEP-DOCS-0001
 fn doc_page(req: Request) Response {
     let path: string = param(req, "path")
     // A page is a name under the docs tree: never a way out of it.
@@ -311,12 +339,25 @@ fn doc_page(req: Request) Response {
     if content == "" {
         content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + path + "/docs/index.md")
     }
+    // A tree that keeps a module's pages in docs/doc/, beside its requirements
+    // and architecture decisions, serves them at the same address.
+    let page_name: string = rho_str_slice(full_path, 5, u32(rho_strlen(full_path)) - 5)
+    if content == "" {
+        content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/docs/doc/" + page_name + ".md")
+    }
+    if content == "" {
+        content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/docs/doc/" + page_name + "/index.md")
+    }
+    if content == "" {
+        content = docs_render_source(robohub_root() + "/" + DOCS_TREE + "/" + path + "/docs/doc/index.md")
+    }
     if content == "" {
         return page_status(req, status_not_found(), i18n_t(req, "page.not_found"), "<p>" + escape_html(keeper_t1(req, "docs.not_built", "path", path)) + "</p><p><a href='/docs'>" + i18n_t(req, "common.all_docs") + "</a></p>")
     }
     return page(req, path, content)
 }
 
+// @req KEEP-DOCS-0002
 fn docs_rows() string {
     // The pages the store holds: path, title and section, one per line.
     let listing: string = docs_list(robohub_root() + "/" + DOCS_TREE)
@@ -357,6 +398,16 @@ fn docs_rows() string {
         // docs/ as a directory. Strip the docs/ segment, keeping what is
         // before and after it.
         var link: string = path
+        // A module's pages may sit in docs/doc/ rather than docs/: the doc/
+        // segment is dropped first, so either is served at the same address.
+        if rho_str_starts_with(link, "docs/doc/") {
+            link = "docs/" + rho_str_slice(link, 9, u32(rho_strlen(link)) - 9)
+        } else {
+            let doc_pos: i32 = rho_str_index_of(link, "/docs/doc/")
+            if doc_pos >= 0 {
+                link = rho_str_slice(link, 0, u32(doc_pos)) + "/docs/" + rho_str_slice(link, u32(doc_pos) + 10, u32(rho_strlen(link)) - u32(doc_pos) - 10)
+            }
+        }
         // Strip docs/ from the beginning (orchestrator's own docs)
         if rho_str_index_of(link, "docs/") == 0 {
             link = rho_str_slice(link, 5, u32(rho_strlen(link)) - 5)
@@ -459,7 +510,7 @@ fn module_rows(req: Request) string {
         let path: string = resolve_path(yaml.value(entry, "path"))
         var installed: string = i18n_t(req, "common.no")
         var version: string = ""
-        var badge: string = "<form method='post' action='/install'><input type='hidden' name='module' value='" + name + "'><button type='submit'>" + i18n_t(req, "common.install") + "</button></form>"
+        var badge: string = "<form method='post' action='/install'>" + forms_csrf_field() + "<input type='hidden' name='module' value='" + name + "'><button type='submit'>" + i18n_t(req, "common.install") + "</button></form>"
         if !valid_name(name) {
             continue
         }
@@ -468,7 +519,7 @@ fn module_rows(req: Request) string {
             version = yaml.value(path + "/module.yml", "module.version")
             badge = ""
             if fetched_by_keeper(path) {
-                badge = "<form method='post' action='/uninstall' onsubmit=\"" + keeper_confirm(req, "registry.uninstall_confirm") + "\"><input type='hidden' name='module' value='" + name + "'><button type='submit' class='danger'>" + i18n_t(req, "common.uninstall") + "</button></form>"
+                badge = "<form method='post' action='/uninstall' onsubmit=\"" + keeper_confirm(req, "registry.uninstall_confirm") + "\">" + forms_csrf_field() + "<input type='hidden' name='module' value='" + name + "'><button type='submit' class='danger'>" + i18n_t(req, "common.uninstall") + "</button></form>"
             }
         }
         let row: string = template_fill(template_get("module-row"), vars("name", name) + vars("role", role) + vars("version", version) + vars("installed", installed) + vars("badge", badge) + i18n_vars(req))

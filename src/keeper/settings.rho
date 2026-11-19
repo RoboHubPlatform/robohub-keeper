@@ -157,6 +157,7 @@ fn keeper_settings_page(req: Request) Response {
     return keeper_settings_page_message(req, "")
 }
 
+// @req KEEP-PROV-0002
 fn keeper_settings_save(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)

@@ -60,6 +60,7 @@ fn integration_service(path: string, key: string) string {
 
 // integration_listen is where the service listens: "127.0.0.1", or "0.0.0.0"
 // when an admin opened it to the network for devices.
+// @req KEEP-0010, KEEP-PROV-0005
 fn integration_listen(name: string) string {
     if rho_str_eq(str_trim(rho_read_text(integration_dir(name) + "/listen")), "lan") {
         return "0.0.0.0"
@@ -204,6 +205,7 @@ fn mqtt_topic_ok(topic: string) bool {
 // mqtt_write_files writes the broker's configuration, its users (hashed by
 // mosquitto_passwd) and their topics, and asks a running broker to read them
 // again. It answers "" or what went wrong.
+// @req KEEP-PROV-0005
 fn mqtt_write_files() string {
     let name: string = mqtt_name()
     if name == "" {
@@ -303,6 +305,7 @@ fn mqtt_failure_text(lang: string, failure: string) string {
 
 // mqtt_add_device adds a broker user for a device, allowed its own topic prefix,
 // and answers the password, or "!" and why not.
+// @req KEEP-PROV-0005
 fn mqtt_add_device(lang: string, device: string, prefix: string) string {
     if !valid_name(device) || prefix == "" || !mqtt_topic_ok(prefix) || rho_str_index_of(prefix, "#") >= 0 || rho_str_index_of(prefix, "+") >= 0 {
         return "!" + keeper_say(lang, "mqtt.device_bad")
@@ -362,7 +365,7 @@ fn mqtt_clients_body(req: Request, name: string) string {
     var out: string = "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.listens_on") + "</div><div class=\"rh-row\"><b>" + escape_html(listen) + "</b><span>" +
         escape_html(keeper_t1(req, "integrations.port", "port", catalog_get(name, "port"))) + "</span></div>" +
         "<div class=\"rh-actions\"><button type=\"button\" class=\"quiet small\" hx-post=\"/overview/app/" + escape_html(name) +
-        "/listen?to=" + other + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"" + escape_html(other_label) + "?\">" + escape_html(other_label) + "</button></div>" +
+        "/listen?to=" + other + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\"" + keeper_csrf_vals() + " hx-confirm=\"" + escape_html(other_label) + "?\">" + escape_html(other_label) + "</button></div>" +
         "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.applications") + "</div><div class=\"rh-row ok\"><b>keeper</b><span>" + i18n_t(req, "mqtt.keeper_reads") + "</span></div>"
     var apps: string = ""
     var rest: string = catalog_names()
@@ -390,13 +393,13 @@ fn mqtt_clients_body(req: Request, name: string) string {
         if field(line, 0) == "" { continue }
         devices = devices + "<div class=\"rh-row\"><b>" + escape_html(field(line, 0)) + "</b><span>" + escape_html(field(line, 1)) + "/#</span>" +
             "<button type=\"button\" class=\"danger small\" hx-post=\"/overview/app/" + escape_html(name) + "/remove-device?device=" +
-            escape_html(field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\" hx-confirm=\"" + escape_html(keeper_t1(req, "mqtt.remove_device_confirm", "device", field(line, 0))) + "\">" + i18n_t(req, "common.remove") + "</button></div>"
+            escape_html(field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\"" + keeper_csrf_vals() + " hx-confirm=\"" + escape_html(keeper_t1(req, "mqtt.remove_device_confirm", "device", field(line, 0))) + "\">" + i18n_t(req, "common.remove") + "</button></div>"
     }
     if devices == "" {
         devices = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.no_device") + "</p>"
     }
     return out + apps + "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.devices") + "</div>" + devices +
-        "<form class=\"rh-body\" style=\"padding:0\" hx-post=\"/overview/app/" + escape_html(name) + "/add-device\" hx-target=\"#ins\" hx-swap=\"innerHTML\">" +
+        "<form class=\"rh-body\" style=\"padding:0\" hx-post=\"/overview/app/" + escape_html(name) + "/add-device\" hx-target=\"#ins\" hx-swap=\"innerHTML\">" + forms_csrf_field() +
         "<label>" + i18n_t(req, "mqtt.device") + "<input name=\"device\" placeholder=\"shellyplugmgen3-a1b2\"></label>" +
         "<label>" + i18n_t(req, "mqtt.its_topics") + "<input name=\"prefix\" placeholder=\"shellyplugmgen3-a1b2\"><small>" + i18n_t(req, "mqtt.its_topics_help") + "</small></label>" +
         "<div class=\"rh-actions\"><button type=\"submit\" class=\"small\">" + i18n_t(req, "mqtt.add_device") + "</button></div></form>"

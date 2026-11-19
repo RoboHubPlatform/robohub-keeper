@@ -120,25 +120,6 @@ fn external_records() string {
     return out
 }
 
-// tsv_field is one tab-separated field of a line, or "" past the last.
-fn tsv_field(line: string, index: u32) string {
-    var rest: string = line
-    var i: u32 = 0
-    while i < index {
-        let at: i32 = rho_str_index_of(rest, "\t")
-        if at < 0 {
-            return ""
-        }
-        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
-        i = i + 1
-    }
-    let end: i32 = rho_str_index_of(rest, "\t")
-    if end < 0 {
-        return rest
-    }
-    return rho_str_slice(rest, 0, u32(end))
-}
-
 fn is_application(path: string) bool {
     return rho_path_exists(manifest_of(path)) &&
         (yaml.value(manifest_of(path), "module.kind") != "" || yaml.value(manifest_of(path), "application.kind") != "")
@@ -390,6 +371,7 @@ fn app_provision_client(name: string, path: string) string {
     return app_provision_client_with(name, path, false)
 }
 
+// @req KEEP-AUTH-0012
 fn app_provision_client_with(name: string, path: string, rotate: bool) string {
     if !auth_safe_name(name) {
         return ""
@@ -415,6 +397,7 @@ fn app_provision_client_with(name: string, path: string, rotate: bool) string {
 }
 
 // app_remove_client takes an application's client away with it.
+// @req KEEP-AUTH-0012
 fn app_remove_client(name: string) void {
     if !auth_safe_name(name) {
         return
@@ -610,6 +593,7 @@ fn keeper_proxy_file() string {
 
 // keeper_write_proxy writes the hosted applications and their ports for the
 // proxy, `name port` per line, when they changed.
+// @req KEEP-APPS-0015
 fn keeper_write_proxy(apps: string) void {
     var out: string = ""
     var rest: string = apps
@@ -683,6 +667,7 @@ fn keeper_nav(req: Request) string {
         "<h6>" + i18n_t(req, "nav.machine") + "</h6>" +
         keeper_rail_link(req, "/system", "⚙", i18n_t(req, "nav.system"), "") +
         keeper_rail_link(req, "/docs", "▧", i18n_t(req, "nav.docs"), "") +
+        keeper_rail_link(req, "/developer", "✎", i18n_t(req, "nav.developer"), "") +
         keeper_rail_link(req, "/settings", "⚑", i18n_t(req, "nav.settings"), "")
 }
 
@@ -745,6 +730,7 @@ fn app_actions(req: Request, name: string, path: string, origin: string) string 
         is_keeper = "true"
     }
     return template_fill(template_get("app-actions"),
+        vars("csrf", forms_csrf_field()) +
         vars("open", open_link(req, name, path)) +
         vars("name", name) +
         vars("origin", origin) +
@@ -868,6 +854,7 @@ fn keeper_app_log_path(name: string) string {
 
 // applications_log is what systemd recorded of an application: its output and
 // systemd's own lines about starting, failing and restarting it.
+// @req KEEP-0015
 fn applications_log(req: Request) Response {
     let name: string = str_trim(request_query_param(req, "name"))
     if !catalog_has(name) {
@@ -938,9 +925,13 @@ fn applications_page(req: Request) Response {
 /*  Actions                                                                   */
 /* -------------------------------------------------------------------------- */
 
+// @req KEEP-APPS-0016
 fn applications_menu(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
@@ -1002,6 +993,7 @@ fn app_start(lang: string, name: string) string {
 // starting each other for ever. The unit is written first when it is missing or
 // no longer describes the application; an application that was never built is
 // built and started by a job.
+// @req KEEP-APPS-0007
 fn app_start_chain(lang: string, name: string, chain: string) string {
     if !catalog_has(name) {
         return keeper_say1(lang, "common.no_such_application", "name", name)
@@ -1073,7 +1065,9 @@ fn app_stop(lang: string, name: string) string {
     if !rho_path_exists(app_unit_file(name)) {
         return keeper_say1(lang, "action.no_service", "name", name)
     }
+    // @req KEEP-PROV-0001
     if app_systemd("stop\n" + app_unit_name(name) + "\n", "stop-" + name) != 0 {
+        ignore_u32(keeper_alert("ERROR", "Application " + name + " could not be stopped", "app=" + name))
         return keeper_say1(lang, "action.stop_failed", "name", name)
     }
     info("keeper", "stopped application " + name)
@@ -1137,6 +1131,7 @@ fn app_artifact_incoming(name: string) string {
     return ""
 }
 
+// @req KEEP-APPS-0013
 fn app_artifact_verify(archive: string) u32 {
     let report: string = apps_report("artifact-verify")
     let key: string = getenv("ROBOHUB_ARTIFACT_PUBKEY")
@@ -1162,6 +1157,7 @@ fn app_artifact_link(binary: string, target: string) void {
 
 // app_update_artifact stages and swaps a signed artifact. "ok" means installed,
 // "" means no artifact was staged, and anything else is the failure message.
+// @req KEEP-APPS-0013
 fn app_update_artifact(lang: string, name: string, path: string) string {
     let archive: string = app_artifact_incoming(name)
     if archive == "" {
@@ -1251,6 +1247,7 @@ fn app_update_artifact(lang: string, name: string, path: string) string {
 // writes the unit for where the application is now and starts a job that builds
 // it, restarts it and waits for it to answer. A build that fails leaves the
 // running program alone.
+// @req KEEP-APPS-0009
 fn app_redeploy(lang: string, name: string) string {
     if !catalog_has(name) {
         return keeper_say1(lang, "common.no_such_application", "name", name)
@@ -1279,6 +1276,7 @@ fn app_redeploy(lang: string, name: string) string {
 
 // app_rollback puts the release before the one in use back in use, by a job that
 // restarts the application on it.
+// @req KEEP-APPS-0011
 fn app_rollback(lang: string, name: string) string {
     if !catalog_has(name) {
         return keeper_say1(lang, "common.no_such_application", "name", name)
@@ -1337,6 +1335,9 @@ fn applications_start(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
+    }
     let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_start(keeper_lang(req), name))
 }
@@ -1344,6 +1345,9 @@ fn applications_start(req: Request) Response {
 fn applications_stop(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_stop(keeper_lang(req), name))
@@ -1353,6 +1357,9 @@ fn applications_redeploy(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
+    }
     let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_redeploy(keeper_lang(req), name))
 }
@@ -1360,6 +1367,9 @@ fn applications_redeploy(req: Request) Response {
 fn applications_build(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_build_job(keeper_lang(req), name))
@@ -1369,6 +1379,9 @@ fn applications_restart(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
     }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
+    }
     let name: string = str_trim(form_field(request_body(req), "name"))
     return application_action(req, name, app_restart(keeper_lang(req), name))
 }
@@ -1377,9 +1390,13 @@ fn applications_restart(req: Request) Response {
 // goes, and its catalogue record. Its files go only when the keeper fetched them
 // itself; a checkout or a package is left where it is, and Install offers it
 // again.
+// @req KEEP-APPS-0014
 fn applications_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let name: string = str_trim(form_field(request_body(req), "name"))
     if !catalog_has(name) {
@@ -1420,6 +1437,7 @@ fn applications_uninstall(req: Request) Response {
 // applications_install adds an application: one found on the machine (`add`), a
 // git URL, which is cloned under apps_home(), or a folder, which stays where it
 // is. It is recorded in the catalogue, given a port and a unit, and started.
+// @req KEEP-APPS-0002
 fn applications_install(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)

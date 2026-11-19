@@ -1,0 +1,48 @@
+# What the machine needs: src/keeper/deps.rho, read from `rho doctor`.
+level: SUB
+prefix: KEEP-DEPS
+title: Machine dependencies
+requirements:
+  - id: KEEP-DEPS-0001
+    title: What an application needs is shown before it is installed
+    statement: >
+      Before an application is installed, and in its Dependencies tab, the keeper
+      shall show the programs its `system_deps` names as `rho doctor` finds them,
+      the Rho modules it names outside RoboHub's own, and the applications it
+      depends on and the services it calls, reusing a machine report for at most
+      120 seconds.
+    rationale: A person decides with what the application will need in front of them.
+    satisfies: [KEEP-0007]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [doctor, install]
+
+  - id: KEEP-DEPS-0002
+    title: A missing program is installed as a job, by name only
+    statement: >
+      Installing a missing program shall run `rho keeper install` for a
+      requirement the doctor currently reports missing, as a job of that
+      application, and the job shall fail unless the doctor reports it present
+      afterwards.
+    rationale: The keeper looks the requirement up again rather than running a command a request carried.
+    satisfies: [KEEP-0007]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [doctor, keeper-install]
+
+  - id: KEEP-DEPS-0003
+    title: The System page covers the whole machine
+    statement: >
+      The System page shall show the system dependencies of every catalogued
+      application and of every enabled toolchain module.
+    rationale: One page answers what this machine still lacks.
+    satisfies: [KEEP-0007]
+    status: proposed
+    verification: demonstration
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [doctor]

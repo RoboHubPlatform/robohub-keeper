@@ -230,7 +230,7 @@ fn overview_action(name: string, action: string, label: string, cls: string, con
         ask = " hx-confirm=\"" + escape_html(confirm) + "\""
     }
     return "<button type=\"button\" class=\"small " + cls + "\" hx-post=\"/overview/app/" + escape_html(name) + "/" + action +
-        "\" hx-target=\"#ins\" hx-swap=\"innerHTML\"" + ask + ">" + label + "</button>"
+        "\" hx-target=\"#ins\" hx-swap=\"innerHTML\"" + keeper_csrf_vals() + ask + ">" + label + "</button>"
 }
 
 // overview_environment is the application's app.env with the values of secrets
@@ -354,7 +354,7 @@ fn overview_inspector(req: Request, name: string, tab: string, notice: string) s
     if !is_keeper {
         foot = "<div class=\"rh-foot\"><form method=\"post\" action=\"/applications/uninstall\" onsubmit=\"return confirm(" +
             escape_html(json_string(keeper_t1(req, "overview.uninstall_confirm", "name", name))) + ")\"><input type=\"hidden\" name=\"name\" value=\"" + escape_html(name) +
-            "\"><button type=\"submit\" class=\"danger small\">" + i18n_t(req, "common.uninstall") + "</button></form></div>"
+            "\">" + forms_csrf_field() + "<button type=\"submit\" class=\"danger small\">" + i18n_t(req, "common.uninstall") + "</button></form></div>"
     }
     return head + tabs + "<div class=\"rh-body\">" + body + "</div>" + foot
 }
@@ -376,6 +376,9 @@ fn overview_inspector_endpoint(req: Request) Response {
 fn overview_action_endpoint(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let name: string = param(req, "name")
     let action: string = param(req, "action")

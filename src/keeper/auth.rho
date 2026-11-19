@@ -53,6 +53,7 @@ fn auth_dir() string {
 // is verified with. An application told where its issuer is (RHO_AUTH_URL)
 // fetches it from here, so no key is copied by hand. It is a public key: the
 // private one never leaves auth_dir().
+// @req KEEP-0001, KEEP-AUTH-0010
 fn auth_public_key(req: Request) Response {
     let path: string = auth_dir() + "/public.pem"
     if !rho_path_exists(path) {
@@ -133,6 +134,7 @@ fn auth_failures_file(name: string) string {
 
 // auth_locked is how many seconds the sign-in stays closed for a name after too
 // many wrong attempts, 0 when it is open. The file holds `count|time of the last`.
+// @req KEEP-AUTH-0002
 fn auth_locked(name: string) u32 {
     let line: string = auth_clean(rho_read_text(auth_failures_file(name)))
     let bar: i32 = rho_str_index_of(line, "|")
@@ -151,6 +153,7 @@ fn auth_locked(name: string) u32 {
     return last + AUTH_LOCK_SECONDS - now
 }
 
+// @req KEEP-AUTH-0002
 fn auth_failed(name: string) void {
     let file: string = auth_failures_file(name)
     let line: string = auth_clean(rho_read_text(file))
@@ -296,6 +299,7 @@ fn auth_loopback(host: string) bool {
 // (or this machine), on the application's port, under its route. A ticket is a
 // credential, and an address that is not the application's is somewhere a
 // credential would leak to.
+// @req KEEP-AUTH-0004
 fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
     if !auth_safe_name(audience) || !auth_plain(return_to) {
         return false
@@ -364,6 +368,7 @@ fn auth_target_ok(req: Request, return_to: string, audience: string) bool {
     return rho_str_eq(address, base + "/auth/callback")
 }
 
+// @req KEEP-AUTH-0001
 fn auth_ensure_master() void {
     ensure_keeper_state()
     if rho_path_exists(auth_master_file()) {
@@ -447,6 +452,7 @@ fn auth_session_valid(req: Request) bool {
 // value derived from the session id that names it without being it. The cookie
 // value never leaves the keeper, so an application — or anything that reads the
 // ticket it was handed — cannot present it back as the keeper's own session.
+// @req KEEP-AUTH-0006
 fn auth_session_handle(sid: string) string {
     if sid == "" {
         return ""
@@ -457,6 +463,7 @@ fn auth_session_handle(sid: string) string {
 
 // auth_session_check answers an application asking whether the keeper session
 // behind its own still stands, by the handle its ticket carried.
+// @req KEEP-AUTH-0006
 fn auth_session_check(req: Request) Response {
     let handle: string = param(req, "sid")
     if rho_strlen(handle) != 64 || !auth_plain(handle) {
@@ -478,6 +485,7 @@ fn auth_session_check(req: Request) Response {
 // auth_open_session opens a keeper session for a person and answers the
 // redirect that sets its cookie: home, or back to the login endpoint for the
 // application that sent them, which mints its ticket.
+// @req KEEP-AUTH-0003
 fn auth_open_session(name: string, role: string, return_to: string, audience: string, next: string) Response {
     let sid: string = auth_random()
     if sid == "" {
@@ -496,7 +504,7 @@ fn auth_open_session(name: string, role: string, return_to: string, audience: st
         }
     }
     let sessions: string = kept + sid + "|" +
-        rho_int_to_str(now + AUTH_TTL_SECONDS) + "|" + name + "|" + people_keeper_scopes(role) + "\n"
+        rho_int_to_str(now + AUTH_TTL_SECONDS) + "|" + name + "|" + people_keeper_scopes(name, role) + "\n"
     ignore_bool(rho_write_secret(auth_sessions_file(), sessions))
     info("keeper", name + " signed in")
     keeper_event("person.signed-in", "", name + " signed in.")
@@ -541,6 +549,7 @@ fn auth_page(req: Request, status: u32, return_to: string, audience: string, nex
 // answers "" when it could not be minted and "-" when the person has no access
 // to that application. The arguments go one per line, so nothing in them is
 // interpreted.
+// @req KEEP-AUTH-0005
 fn auth_ticket(req: Request, return_to: string, audience: string) string {
     if !auth_target_ok(req, return_to, audience) {
         return ""
@@ -613,6 +622,7 @@ fn auth_keys_ensure() void {
     info("keeper", "made the signing key pair in " + auth_dir())
 }
 
+// @req KEEP-AUTH-0001, KEEP-AUTH-0002
 fn auth_login_post(req: Request) Response {
     auth_ensure_master()
     let body: string = request_body(req)
@@ -622,7 +632,8 @@ fn auth_login_post(req: Request) Response {
     if (return_to != "" && !auth_target_ok(req, return_to, audience)) || !auth_plain(next) || !auth_plain(audience) {
         return html(status_bad_request(), "<p>" + i18n_t(req, "auth.bad_request") + "</p>")
     }
-    let name: string = str_trim(form_field(body, "name"))
+    // A name typed with capitals signs in as the lowercase person (KEEP-AUTH-0015).
+    let name: string = people_sign_in_name(str_trim(form_field(body, "name")))
     let supplied: string = auth_clean(form_field(body, "token"))
     // The access token in ~/.rho/auth/master.token is the admin's: it proves the
     // person is at this machine. It is the whole first run, and the admin's way
@@ -661,6 +672,7 @@ fn auth_login_post(req: Request) Response {
 // auth_logout removes the current master session and clears its cookie. Every
 // application that accepts the keeper session checks the same file, so the
 // next request there is sent to the login page.
+// @req KEEP-AUTH-0008
 fn auth_logout(req: Request) Response {
     let sid: string = auth_session_id(req)
     if sid != "" {
@@ -708,7 +720,7 @@ fn auth_token_render(req: Request, message: string, token: string) Response {
         token_block = template_fill(template_get("auth-token-block"), vars("token", token) + i18n_vars(req))
     }
     let body: string = template_fill(template_get("auth-token"),
-        vars("notice", notice) + vars("token_block", token_block) + i18n_vars(req) +
+        vars("notice", notice) + vars("token_block", token_block) + i18n_vars(req) + vars("csrf", forms_csrf_field()) +
         vars("rotate_confirm", json_string(i18n_t(req, "auth.token.rotate_confirm"))))
     return page(req, i18n_t(req, "page.access_token"), body)
 }
@@ -722,9 +734,13 @@ fn auth_token_page(req: Request) Response {
     return auth_token_page_message(req, "")
 }
 
+// @req KEEP-AUTH-0009
 fn auth_token_post(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let current: string = auth_clean(form_field(body, "current"))
@@ -750,6 +766,7 @@ fn auth_token_post(req: Request) Response {
 
 // auth_keep_only_session closes every keeper session but the one named, which is
 // what a changed token means: whoever signed in with the old one is out.
+// @req KEEP-AUTH-0009
 fn auth_keep_only_session(sid: string) void {
     var out: string = ""
     var rest: string = rho_read_text(auth_sessions_file())
@@ -793,6 +810,7 @@ fn auth_service_denied() Response {
 // audiences and scopes registered for the client, and signs with keeper's key.
 // The secret reaches it through a file only keeper can read, and nothing a caller
 // sent is interpreted on the way: every argument goes one per line.
+// @req KEEP-AUTH-0011
 fn auth_service_token(req: Request) Response {
     let body: string = request_body(req)
     let id: string = str_trim(form_field(body, "client_id"))
@@ -835,9 +853,13 @@ fn auth_service_token(req: Request) Response {
 // auth_rotate_key makes a new signing key pair in place of the old. Applications
 // fetch the new public key when a ticket names it; nothing they keep depends on
 // the old one.
+// @req KEEP-AUTH-0010
 fn auth_rotate_key(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let code: u32 = rho_exec_args("rho", "auth\nkeygen\n--dir\n" + auth_dir() + "\n--force\n", auth_report("auth-keygen"))
     if code != 0 {

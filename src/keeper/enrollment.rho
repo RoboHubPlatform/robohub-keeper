@@ -132,6 +132,7 @@ fn rate_dir() string {
 // itself, which a caller cannot write. Only when that is this machine — a TLS
 // proxy or an SSH tunnel in front of the keeper — is the proxy's forwarded
 // address used instead, because then the proxy wrote it.
+// @req KEEP-ENROLL-0006
 fn rate_peer(req: Request) string {
     let peer: string = request_remote(req)
     if peer != "" && peer != "127.0.0.1" && peer != "::1" {
@@ -142,6 +143,7 @@ fn rate_peer(req: Request) string {
 
 // rate_take counts one call of a request against its client's budget and the
 // budget of every client together; false when either is spent.
+// @req KEEP-ENROLL-0006
 fn rate_take(req: Request, bucket: string, per_client: u32, per_window: u32) bool {
     let client: string = rate_peer(req)
     rho_lock("keeper.rate")
@@ -162,6 +164,7 @@ fn rate_refused() Response {
         "Retry-After: " + rho_int_to_str(RATE_WINDOW_SECONDS) }
 }
 
+// @req KEEP-ENROLL-0001, KEEP-ENROLL-0002, KEEP-ENROLL-0003, KEEP-ENROLL-0004, KEEP-ENROLL-0005
 fn keeper_enroll(req: Request) Response {
     if !rate_take(req, "enroll", ENROLL_PER_CLIENT, ENROLL_PER_WINDOW) {
         return rate_refused()

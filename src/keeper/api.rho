@@ -80,9 +80,16 @@ fn api_app(req: Request) Response {
 
 // api_app_action does what a page button does and says what came of it: a
 // message, and the job when the work goes on in the background.
+// A program calls this with a ticket in its Authorization header. A request that
+// carries the keeper's session cookie is a browser's, which another page can
+// make it send, so it carries the form token as a page's form does.
+// @req KEEP-AUTH-0014
 fn api_app_action(req: Request) Response {
     if !keeper_allowed(req, "operate") {
         return keeper_refused(req)
+    }
+    if auth_session_id(req) != "" && !forms_csrf_ok(request_body(req)) {
+        return api_error(status_forbidden(), "a request with a keeper session carries the form token (csrf)")
     }
     let name: string = param(req, "name")
     let action: string = param(req, "action")
@@ -191,6 +198,7 @@ fn api_switcher_cors(req: Request) string {
 // keeper and the applications it hosts, with where each listens and one word for
 // its state. It is asked for across ports by the applications' pages, so it is
 // readable from a page of this host and from no other site.
+// @req KEEP-APPS-0016
 fn api_switcher(req: Request) Response {
     var out: string = "{\"name\":\"keeper\",\"title\":\"Keeper\",\"port\":" + json_string(keeper_listen_port()) +
         ",\"route\":\"/\",\"state\":\"keeper\"}"

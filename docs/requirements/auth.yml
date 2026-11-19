@@ -1,0 +1,240 @@
+# Sign-in, tickets, sessions, the access token, the signing key, service tokens
+# and the people store: src/keeper/auth.rho and src/keeper/people.rho.
+level: SUB
+prefix: KEEP-AUTH
+title: Sign-in and people
+requirements:
+  - id: KEEP-AUTH-0001
+    title: The first sign-in is the access token
+    statement: >
+      When no access token exists the keeper shall create one, readable only by
+      its owner, as soon as its sign-in page is first asked for, and while the
+      people store is empty the sign-in page shall ask for the access token and
+      nothing else.
+    rationale: The first person in is whoever can read a file on the machine.
+    satisfies: [KEEP-0001]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [first-run]
+
+  - id: KEEP-AUTH-0002
+    title: Wrong attempts close the sign-in for five minutes
+    statement: >
+      After five wrong attempts for one name, each within 300 seconds of the one
+      before, the keeper shall refuse sign-in for that name until 300 seconds
+      after the last of them; wrong access tokens shall be counted together as one
+      name, and a correct sign-in shall clear the count.
+    rationale: Guessing must take longer than a person has, without one guesser locking everyone out.
+    satisfies: [KEEP-0001]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [security, lockout]
+
+  - id: KEEP-AUTH-0003
+    title: A keeper session lasts at most eight hours
+    statement: >
+      A keeper session shall be a random id in an HttpOnly, SameSite=Lax cookie
+      named `keeper_session`, valid for at most 28800 seconds, and recorded with
+      the person's name and the scopes of their role.
+    rationale: A session left open on a borrowed screen must end on its own.
+    satisfies: [KEEP-0001]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [session]
+
+  - id: KEEP-AUTH-0004
+    title: A ticket goes only to the application's own callback
+    statement: >
+      The keeper shall mint a sign-in ticket only for a `return_to` that is the
+      audience's own callback — on loopback or the host the keeper was reached on,
+      at the application's port and `/auth/callback` or `<route>/auth/callback`,
+      or at `/app/<name>/auth/callback` on the keeper's port; for the audience
+      `gateway`, `/auth/callback` on loopback or the keeper's host — and shall
+      answer 400 to any other.
+    rationale: A ticket is a credential; an address that is not the application's is where it would leak to.
+    satisfies: [KEEP-0001, KEEP-0003]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [ticket, security]
+
+  - id: KEEP-AUTH-0005
+    title: A ticket carries only the person's grants for its application
+    statement: >
+      A sign-in ticket shall be signed with the keeper's key for the
+      application's audience and redirect address, valid for 30 seconds, carrying
+      the person's name and only their grants for that application (`*` for an
+      admin), and a person with no grant for it shall be answered 403 with "no
+      access" instead of a ticket.
+    rationale: An application learns no more about a person than it needs.
+    satisfies: [KEEP-0001, KEEP-0002]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [ticket, grants]
+
+  - id: KEEP-AUTH-0006
+    title: Applications ask about a session by a handle, not by its id
+    statement: >
+      A ticket shall name the keeper session by a 64-hex-digit handle derived from
+      the session id by HMAC-SHA256, and `/auth/session/<handle>` shall answer 200
+      while that session stands and 404 otherwise, including for the session id
+      itself.
+    rationale: An application, or anything that reads its ticket, must not be able to present the keeper's own session.
+    satisfies: [KEEP-0001, KEEP-0002]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [session, security]
+    decided_by: [ADR-0003]
+
+  - id: KEEP-AUTH-0007
+    title: Roles decide what a request may do
+    statement: >
+      The keeper shall allow an admin every action, an operator only reading and
+      operating applications (start, stop, restart, build, redeploy, roll back),
+      and anyone else only reading, reading a person's role from the people store
+      on every request, and shall answer 403 to an action the role does not allow.
+    rationale: A role taken away takes effect at once.
+    satisfies: [KEEP-0002]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [roles, least-privilege]
+
+  - id: KEEP-AUTH-0008
+    title: Signing out ends a person's sessions
+    statement: >
+      Signing out shall remove the current keeper session, and an admin's "sign
+      out everywhere" or removal of a person shall remove every keeper session of
+      that person, so that an application asking by its handle is told the
+      session ended.
+    rationale: The applications' sessions end with the keeper's.
+    satisfies: [KEEP-0002]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [session]
+
+  - id: KEEP-AUTH-0009
+    title: Replacing the access token proves the old one
+    statement: >
+      An admin shall replace the access token only by giving the current one and
+      a new one of at least 16 characters twice, after which every keeper session
+      but the admin's own shall be ended.
+    rationale: A session left open cannot lock its owner out, and whoever used the old token is out.
+    satisfies: [KEEP-0001]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [recovery]
+
+  - id: KEEP-AUTH-0010
+    title: An admin rotates the signing key
+    statement: >
+      An admin shall be able to replace the keeper's signing key pair, after which
+      the keeper signs only with the new key, publishes the new public key at
+      `/auth/public-key` without a session, and emits a `keys.rotated` event.
+    rationale: A key that may have leaked is replaced without reinstalling anything.
+    satisfies: [KEEP-0001]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [keys, recovery]
+
+  - id: KEEP-AUTH-0011
+    title: Service tokens are exchanged for registered credentials only
+    statement: >
+      `POST /auth/service-token` shall issue a token only for a registered
+      client's correct secret (at most 256 characters), for an audience and scopes
+      registered for that client, and shall answer 401 otherwise; the secret shall
+      reach the signer only through an owner-only file that is removed at once.
+    rationale: A program's token is worth only what its manifest says it calls.
+    satisfies: [KEEP-0001]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [service-token, least-privilege]
+
+  - id: KEEP-AUTH-0012
+    title: Every installed application is a client of the keeper
+    statement: >
+      Installing or starting an application shall register it as a keeper client
+      for `keeper:read` and the services its manifest's `deploy.calls` names, with
+      its secret in an owner-only file in its workspace, and uninstalling it shall
+      remove that client.
+    rationale: An application calls other services with a credential of its own, never a person's.
+    satisfies: [KEEP-0001, KEEP-0006]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [service-token, apps]
+
+  - id: KEEP-AUTH-0013
+    title: An admin manages the people store
+    statement: >
+      An admin shall add, change and remove people — a name of lowercase letters,
+      digits, `.`, `_` or `-`, starting with a letter (KEEP-AUTH-0015), a display name, a role and grants — and set their
+      passwords, through `rho auth` with the password handed over in a private
+      file, never on a command line; an admin shall not remove their own account.
+    rationale: The people store is kept by the component that hashes passwords; the keeper never holds one in the open.
+    satisfies: [KEEP-0002]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [people, secrets]
+
+  - id: KEEP-AUTH-0014
+    title: Every change a page makes carries the form token
+    statement: >
+      Every POST the keeper's pages make — a form or an HTMX button — shall carry
+      the form's CSRF token and shall be answered without doing anything when the
+      token is missing or wrong; a POST to `/api/v1` that carries the keeper
+      session cookie shall carry it too, while one authenticated only by a ticket
+      in its Authorization header needs none. Only `/api/enroll`,
+      `/api/nodes/verify`, `/auth/service-token` and `/auth/login`, each
+      authenticated by what it carries, shall take a POST without the token.
+    rationale: >
+      The same-origin check in front of the keeper depends on the browser's
+      headers and on the middleware's configuration; the token is the second,
+      independent check that a request came from a page the keeper drew.
+    satisfies: [KEEP-0013]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [security, csrf]
+
+  - id: KEEP-AUTH-0015
+    title: Two people cannot differ only by case
+    statement: >
+      The keeper shall refuse, before handing it to `rho auth user`, a person's
+      name that is not a lowercase letter followed by lowercase letters, digits,
+      `.`, `_` or `-`, at most 48 characters, and shall sign in a name typed with
+      capitals as the lowercase person.
+    rationale: >
+      Ana and ana would be two accounts a person cannot tell apart; the people
+      store has only ever held lowercase names, so folding a typed name loses
+      nobody.
+    satisfies: [KEEP-0002]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [people, auth]

@@ -27,7 +27,9 @@ module keeper.people
 //   viewer    reads
 //
 // Grants are what a person may do in each application, as scopes: `mesh:*`,
-// `mesh:greenhouse`, `aquarium:read`. A ticket for an application carries the
+// `mesh:greenhouse`, `aquarium:read`. The keeper has one grant of its own,
+// `keeper:maintainer`: changing requirements and architecture decisions in the
+// Developer section and committing them (an admin may do that anyway). A ticket for an application carries the
 // person's own name and only their grants for it; an admin's carry `*`.
 
 import std.web.http
@@ -51,6 +53,13 @@ fn people_has(name: string) bool {
     return valid_name(name) && line_in_list(people_names(), name)
 }
 
+// people_sign_in_name is the stored name a sign-in means: every stored name is
+// lowercase, so `Ana` typed on the sign-in page is the person `ana`.
+// @req KEEP-AUTH-0015
+fn people_sign_in_name(name: string) string {
+    return person_name_fold(name)
+}
+
 fn people_get(name: string, key: string) string {
     if !valid_name(name) {
         return ""
@@ -61,6 +70,7 @@ fn people_get(name: string, key: string) string {
 // people_run runs `rho auth user`, with the password in a private file when one
 // is given, and answers the first line it printed that is not a log line, or the
 // reason it failed after "!".
+// @req KEEP-AUTH-0013, KEEP-0013
 fn people_run(args: string, password: string) string {
     var file: string = ""
     var extra: string = ""
@@ -121,8 +131,11 @@ fn field_tab(line: string, index: u32) string {
 }
 
 // people_add adds a person and answers "" or why not.
+// A name is refused here, in the keeper's words, by the rule `rho auth user`
+// keeps the store to.
+// @req KEEP-AUTH-0015
 fn people_add(req: Request, name: string, display: string, role: string, grants: string, password: string) string {
-    if !valid_name(name) || !people_value_ok(display) || !people_value_ok(grants) {
+    if !person_name_ok(name) || !people_value_ok(display) || !people_value_ok(grants) {
         return i18n_t(req, "people.name_rule")
     }
     var args: string = "add\n--name\n" + name + "\n--role\n" + role + "\n"
@@ -190,6 +203,7 @@ fn people_subject(req: Request) string {
 // people_role is the role of whoever made a request: a person's own role, read
 // from the store on every request so a change takes effect at once; a program
 // holding a ticket with every scope is an admin; anybody else reads.
+// @req KEEP-AUTH-0007
 fn people_role(req: Request) string {
     let subject: string = people_subject(req)
     if people_has(subject) {
@@ -204,6 +218,7 @@ fn people_role(req: Request) string {
 
 // keeper_allowed is whether a request may do something that needs `need`:
 // "admin", "operate" or "read".
+// @req KEEP-AUTH-0007
 fn keeper_allowed(req: Request, need: string) bool {
     let role: string = people_role(req)
     if rho_str_eq(role, "admin") {
@@ -221,6 +236,48 @@ fn keeper_refused(req: Request) Response {
         escape_html(keeper_t1(req, "people.role_refused", "role", people_role_label(req, people_role(req)))) + "</div>")
 }
 
+// keeper_csrf_refused answers a POST that does not carry the token the keeper
+// drew its form with: a page somewhere else made the browser send it, and
+// nothing was done.
+// @req KEEP-AUTH-0014
+fn keeper_csrf_refused(req: Request) Response {
+    return page_status(req, status_forbidden(), i18n_t(req, "people.not_allowed"),
+        "<h1>" + i18n_t(req, "people.not_allowed") + "</h1><div class=\"notice warn\">" +
+        i18n_t(req, "common.csrf_refused") + "</div>")
+}
+
+// keeper_csrf_vals is the attribute an HTMX button outside a form posts the form
+// token with. The token is the one the forms module draws its hidden field with
+// (64 hex characters, so it needs no escaping inside the quotes); anything else
+// gives no attribute, and the post is refused.
+// @req KEEP-AUTH-0014
+fn keeper_csrf_vals() string {
+    let field: string = forms_csrf_field()
+    let needle: string = "value=\""
+    let at: i32 = rho_str_index_of(field, needle)
+    if at < 0 {
+        return ""
+    }
+    let start: u32 = u32(at) + u32(rho_strlen(needle))
+    let token: string = rho_str_slice(field, start, 64)
+    if rho_strlen(token) != 64 || !keeper_hex(token) {
+        return ""
+    }
+    return " hx-vals='{\"csrf\":\"" + token + "\"}'"
+}
+
+fn keeper_hex(value: string) bool {
+    var i: u32 = 0
+    while i < u32(rho_strlen(value)) {
+        let c: string = rho_str_slice(value, i, 1)
+        if rho_str_index_of("0123456789abcdef", c) < 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
 // people_role_label is a role as a person reads it; the stored word stays English.
 fn people_role_label(req: Request, role: string) string {
     if rho_str_eq(role, "admin") { return i18n_t(req, "people.role.admin") }
@@ -231,6 +288,7 @@ fn people_role_label(req: Request, role: string) string {
 
 // people_scopes_for is what a person's ticket for an application carries: every
 // scope for an admin, their grants for that application otherwise ("" for none).
+// @req KEEP-AUTH-0005
 fn people_scopes_for(name: string, audience: string) string {
     if !people_has(name) {
         return ""
@@ -255,15 +313,23 @@ fn people_scopes_for(name: string, audience: string) string {
     return out
 }
 
-// people_keeper_scopes is what a keeper session records for a role.
-fn people_keeper_scopes(role: string) string {
+// people_keeper_scopes is what a keeper session records for a person's role. A
+// maintainer's session also carries keeper:maintainer: a session of read-only
+// scopes may not POST at all, and a maintainer who reads everything else changes
+// requirements. The grant itself is read from the store on every request, so a
+// session outliving it changes nothing.
+fn people_keeper_scopes(name: string, role: string) string {
     if rho_str_eq(role, "admin") {
         return "*"
     }
+    var scopes: string = "keeper:read"
     if rho_str_eq(role, "operator") {
-        return "keeper:operate"
+        scopes = "keeper:operate"
     }
-    return "keeper:read"
+    if dev_list_has(people_get(name, "grants"), "keeper:maintainer") {
+        scopes = scopes + ",keeper:maintainer"
+    }
+    return scopes
 }
 
 /* -------------------------------------------------------------------------- */
@@ -288,6 +354,7 @@ fn people_sessions(name: string) u32 {
 
 // people_sign_out ends every keeper session of a person; each application's
 // session ends with it within a minute, when the application next asks.
+// @req KEEP-AUTH-0008
 fn people_sign_out(name: string) void {
     var out: string = ""
     var rest: string = rho_read_text(auth_sessions_file())
@@ -385,8 +452,14 @@ fn people_cell(req: Request, name: string, app: string) string {
 // in each application, their password, and signing them out or removing them.
 fn people_inspector(req: Request, name: string, notice: string) string {
     if !people_has(name) {
+        // A refused add has no person to show, and its reason is said here:
+        // it was dropped before, so a refused name looked like nothing happened.
+        var message: string = ""
+        if notice != "" {
+            message = "<div class=\"notice\">" + escape_html(notice) + "</div>"
+        }
         return "<div class=\"rh-ins-h\"><div class=\"rh-kick\">" + i18n_t(req, "people.person") + "</div><h2>" + i18n_t(req, "people.choose") +
-            "</h2><div class=\"rh-state\">" + i18n_t(req, "people.choose_hint") + "</div></div>"
+            "</h2><div class=\"rh-state\">" + i18n_t(req, "people.choose_hint") + "</div></div>" + message
     }
     let role: string = people_get(name, "role")
     var role_seg: string = ""
@@ -444,6 +517,10 @@ fn people_inspector(req: Request, name: string, notice: string) string {
         "<label>" + i18n_t(req, "people.shown_as") + "<input name=\"display\" value=\"" + escape_html(people_get(name, "display")) + "\"></label>" +
         "<div class=\"rh-sec\">" + i18n_t(req, "common.role") + "</div><div class=\"rh-actions\">" + role_seg + "</div>" +
         "<div class=\"rh-sec\">" + i18n_t(req, "people.applications") + "</div>" + apps +
+        "<input type=\"hidden\" name=\"grants_form\" value=\"1\">" +
+        "<div class=\"rh-sec\">" + i18n_t(req, "people.developer") + "</div>" +
+        "<label class=\"check\"><input type=\"checkbox\" name=\"keeper_maintainer\" value=\"1\"" + people_maintainer_checked(name) + "> " +
+        i18n_t(req, "people.maintainer") + "</label><small>" + i18n_t(req, "people.maintainer_hint") + "</small>" +
         "<div class=\"rh-impact\"><b>" + i18n_t(req, "people.applying") + "</b><span>" + i18n_t(req, "people.applying_body") + "</span></div>" +
         "<label>" + i18n_t(req, "people.new_password") + "<input name=\"password\" type=\"password\" autocomplete=\"new-password\"><small>" + i18n_t(req, "people.empty_keeps") + "</small></label>" +
         "<div class=\"rh-actions\"><button type=\"submit\">" + i18n_t(req, "common.save") + "</button></div>" +
@@ -472,7 +549,21 @@ fn people_grants_from(body: string) string {
             out = out + add
         }
     }
+    // The keeper's own grant: a maintainer changes requirements and decisions in
+    // the Developer section and commits them.
+    if rho_str_eq(form_field(body, "keeper_maintainer"), "1") {
+        if out != "" { out = out + "," }
+        out = out + "keeper:maintainer"
+    }
     return out
+}
+
+// people_maintainer_checked is the checkbox state of a person's maintainer grant.
+fn people_maintainer_checked(name: string) string {
+    if dev_list_has(people_get(name, "grants"), "keeper:maintainer") {
+        return " checked"
+    }
+    return ""
 }
 
 // people_page is the people as a matrix — a row each, an application a column —
@@ -578,7 +669,7 @@ fn people_add_post(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return people_page_message(req, i18n_t(req, "common.csrf_refused"))
+        return keeper_csrf_refused(req)
     }
     let name: string = str_trim(form_field(body, "name"))
     let failure: string = people_add(req, name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")),
@@ -590,13 +681,14 @@ fn people_add_post(req: Request) Response {
 }
 
 // people_action_post saves, signs out or removes one person.
+// @req KEEP-AUTH-0013
 fn people_action_post(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return people_page_message(req, i18n_t(req, "common.csrf_refused"))
+        return keeper_csrf_refused(req)
     }
     let name: string = param(req, "name")
     let action: string = param(req, "action")
@@ -607,7 +699,7 @@ fn people_action_post(req: Request) Response {
     var done: string = ""
     if rho_str_eq(action, "save") {
         var grants: string = str_trim(form_field(body, "grants"))
-        if rho_str_index_of(body, "app_") >= 0 {
+        if rho_str_index_of(body, "app_") >= 0 || rho_str_eq(form_field(body, "grants_form"), "1") {
             grants = people_grants_from(body)
         }
         failure = people_set(req, name, str_trim(form_field(body, "display")), str_trim(form_field(body, "role")), grants)
@@ -669,8 +761,11 @@ fn account_page(req: Request) Response {
 fn account_post(req: Request) Response {
     let name: string = people_subject(req)
     let body: string = request_body(req)
-    if !people_has(name) || !forms_csrf_ok(body) {
-        return account_page_message(req, i18n_t(req, "common.csrf_refused"))
+    if !forms_csrf_ok(body) {
+        return keeper_csrf_refused(req)
+    }
+    if !people_has(name) {
+        return account_page_message(req, "")
     }
     if people_verify(name, form_field(body, "current")) == "" {
         return account_page_message(req, i18n_t(req, "account.current_wrong"))
@@ -693,7 +788,7 @@ fn people_claim(req: Request) Response {
     }
     let body: string = request_body(req)
     if !forms_csrf_ok(body) {
-        return people_page_message(req, i18n_t(req, "common.csrf_refused"))
+        return keeper_csrf_refused(req)
     }
     if people_has(people_subject(req)) {
         return people_page_message(req, i18n_t(req, "people.claim_exists"))

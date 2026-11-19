@@ -1,0 +1,32 @@
+<style>
+.dev-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; }
+.dev-head small { color: var(--faint); }
+.dev-tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin: .4rem 0 1rem; border-bottom: 1px solid var(--line); }
+.dev-tabs a { padding: .45rem .75rem; border-radius: 8px 8px 0 0; color: var(--muted) !important; font-size: .85rem; }
+.dev-tabs a:hover { background: var(--wash); text-decoration: none; }
+.dev-tabs a.active { color: var(--ink) !important; background: var(--gold-soft); box-shadow: inset 0 -3px 0 var(--gold); }
+.dev-filters { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end; margin-bottom: .6rem; }
+.dev-filters label { display: flex; flex-direction: column; font-size: .78rem; color: var(--muted); }
+.dev-filters select, .dev-filters input { width: auto; min-width: 7rem; }
+.dev-table { width: 100%; }
+.dev-table td { vertical-align: top; }
+.dev-count, .dev-empty { color: var(--faint); font-size: .85rem; }
+.dev-detail { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: 1.2rem; align-items: start; }
+.dev-detail aside { background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: .9rem 1rem; }
+.dev-facts { display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; margin: 0; }
+.dev-facts dt { color: var(--faint); }
+.dev-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.dev-list, .dev-tree { padding-left: 1.1rem; }
+.dev-status-form, .dev-form { display: flex; flex-direction: column; gap: .5rem; margin-top: .6rem; }
+.dev-form { max-width: 46rem; }
+.dev-title code { font-size: .9em; }
+.dev-error pre, #dev-error pre { white-space: pre-wrap; margin: .3rem 0 0; }
+.dev-export, .dev-adr-body { min-width: 0; overflow-x: auto; }
+@media (max-width: 860px) { .dev-detail { grid-template-columns: 1fr; } }
+</style>
+<div class="dev-head">
+  <h1>{{t "page.developer"}}</h1>
+  <small>{{t "dev.you_are"}} {{ role }} · <code>{{ workspace }}</code></small>
+</div>
+{{{ nav }}}
+{{{ content }}}

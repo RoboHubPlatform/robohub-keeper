@@ -3,7 +3,7 @@
 {{{ notice }}}
 {{{ token_block }}}
 <style>.auth-token-row { display:flex; gap:.5rem; align-items:center; margin:.5rem 0; }.auth-token-row input { flex:1; min-width:0; }</style>
-<form class="panel-form" method="post" action="/auth/token">
+<form class="panel-form" method="post" action="/auth/token">{{{ csrf }}}
   <div class="grid">
     <label>{{t "auth.token.current"}}<input name="current" type="password" autocomplete="current-password"></label>
     <label>{{t "auth.token.new"}}<input name="token" type="password" autocomplete="new-password"></label>
@@ -17,6 +17,6 @@
 
 <h2>{{t "auth.key.title"}}</h2>
 <p>{{t "auth.key.intro"}}</p>
-<form class="panel-form" method="post" action="/auth/rotate-key" onsubmit="return confirm({{ rotate_confirm }})">
+<form class="panel-form" method="post" action="/auth/rotate-key" onsubmit="return confirm({{ rotate_confirm }})">{{{ csrf }}}
   <div class="form-actions"><button type="submit" class="quiet">{{t "auth.key.rotate"}}</button></div>
 </form>

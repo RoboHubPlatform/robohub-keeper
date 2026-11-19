@@ -1,0 +1,357 @@
+//
+// @file developer_git.rho
+// @brief Committing what the Developer section changed: only those files, to a local branch, never pushed.
+//
+// @module keeper.developer_git
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-19
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.developer_git
+
+// What the Developer section changed in a repository is what differs under
+// docs/requirements/ and docs/architecture/ — the two directories rho req
+// writes. It never edits module.yml, so a commit never carries it.
+//
+// A commit carries those files and nothing else, and is never pushed:
+//
+//   on a branch other than the default one, it is an ordinary commit there,
+//   `git commit -- <paths>`, which leaves everything else staged as it was;
+//
+//   on the default branch (or a detached HEAD), the working copy and its index
+//   are not touched at all. The commit is built on a temporary index —
+//   `git read-tree`, `git update-index --add --remove` of the files,
+//   `git write-tree`, `git commit-tree` — and `git update-ref` points the day's
+//   branch, requirements/<yyyy-mm-dd>, at it. A branch of that name that no
+//   longer contains HEAD is left alone and the next name (-2, -3 …) is used.
+//
+// The author is whoever the repository's git configuration says.
+
+const DEV_PATHS: string = "docs/requirements\ndocs/architecture\n"
+
+// dev_git runs git in a repository, with no optional lock taken (a status-like
+// command would otherwise refresh the index, which is the person's), and answers
+// "exit<TAB>N" and then what git printed.
+fn dev_git(dir: string, args: string) string {
+    return dev_git_index(dir, "", args)
+}
+
+// dev_git_index is dev_git with GIT_INDEX_FILE set, for the temporary index.
+fn dev_git_index(dir: string, index: string, args: string) string {
+    let report: string = dev_scratch("git")
+    var program: string = "git"
+    var all: string = "--no-optional-locks\n-c\ncore.quotePath=false\n-C\n" + dir + "\n" + args
+    if index != "" {
+        program = "env"
+        all = "GIT_INDEX_FILE=" + index + "\ngit\n" + all
+    }
+    let code: u32 = rho_exec_args(program, all, report)
+    let output: string = rho_read_text(report)
+    ignore_u32(rho_exec_args("rm", "-f\n" + report + "\n", apps_report("developer-rm")))
+    return "exit\t" + rho_int_to_str(code) + "\n" + output
+}
+
+// dev_ok is whether a run answered exit 0.
+fn dev_ok(run: string) bool {
+    return rho_str_starts_with(run, "exit\t0\n")
+}
+
+// dev_out is what a run printed, without its exit line.
+fn dev_out(run: string) string {
+    let at: i32 = rho_str_index_of(run, "\n")
+    if at < 0 {
+        return ""
+    }
+    return rho_str_slice(run, u32(at) + 1, u32(rho_strlen(run)) - u32(at) - 1)
+}
+
+// dev_out_line is the first line a run printed, trimmed.
+fn dev_out_line(run: string) string {
+    return str_trim(first_line(dev_out(run)))
+}
+
+// dev_git_paths is the lines of a git listing that are files a commit may carry.
+fn dev_git_paths(listing: string) string {
+    var out: string = ""
+    var rest: string = listing
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if dev_path_ok(line) && !line_in_list(out, line) {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// dev_git_name_status is `git diff --name-status` output as `status<TAB>path`
+// lines, the files a commit may carry only.
+fn dev_git_name_status(listing: string) string {
+    var out: string = ""
+    var rest: string = listing
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let status: string = tsv_field(line, 0)
+        let path: string = tsv_field(line, 1)
+        if status != "" && dev_path_ok(path) && tsv_field(line, 2) == "" {
+            out = out + rho_str_slice(status, 0, 1) + "\t" + path + "\n"
+        }
+    }
+    return out
+}
+
+// dev_git_ref is the commit a ref names, or "".
+fn dev_git_ref(dir: string, ref: string) string {
+    let run: string = dev_git(dir, "rev-parse\n--verify\n-q\n" + ref + "^{commit}\n")
+    if !dev_ok(run) {
+        return ""
+    }
+    return dev_sha_of(dev_out(run))
+}
+
+// dev_git_default is the repository's default branch: what origin/HEAD names,
+// else main or master when there is one, else "".
+fn dev_git_default(dir: string) string {
+    let origin: string = dev_git(dir, "symbolic-ref\n--short\n-q\nrefs/remotes/origin/HEAD\n")
+    if dev_ok(origin) {
+        let name: string = dev_out_line(origin)
+        let slash: i32 = rho_str_index_of(name, "/")
+        if slash >= 0 {
+            return rho_str_slice(name, u32(slash) + 1, u32(rho_strlen(name)) - u32(slash) - 1)
+        }
+    }
+    if dev_git_ref(dir, "refs/heads/main") != "" {
+        return "main"
+    }
+    if dev_git_ref(dir, "refs/heads/master") != "" {
+        return "master"
+    }
+    return ""
+}
+
+// dev_git_plan says what a commit of one repository would be, as records:
+//
+//   current <branch, "" when detached>   default <branch>
+//   mode    plumbing|branch              target  <branch the commit goes to>
+//   base    <commit it goes on>          tree    <tree it would have; plumbing only>
+//   change  <A|M|D|…> <path>             (one per file)
+//   error   <why there is no plan>
+// @req KEEP-DEV-0005
+fn dev_git_plan(dir: string) string {
+    let inside: string = dev_git(dir, "rev-parse\n--show-prefix\n")
+    if !dev_ok(inside) {
+        return "error\tnot a git repository\n"
+    }
+    if dev_out_line(inside) != "" {
+        return "error\tnot the top of a git repository\n"
+    }
+    let head: string = dev_git_ref(dir, "HEAD")
+    if head == "" {
+        return "error\tthe repository has no commit yet\n"
+    }
+    var current: string = ""
+    let symbolic: string = dev_git(dir, "symbolic-ref\n--short\n-q\nHEAD\n")
+    if dev_ok(symbolic) {
+        current = dev_out_line(symbolic)
+    }
+    let default_branch: string = dev_git_default(dir)
+    var out: string = "current\t" + current + "\ndefault\t" + default_branch + "\n"
+    if current != "" && !rho_str_eq(current, default_branch) {
+        // An ordinary commit on the branch the person is on.
+        out = out + "mode\tbranch\ntarget\t" + current + "\nbase\t" + head + "\n"
+        var changes: string = dev_git_name_status(dev_out(dev_git(dir, "diff\n--name-status\n--no-renames\nHEAD\n--\n" + DEV_PATHS)))
+        var untracked: string = dev_git_paths(dev_out(dev_git(dir, "ls-files\n--others\n--exclude-standard\n--\n" + DEV_PATHS)))
+        while untracked != "" {
+            let at: i32 = rho_str_index_of(untracked, "\n")
+            let path: string = rho_str_slice(untracked, 0, u32(at))
+            untracked = rho_str_slice(untracked, u32(at) + 1, u32(rho_strlen(untracked)) - u32(at) - 1)
+            changes = changes + "A\t" + path + "\n"
+        }
+        return out + dev_prefix_lines(changes, "change\t")
+    }
+    // The default branch: the day's branch, when it still contains HEAD.
+    let date: string = rho_local_date()
+    var target: string = ""
+    var base: string = ""
+    var attempt: u32 = 1
+    while attempt <= 9 {
+        let name: string = dev_branch(date, attempt)
+        let tip: string = dev_git_ref(dir, "refs/heads/" + name)
+        if tip == "" {
+            target = name
+            base = head
+            break
+        }
+        if dev_ok(dev_git(dir, "merge-base\n--is-ancestor\n" + head + "\n" + tip + "\n")) {
+            target = name
+            base = tip
+            break
+        }
+        attempt = attempt + 1
+    }
+    if target == "" {
+        return out + "error\tevery requirements branch of today has moved away from HEAD\n"
+    }
+    out = out + "mode\tplumbing\ntarget\t" + target + "\nbase\t" + base + "\n"
+    let files: string = dev_git_paths(dev_out(dev_git(dir, "diff\n--name-only\n--no-renames\n" + base + "\n--\n" + DEV_PATHS)) +
+        dev_out(dev_git(dir, "ls-files\n--others\n--exclude-standard\n--\n" + DEV_PATHS)))
+    if files == "" {
+        return out
+    }
+    let index: string = dev_scratch("index")
+    var tree: string = ""
+    var failure: string = ""
+    let read: string = dev_git_index(dir, index, "read-tree\n" + base + "\n")
+    if !dev_ok(read) {
+        failure = dev_out_line(read)
+    } else {
+        let update: string = dev_git_index(dir, index, "update-index\n--add\n--remove\n--\n" + files)
+        if !dev_ok(update) {
+            failure = dev_out_line(update)
+        } else {
+            let written: string = dev_git_index(dir, index, "write-tree\n")
+            tree = dev_sha_of(dev_out(written))
+            if tree == "" {
+                failure = dev_out_line(written)
+            }
+        }
+    }
+    ignore_u32(rho_exec_args("rm", "-f\n" + index + "\n" + index + ".lock\n", apps_report("developer-rm")))
+    if failure != "" {
+        return out + "error\t" + failure + "\n"
+    }
+    out = out + "tree\t" + tree + "\n"
+    let changes: string = dev_git_name_status(dev_out(dev_git(dir, "diff-tree\n-r\n--name-status\n--no-renames\n" + base + "\n" + tree + "\n")))
+    return out + dev_prefix_lines(changes, "change\t")
+}
+
+// dev_prefix_lines puts a prefix before every line of a text.
+fn dev_prefix_lines(text: string, prefix: string) string {
+    var out: string = ""
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line != "" {
+            out = out + prefix + line + "\n"
+        }
+    }
+    return out
+}
+
+// dev_plan_value is one record's value of a plan.
+fn dev_plan_value(plan: string, kind: string) string {
+    return tsv_field(dev_record(plan, kind), 1)
+}
+
+// dev_plan_changes is a plan's changes as `status<TAB>path` lines.
+fn dev_plan_changes(plan: string) string {
+    var out: string = ""
+    var rest: string = dev_records(plan, "change")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        out = out + tsv_field(line, 1) + "\t" + tsv_field(line, 2) + "\n"
+    }
+    return out
+}
+
+// dev_git_commit makes the commit a plan describes, with a message, and answers
+// "committed<TAB>branch<TAB>commit<TAB>mode" or "error<TAB>why".
+// @req KEEP-DEV-0005
+fn dev_git_commit(dir: string, plan: string, message: string) string {
+    let changes: string = dev_plan_changes(plan)
+    if changes == "" {
+        return "error\tnothing to commit\n"
+    }
+    let target: string = dev_plan_value(plan, "target")
+    let base: string = dev_plan_value(plan, "base")
+    let mode: string = dev_plan_value(plan, "mode")
+    let message_file: string = dev_scratch("message")
+    ignore_bool(rho_write_text(message_file, message))
+    var answer: string = ""
+    if rho_str_eq(mode, "plumbing") {
+        let tree: string = dev_plan_value(plan, "tree")
+        let made: string = dev_git(dir, "commit-tree\n" + tree + "\n-p\n" + base + "\n-F\n" + message_file + "\n")
+        let commit: string = dev_sha_of(dev_out(made))
+        if !dev_ok(made) || commit == "" {
+            answer = "error\t" + dev_out_line(made) + "\n"
+        } else {
+            // The old value makes the update refuse a branch that moved since the
+            // plan was made, and a branch that appeared when there was none.
+            var old: string = base
+            if dev_git_ref(dir, "refs/heads/" + target) == "" {
+                old = "0000000000000000000000000000000000000000"
+                if rho_strlen(commit) == 64 {
+                    old = old + "000000000000000000000000"
+                }
+            }
+            let moved: string = dev_git(dir, "update-ref\n-m\nrequirements: committed from the keeper\nrefs/heads/" + target + "\n" + commit + "\n" + old + "\n")
+            if dev_ok(moved) {
+                answer = "committed\t" + target + "\t" + commit + "\tplumbing\n"
+            } else {
+                answer = "error\t" + dev_out_line(moved) + "\n"
+            }
+        }
+    } else {
+        // An ordinary commit of the listed paths: a new file is added first,
+        // because `git commit -- <path>` only takes a file git knows.
+        var paths: string = ""
+        var added: string = ""
+        var rest: string = changes
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, "\n")
+            let line: string = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            paths = paths + tsv_field(line, 1) + "\n"
+            if rho_str_eq(tsv_field(line, 0), "A") {
+                added = added + tsv_field(line, 1) + "\n"
+            }
+        }
+        var failure: string = ""
+        if added != "" {
+            let add: string = dev_git(dir, "add\n--\n" + added)
+            if !dev_ok(add) {
+                failure = dev_out_line(add)
+            }
+        }
+        if failure == "" {
+            let made: string = dev_git(dir, "commit\n-q\n-F\n" + message_file + "\n--\n" + paths)
+            if dev_ok(made) {
+                answer = "committed\t" + target + "\t" + dev_git_ref(dir, "HEAD") + "\tbranch\n"
+            } else {
+                failure = dev_out_line(made)
+            }
+        }
+        if failure != "" {
+            answer = "error\t" + failure + "\n"
+        }
+    }
+    ignore_u32(rho_exec_args("rm", "-f\n" + message_file + "\n", apps_report("developer-rm")))
+    return answer
+}
+
+// dev_git_identity is the author a commit in a repository gets: "name<TAB>email".
+fn dev_git_identity(dir: string) string {
+    return dev_out_line(dev_git(dir, "config\nuser.name\n")) + "\t" + dev_out_line(dev_git(dir, "config\nuser.email\n"))
+}

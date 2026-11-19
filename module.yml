@@ -9,12 +9,15 @@ module:
   route: /
   port: "19090"
   command: keeper
-  version: 0.10.1
+  version: 0.11.0
   author: Aurel Miron
   maintainer: Aurel Miron
   license: "MIT"
 description: A local dashboard for the RoboHub ecosystem — its registry, what is installed, and what it needs
 main: src/main.rho
+
+# The keeper's requirements are KEEP-…, under the system requirements robohub holds.
+requirements: { prefix: KEEP, parent: robohub }
 
 # The RoboHub platform, whose mqtt port the keeper uses to show the broker's live
 # topics.
@@ -100,9 +103,10 @@ docs:
   title: The RoboHub keeper
   section: applications
   order: "30"
-  index: docs/index.md
+  index: docs/doc/index.md
   sources:
-    - docs/index.md
+    - docs/doc/index.md
+    - docs/doc/developer.md
 
 # What the keeper needs from the machine: it builds applications with the Rho
 # toolchain (and Go through it), clones them with git, runs them as systemd user

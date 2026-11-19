@@ -35,6 +35,7 @@ fn check(condition: bool, what: string) void {
 
 const TOKEN: string = "t0k|garden-01|default|1|7|2000|"
 
+// @verifies KEEP-ENROLL-0001
 test fn a_token_names_its_device_and_expiry() void {
     check(rho_str_eq(enrollment_token_problem(TOKEN, "garden-01", 1000), ""), "a good token enrolls its device")
     check(rho_str_eq(enrollment_token_problem("", "garden-01", 1000), "unknown enrollment token"), "no token")
@@ -53,6 +54,7 @@ test fn a_token_names_its_device_and_expiry() void {
     print("[PASS] a_token_names_its_device_and_expiry\n")
 }
 
+// @verifies KEEP-ENROLL-0002
 test fn the_placement_is_the_tokens() void {
     check(!enrollment_placement_differs(TOKEN, "", "", ""), "a request that names no placement takes the token's")
     check(!enrollment_placement_differs(TOKEN, "default", "1", "07"), "the same placement, however written")
@@ -62,6 +64,7 @@ test fn the_placement_is_the_tokens() void {
     print("[PASS] the_placement_is_the_tokens\n")
 }
 
+// @verifies KEEP-ENROLL-0004
 test fn a_token_is_spent_once_and_reenroll_is_marked() void {
     check(rho_str_eq(enrollment_mark_line(TOKEN), TOKEN + "|used"), "the mark follows the flags field")
     check(enrollment_token_used(enrollment_mark_line(TOKEN)), "a marked token is used")
@@ -76,6 +79,7 @@ test fn a_token_is_spent_once_and_reenroll_is_marked() void {
     print("[PASS] a_token_is_spent_once_and_reenroll_is_marked\n")
 }
 
+// @verifies KEEP-ENROLL-0005, KEEP-ENROLL-0007
 test fn a_credential_is_kept_as_a_salted_hash() void {
     let credential: string = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
     let stored: string = credential_hash("0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f", credential)
@@ -93,6 +97,7 @@ test fn a_credential_is_kept_as_a_salted_hash() void {
     print("[PASS] a_credential_is_kept_as_a_salted_hash\n")
 }
 
+// @verifies KEEP-ENROLL-0006
 test fn a_client_has_a_budget() void {
     check(rho_str_eq(rate_client("", ""), "direct"), "no proxy header is the connection")
     check(rho_str_eq(rate_client("10.0.0.9, 192.168.1.5", ""), "192.168.1.5"), "the nearest proxy's entry")

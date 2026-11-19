@@ -84,7 +84,7 @@ fn app_module_settings_save(req: Request) Response {
     let body: string = request_body(req)
     let name: string = str_trim(request_query_param(req, "name"))
     if !forms_csrf_ok(body) {
-        return app_module_settings_page_message(req, i18n_t(req, "settings.csrf_refused"))
+        return keeper_csrf_refused(req)
     }
     if !valid_name(name) {
         return app_module_settings_page_message(req, i18n_t(req, "app_modules.settings_bad_module"))

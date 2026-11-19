@@ -28,6 +28,7 @@ fn keeper_plugin_state_file() string {
 
 // keeper_alert raises an alert through the alert interface: every channel the
 // keeper binds in its module.yml, as configured on the Settings page.
+// @req KEEP-0009, KEEP-PROV-0001
 fn keeper_alert(level: string, message: string, metadata: string) u32 {
     return alert.raise(level, message, metadata)
 }

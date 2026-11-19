@@ -1,0 +1,706 @@
+//
+// @file developer_text.rho
+// @brief The parts of the Developer section that are only strings: reading `rho req --tsv`, the names a request may carry, and who may change what.
+//
+// @module keeper.developer_text
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-19
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.developer_text
+
+// The Developer section shows and changes the workspace's requirements and
+// architecture decisions through the rho-req component (`rho req`), and never
+// writes one of their files itself. What it reads back is `--tsv`: one record per
+// line, the record's kind first, a tab, a line break and a backslash in a value
+// written `\t`, `\n` and `\\`. The output of a program the keeper runs lands in
+// one file with its standard error, and a line whose first field is not a kind
+// this file asks for is simply not read.
+//
+// These are in a file of their own, like apps_text.rho, because they are what the
+// unit suite can check without building or starting anything; the same two rules
+// hold (rho_str_eq rather than `==`, a character's class by lookup).
+
+/* -------------------------------------------------------------------------- */
+/*  Records                                                                   */
+/* -------------------------------------------------------------------------- */
+
+// dev_unescape is one field of a record as it was before rho req escaped it.
+fn dev_unescape(text: string) string {
+    if rho_str_index_of(text, "\\") < 0 {
+        return text
+    }
+    var out: string = ""
+    var i: u32 = 0
+    let length: u32 = u32(rho_strlen(text))
+    while i < length {
+        let ch: string = rho_str_slice(text, i, 1)
+        if rho_str_eq(ch, "\\") && i + 1 < length {
+            let next: string = rho_str_slice(text, i + 1, 1)
+            if rho_str_eq(next, "t") {
+                out = out + "\t"
+            } else if rho_str_eq(next, "n") {
+                out = out + "\n"
+            } else if rho_str_eq(next, "r") {
+                out = out + "\r"
+            } else {
+                out = out + next
+            }
+            i = i + 2
+        } else {
+            out = out + ch
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// dev_field is field `index` of a record, unescaped; field 0 is the kind.
+fn dev_field(line: string, index: u32) string {
+    return dev_unescape(tsv_field(line, index))
+}
+
+// dev_records is the lines of an output whose kind is `kind`, one per line.
+// @req KEEP-DEV-0001
+fn dev_records(text: string, kind: string) string {
+    var out: string = ""
+    var rest: string = text
+    let prefix: string = kind + "\t"
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_starts_with(line, prefix) || rho_str_eq(line, kind) {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// dev_record is the first record of a kind, or "".
+fn dev_record(text: string, kind: string) string {
+    return first_line(dev_records(text, kind))
+}
+
+// dev_count is how many lines a list of records has.
+fn dev_count(text: string) u32 {
+    var count: u32 = 0
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        if at < 0 {
+            rest = ""
+        } else {
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        count = count + 1
+    }
+    return count
+}
+
+// dev_errors is why a run failed: its `error` records, else the lines rho req
+// printed to standard error ("rho req <command>: <why>"), one per line.
+// @req KEEP-DEV-0001
+fn dev_errors(output: string) string {
+    var out: string = ""
+    var rest: string = dev_records(output, "error")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        out = out + dev_field(line, 1) + "\n"
+    }
+    if out != "" {
+        return out
+    }
+    rest = output
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_starts_with(line, "rho req ") || rho_str_starts_with(line, "rho: ") || rho_str_starts_with(line, "usage: ") {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// dev_list_has is whether a comma-separated list holds an item.
+fn dev_list_has(list: string, item: string) bool {
+    if item == "" {
+        return false
+    }
+    var rest: string = list + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        if at < 0 {
+            break
+        }
+        let entry: string = str_trim(rho_str_slice(rest, 0, u32(at)))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if rho_str_eq(entry, item) {
+            return true
+        }
+    }
+    return false
+}
+
+// dev_list_clean is a list a person typed — commas, spaces or both between the
+// items — as rho req writes one: the items joined by commas.
+fn dev_list_clean(text: string) string {
+    var out: string = ""
+    var word: string = ""
+    var i: u32 = 0
+    let source: string = text + ","
+    let length: u32 = u32(rho_strlen(source))
+    while i < length {
+        let ch: string = rho_str_slice(source, i, 1)
+        if rho_str_eq(ch, ",") || rho_str_eq(ch, " ") || rho_str_eq(ch, "\t") || rho_str_eq(ch, "\n") || rho_str_eq(ch, "\r") {
+            if word != "" {
+                if out != "" {
+                    out = out + ","
+                }
+                out = out + word
+                word = ""
+            }
+        } else {
+            word = word + ch
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// dev_one_line is a value as one argument line: a line break in what a person
+// typed becomes a space, because a program's arguments are given one per line.
+fn dev_one_line(text: string) string {
+    var out: string = str_replace(text, "\r\n", " ")
+    out = str_replace(out, "\n", " ")
+    out = str_replace(out, "\r", " ")
+    return str_trim(out)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  What a request may name                                                   */
+/* -------------------------------------------------------------------------- */
+
+// dev_word_ok is an upper-case word: a letter, then letters and digits.
+fn dev_word_ok(word: string) bool {
+    let length: u32 = u32(rho_strlen(word))
+    if length == 0 || !is_upper(rho_str_slice(word, 0, 1)) {
+        return false
+    }
+    var i: u32 = 1
+    while i < length {
+        let ch: string = rho_str_slice(word, i, 1)
+        if !is_upper(ch) && !is_digit(ch) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// dev_prefix_ok is an id prefix: upper-case words joined by dashes (GW, GW-AUTH).
+fn dev_prefix_ok(prefix: string) bool {
+    if prefix == "" {
+        return false
+    }
+    var rest: string = prefix + "-"
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "-")
+        if at < 0 {
+            break
+        }
+        let word: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if !dev_word_ok(word) {
+            return false
+        }
+    }
+    return true
+}
+
+// dev_digits_ok is exactly `count` digits.
+fn dev_digits_ok(text: string, count: u32) bool {
+    if u32(rho_strlen(text)) != count {
+        return false
+    }
+    var i: u32 = 0
+    while i < count {
+        if !is_digit(rho_str_slice(text, i, 1)) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// dev_id_ok is a requirement id: a prefix, a dash and four digits (GW-0012,
+// GW-AUTH-0001). It is the only thing from a request that reaches `rho req` as
+// an id, so it can never be a path or an option.
+// @req KEEP-DEV-0003
+fn dev_id_ok(id: string) bool {
+    let length: u32 = u32(rho_strlen(id))
+    if length < 6 {
+        return false
+    }
+    let number: string = rho_str_slice(id, length - 4, 4)
+    if !dev_digits_ok(number, 4) || !rho_str_eq(rho_str_slice(id, length - 5, 1), "-") {
+        return false
+    }
+    return dev_prefix_ok(rho_str_slice(id, 0, length - 5))
+}
+
+// dev_ids_ok is a list of requirement ids, every one of them well formed; "" is
+// an empty list and is fine.
+fn dev_ids_ok(list: string) bool {
+    var rest: string = dev_list_clean(list)
+    if rest == "" {
+        return true
+    }
+    rest = rest + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        if at < 0 {
+            break
+        }
+        let id: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if !dev_id_ok(id) {
+            return false
+        }
+    }
+    return true
+}
+
+// dev_adr_local_ok is an ADR id without its repository: ADR-0009.
+fn dev_adr_local_ok(id: string) bool {
+    return u32(rho_strlen(id)) == 8 && rho_str_starts_with(id, "ADR-") && dev_digits_ok(rho_str_slice(id, 4, 4), 4)
+}
+
+// dev_adr_ok is an ADR reference: ADR-0009, or robohub:ADR-0009 for another
+// repository's, where the repository is a plain name.
+fn dev_adr_ok(ref: string) bool {
+    let colon: i32 = rho_str_index_of(ref, ":")
+    if colon < 0 {
+        return dev_adr_local_ok(ref)
+    }
+    let repo: string = rho_str_slice(ref, 0, u32(colon))
+    let id: string = rho_str_slice(ref, u32(colon) + 1, u32(rho_strlen(ref)) - u32(colon) - 1)
+    return valid_name(repo) && dev_adr_local_ok(id)
+}
+
+// dev_adrs_ok is a list of ADR references, each well formed.
+fn dev_adrs_ok(list: string) bool {
+    var rest: string = dev_list_clean(list)
+    if rest == "" {
+        return true
+    }
+    rest = rest + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        if at < 0 {
+            break
+        }
+        let ref: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if !dev_adr_ok(ref) {
+            return false
+        }
+    }
+    return true
+}
+
+// dev_tags_ok is a list of tags: plain words.
+fn dev_tags_ok(list: string) bool {
+    var rest: string = dev_list_clean(list)
+    if rest == "" {
+        return true
+    }
+    rest = rest + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        if at < 0 {
+            break
+        }
+        let tag: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if !valid_name(tag) {
+            return false
+        }
+    }
+    return true
+}
+
+// The statuses, verifications and ADR statuses rho req knows.
+fn dev_status_ok(status: string) bool {
+    return dev_list_has("draft,proposed,approved,implemented,verified,rejected,retired", status)
+}
+
+fn dev_verification_ok(value: string) bool {
+    return dev_list_has("test,analysis,inspection,demonstration", value)
+}
+
+fn dev_adr_status_ok(status: string) bool {
+    return dev_list_has("proposed,accepted,rejected", status)
+}
+
+// dev_committed is a status only a maintainer moves a requirement into, which
+// CI holds to MAINTAINERS.yml (`rho req check --base`).
+fn dev_committed(status: string) bool {
+    return dev_list_has("approved,implemented,verified", status)
+}
+
+// dev_repo_known is whether a repository name is one of the family's, as rho
+// req listed them (`repo` records). A name a request carries is only ever looked
+// up here, and the directory used is the one rho req gave for it.
+fn dev_repo_known(repos: string, name: string) bool {
+    if !valid_name(name) {
+        return false
+    }
+    return dev_repo_dir(repos, name) != ""
+}
+
+// dev_repo_dir is a family repository's directory, as rho req found it.
+// @req KEEP-DEV-0003
+fn dev_repo_dir(repos: string, name: string) string {
+    var rest: string = dev_records(repos, "repo")
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_eq(dev_field(line, 1), name) {
+            return dev_field(line, 2)
+        }
+    }
+    return ""
+}
+
+// dev_path_ok is a file a commit may carry: a relative path under
+// docs/requirements/ or docs/architecture/, with no way out of either.
+// @req KEEP-DEV-0003
+fn dev_path_ok(path: string) bool {
+    if path == "" || rho_str_starts_with(path, "/") || rho_str_index_of(path, "..") >= 0 ||
+        rho_str_index_of(path, "\\") >= 0 || rho_str_index_of(path, "\n") >= 0 || rho_str_index_of(path, "\t") >= 0 {
+        return false
+    }
+    return rho_str_starts_with(path, "docs/requirements/") || rho_str_starts_with(path, "docs/architecture/")
+}
+
+// dev_adr_file_ok is an ADR's file as rho req names it.
+fn dev_adr_file_ok(path: string) bool {
+    return dev_path_ok(path) && rho_str_starts_with(path, "docs/architecture/adr/")
+}
+
+// dev_adr_of_path is the ADR a file under docs/architecture/adr/ is
+// (docs/architecture/adr/0003-x.md is ADR-0003), or "".
+fn dev_adr_of_path(path: string) string {
+    let dir: string = "docs/architecture/adr/"
+    if !rho_str_starts_with(path, dir) {
+        return ""
+    }
+    let name: string = rho_str_slice(path, u32(rho_strlen(dir)), u32(rho_strlen(path)) - u32(rho_strlen(dir)))
+    if rho_strlen(name) < 8 || !rho_str_eq(rho_str_slice(name, 4, 1), "-") {
+        return ""
+    }
+    let number: string = rho_str_slice(name, 0, 4)
+    if !dev_digits_ok(number, 4) || rho_str_eq(number, "0000") {
+        return ""
+    }
+    return "ADR-" + number
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Who may change what                                                       */
+/* -------------------------------------------------------------------------- */
+
+// dev_maintainer_from is whether whoever asks is a maintainer: an admin, a person
+// granted `keeper:maintainer` (or `keeper:*`), or a ticket carrying every scope
+// or that one. `role` and `grants` are a person's, from the people store;
+// `scopes` is what a session or ticket carries when it is not a person's.
+// @req KEEP-DEV-0002
+fn dev_maintainer_from(role: string, grants: string, scopes: string) bool {
+    if rho_str_eq(role, "admin") {
+        return true
+    }
+    if dev_list_has(grants, "keeper:maintainer") || dev_list_has(grants, "keeper:*") || dev_list_has(grants, "*") {
+        return true
+    }
+    return dev_list_has(scopes, "*") || dev_list_has(scopes, "keeper:maintainer") || dev_list_has(scopes, "keeper:*")
+}
+
+// dev_yaml_scalar is the value of a `key: value` line, without quotes or a
+// trailing comment, or "" when the line is not that key.
+fn dev_yaml_scalar(line: string, key: string) string {
+    var text: string = str_trim(line)
+    if rho_str_starts_with(text, "- ") {
+        text = str_trim(rho_str_slice(text, 2, u32(rho_strlen(text)) - 2))
+    }
+    if rho_str_starts_with(text, "{") {
+        return dev_flow_value(text, key)
+    }
+    let prefix: string = key + ":"
+    if !rho_str_starts_with(text, prefix) {
+        return ""
+    }
+    var value: string = str_trim(rho_str_slice(text, u32(rho_strlen(prefix)), u32(rho_strlen(text)) - u32(rho_strlen(prefix))))
+    let hash: i32 = rho_str_index_of(value, " #")
+    if hash >= 0 {
+        value = str_trim(rho_str_slice(value, 0, u32(hash)))
+    }
+    return unquote(value)
+}
+
+// dev_flow_value is one key of a flow mapping written on one line:
+// `{ name: Ada, email: ada@example.org }`.
+fn dev_flow_value(text: string, key: string) string {
+    var body: string = text
+    if rho_str_starts_with(body, "{") {
+        body = rho_str_slice(body, 1, u32(rho_strlen(body)) - 1)
+    }
+    let close: i32 = rho_str_index_of(body, "}")
+    if close >= 0 {
+        body = rho_str_slice(body, 0, u32(close))
+    }
+    var rest: string = body + ","
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, ",")
+        if at < 0 {
+            break
+        }
+        let pair: string = str_trim(rho_str_slice(rest, 0, u32(at)))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if rho_str_starts_with(pair, key + ":") {
+            return unquote(str_trim(rho_str_slice(pair, u32(rho_strlen(key)) + 1, u32(rho_strlen(pair)) - u32(rho_strlen(key)) - 1)))
+        }
+    }
+    return ""
+}
+
+// dev_maintainer_listed is whether a git identity is in a MAINTAINERS.yml: by
+// email, by name, or by a GitHub login (including a
+// `NNN+login@users.noreply.github.com` address) — the rule `rho req check
+// --base` applies to an approving commit.
+// @req KEEP-DEV-0006
+fn dev_maintainer_listed(maintainers: string, name: string, email: string) bool {
+    let mail: string = str_lower(str_trim(email))
+    let who: string = str_trim(name)
+    var login: string = ""
+    let noreply: i32 = rho_str_index_of(mail, "@users.noreply.github.com")
+    if noreply > 0 {
+        login = rho_str_slice(mail, 0, u32(noreply))
+        let plus: i32 = rho_str_index_of(login, "+")
+        if plus >= 0 {
+            login = rho_str_slice(login, u32(plus) + 1, u32(rho_strlen(login)) - u32(plus) - 1)
+        }
+    }
+    var rest: string = maintainers
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let listed_mail: string = str_lower(dev_yaml_scalar(line, "email"))
+        if mail != "" && rho_str_eq(listed_mail, mail) {
+            return true
+        }
+        let listed_name: string = dev_yaml_scalar(line, "name")
+        if who != "" && rho_str_eq(listed_name, who) {
+            return true
+        }
+        let listed_login: string = str_lower(dev_yaml_scalar(line, "github"))
+        if login != "" && rho_str_eq(listed_login, login) {
+            return true
+        }
+    }
+    return false
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Commits                                                                   */
+/* -------------------------------------------------------------------------- */
+
+// dev_branch is the branch a day's requirements commit goes to when the
+// repository is on its default branch: requirements/<yyyy-mm-dd>, then -2, -3 …
+// for a branch of that name that no longer contains HEAD.
+// @req KEEP-DEV-0005
+fn dev_branch(date: string, attempt: u32) string {
+    if attempt <= 1 {
+        return "requirements/" + date
+    }
+    return "requirements/" + date + "-" + rho_int_to_str(attempt)
+}
+
+// dev_change_ids is the ids the keeper's change log names for one repository,
+// comma separated, each once, in the order they were changed. A log line is
+// `repo<TAB>id`.
+fn dev_change_ids(log: string, repo: string) string {
+    var out: string = ""
+    var rest: string = log
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if rho_str_eq(tsv_field(line, 0), repo) {
+            let id: string = tsv_field(line, 1)
+            if id != "" && !dev_list_has(out, id) {
+                if out != "" {
+                    out = out + ","
+                }
+                out = out + id
+            }
+        }
+    }
+    return out
+}
+
+// dev_change_log_without is the change log with one repository's lines taken out,
+// once they are committed.
+fn dev_change_log_without(log: string, repo: string) string {
+    var out: string = ""
+    var rest: string = log
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line != "" && !rho_str_eq(tsv_field(line, 0), repo) {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}
+
+// dev_commit_ids is every id a commit changes: what the change log names, and
+// the ADR of every decision file among the changed paths (`status<TAB>path` per
+// line), each once.
+fn dev_commit_ids(logged: string, changes: string) string {
+    var out: string = logged
+    var rest: string = changes
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let adr: string = dev_adr_of_path(tsv_field(line, 1))
+        if adr != "" && !dev_list_has(out, adr) {
+            if out != "" {
+                out = out + ","
+            }
+            out = out + adr
+        }
+    }
+    return out
+}
+
+// dev_commit_message is the message of a requirements commit: the ids in its
+// subject, and the files in its body.
+fn dev_commit_message(ids: string, changes: string) string {
+    var subject: string = "requirements: update"
+    if ids != "" {
+        subject = "requirements: " + str_replace(ids, ",", ", ")
+    }
+    var body: string = ""
+    var rest: string = changes
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        if line != "" {
+            body = body + "  " + tsv_field(line, 0) + " " + tsv_field(line, 1) + "\n"
+        }
+    }
+    return subject + "\n\nMade in the RoboHub keeper's Developer section with rho req.\n\n" + body
+}
+
+// dev_sha_of is the object name a git command printed: the first line that is
+// 40 or 64 hex digits, so a warning on standard error around it is not read as
+// one. "" when there is none.
+fn dev_sha_of(output: string) string {
+    var rest: string = output
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let word: string = str_trim(line)
+        let length: u32 = u32(rho_strlen(word))
+        if length == 40 || length == 64 {
+            var hex: bool = true
+            var i: u32 = 0
+            while i < length {
+                if rho_str_index_of("0123456789abcdef", rho_str_slice(word, i, 1)) < 0 {
+                    hex = false
+                    break
+                }
+                i = i + 1
+            }
+            if hex {
+                return word
+            }
+        }
+    }
+    return ""
+}
+
+// dev_fingerprint is a list of changes (`status<TAB>path` per line) as one
+// attribute value: the commit form carries what the page showed, and a commit
+// whose changes are no longer those is refused rather than carrying more.
+fn dev_fingerprint(changes: string) string {
+    return str_replace(str_replace(changes, "\t", "|"), "\n", ";")
+}
+
+// dev_without_anchors is rendered Markdown without the `<a id="…"></a>` lines rho
+// req puts before each requirement for other Markdown viewers: the keeper's
+// renderer shows raw HTML as text, and gives every heading an id of its own.
+// @req KEEP-DEV-0007
+fn dev_without_anchors(text: string) string {
+    var out: string = ""
+    var rest: string = text
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else {
+            line = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        }
+        let trimmed: string = str_trim(line)
+        let length: u32 = u32(rho_strlen(trimmed))
+        let anchor: bool = rho_str_starts_with(trimmed, "<a id=\"") && length > 11 &&
+            rho_str_eq(rho_str_slice(trimmed, length - 6, 6), "\"></a>") && rho_str_index_of(rho_str_slice(trimmed, 7, length - 13), "\"") < 0
+        if !anchor {
+            out = out + line + "\n"
+        }
+    }
+    return out
+}

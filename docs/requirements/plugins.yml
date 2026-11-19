@@ -1,0 +1,82 @@
+# Alerts, plugins, providers, app modules and integrations: src/keeper/alerts.rho,
+# plugins.rho, plugin_registry.rho, providers.rho, app_modules.rho, settings.rho
+# and integrations.rho.
+level: SUB
+prefix: KEEP-PROV
+title: Alerts, plugins and integrations
+requirements:
+  - id: KEEP-PROV-0001
+    title: The keeper alerts when an application cannot start, stop or be installed
+    statement: >
+      The keeper shall raise an ERROR alert through its bound channels, once per
+      event, when systemd refuses to start or stop an application, when a start
+      or rollback job fails, when a redeploy is backed out to the release before
+      it, when cloning an application or fetching a package to install it fails,
+      and when an application cannot be registered as a client.
+    rationale: These are the failures a person is not watching for when they happen.
+    satisfies: [KEEP-0009]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [alerts]
+
+  - id: KEEP-PROV-0002
+    title: An admin configures, switches and tests the alert channels
+    statement: >
+      The Alerts settings and the Plugins page shall change the keeper's alert
+      channels for this installation in its `bind.conf` — the log file and
+      threshold, e-mail and Telegram on or off with their recipient and
+      threshold — and a test shall hand a test alert to the chosen channel.
+    rationale: A channel is known to work before it is needed.
+    satisfies: [KEEP-0009]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [alerts, settings]
+
+  - id: KEEP-PROV-0003
+    title: Plugins are enabled or disabled for the keeper
+    statement: >
+      An admin shall install, remove, enable and disable plugins of the plugin
+      registry, the keeper's own choice being kept in `plugins.txt` in its state
+      folder.
+    rationale: What the keeper uses is chosen per installation, without editing the shared registry.
+    satisfies: [KEEP-0009]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [plugins]
+
+  - id: KEEP-PROV-0004
+    title: An app module in use is not removed
+    statement: >
+      Removing an app module shall be refused while any installed application
+      includes it in `modules:` or among its dependencies.
+    rationale: A module is compiled into the applications that use it; removing it breaks their next build.
+    satisfies: [KEEP-0004]
+    status: proposed
+    verification: inspection
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [modules]
+
+  - id: KEEP-PROV-0005
+    title: The broker's users and topics come from the manifests
+    statement: >
+      Running the MQTT integration shall write its configuration under the
+      keeper's `services/<name>/` and start it as a user unit listening on
+      127.0.0.1 until an admin opens it to the network; every application whose
+      manifest binds `robohub.bus` shall be a broker user with a random password
+      kept owner-only in its workspace and only the topics its `bus:` block names,
+      and a device an admin adds shall be a user limited to its own topic prefix,
+      its password shown once.
+    rationale: Each broker user reaches only its own topics, and no password is put on a command line.
+    satisfies: [KEEP-0010]
+    status: proposed
+    verification: demonstration
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [mqtt, integrations, least-privilege]

@@ -168,7 +168,7 @@ fn provider_row_line(req: Request, line: string) string {
         vars("transport", field(line, 2)) +
         vars("summary", summary) +
         vars("status", status) +
-        vars("actions", template_fill(template_get("provider-actions"), i18n_vars(req) +
+        vars("actions", template_fill(template_get("provider-actions"), i18n_vars(req) + vars("csrf", forms_csrf_field()) +
             vars("confirm_uninstall", i18n_t(req, "providers.uninstall_confirm")) + vars("name", name))))
 }
 
@@ -270,6 +270,9 @@ fn providers_install(req: Request) Response {
 fn providers_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))

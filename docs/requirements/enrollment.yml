@@ -1,0 +1,124 @@
+# Node enrollment, verification and the node registry: src/keeper/enrollment.rho,
+# enrollment_text.rho and nodes.rho.
+level: SUB
+prefix: KEEP-ENROLL
+title: Node enrollment
+requirements:
+  - id: KEEP-ENROLL-0001
+    title: A token is valid only for its device, until it expires, once
+    statement: >
+      `POST /api/enroll` shall refuse with 403 a token that is unknown, names no
+      device, has no expiry, has expired, names no placement or names another
+      device, and with 409 a token already used.
+    rationale: Enrollment trusts the token, and a token is good for one device, once, for a short time.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [token]
+
+  - id: KEEP-ENROLL-0002
+    title: The node is placed where its token says
+    statement: >
+      An enrollment that names a project, area or node other than its token's
+      (numbers compared by value) shall be refused with 403, and one that names
+      none shall be recorded at the token's placement.
+    rationale: A node does not get to choose where it sits.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [placement]
+
+  - id: KEEP-ENROLL-0003
+    title: An enrolled device is not taken over
+    statement: >
+      An enrollment for a device that is already enrolled shall be refused with
+      409 unless its token was made to re-enroll, in which case the new
+      credential shall replace the old, which no longer verifies.
+    rationale: A second token for the same name must not silently steal a node's identity.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [reenroll]
+
+  - id: KEEP-ENROLL-0004
+    title: Spending a token is one step under a lock
+    statement: >
+      Finding, checking and spending a token and writing the node's record shall
+      happen under the token file's lock, so that one token presented many times
+      at once enrolls once; the token file shall keep every line, mark spent ones
+      `used`, and stay owner-only.
+    rationale: Two racing requests with one token must not both enroll, and a token added meanwhile must not be lost.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [token, concurrency]
+
+  - id: KEEP-ENROLL-0005
+    title: Credentials are kept only as salted hashes
+    statement: >
+      A node's credential shall be 256 random bits, returned once, and kept in an
+      owner-only record under an owner-only `nodes/` folder only as
+      `s1$<salt>$HMAC-SHA256(salt, credential)`; a record holding a credential in
+      the clear shall be hashed when the keeper starts or when it is next
+      verified.
+    rationale: A copy of the keeper's state must not be a copy of every node's credential.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [credential, secrets]
+
+  - id: KEEP-ENROLL-0006
+    title: The public node endpoints have a budget
+    statement: >
+      Enrollment shall be limited to 10 calls a minute per client and 60 for all
+      clients together, and verification to 60 and 600, answering 429 with
+      `Retry-After: 60` past either; the client shall be the connection's
+      address, or the forwarded address only when the connection comes from this
+      machine.
+    rationale: Endpoints that need no session must not be a way to guess a token or a credential.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [rate-limit]
+
+  - id: KEEP-ENROLL-0007
+    title: A credential is verified to its placement
+    statement: >
+      `POST /api/nodes/verify` shall answer an enrolled device's project, area and
+      node when its credential matches, comparing in time that does not depend on
+      where they differ, and 403 otherwise.
+    rationale: Mesh hands a host node its board key on the keeper's word.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [verify]
+
+  - id: KEEP-ENROLL-0008
+    title: An admin rotates or revokes a node's credential
+    statement: >
+      On the Nodes page an admin, posting the form's CSRF token, shall rotate a
+      node's credential, shown once and kept as a salted hash, or revoke the
+      node, removing its record so that its credential no longer verifies; each
+      shall be recorded as a `node.rotated` or `node.revoked` event, and a
+      request without the token or from anyone but an admin shall change nothing.
+    rationale: A node that is lost or whose credential leaked is cut off from the keeper.
+    satisfies: [KEEP-0008]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [registry, revocation]

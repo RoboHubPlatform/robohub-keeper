@@ -38,6 +38,7 @@ fn deps_dir() string {
 // deps_machine_report is `rho doctor --tsv` for an application's folder, one
 // requirement per line: module, dep, kind, required, status, found version,
 // message, how to install. It is kept for DEPS_FRESH_SECONDS unless `fresh`.
+// @req KEEP-DEPS-0001
 fn deps_machine_report(name: string, fresh: bool) string {
     let file: string = deps_dir() + "/" + name + ".tsv"
     let stamp: string = deps_dir() + "/" + name + ".at"
@@ -64,6 +65,7 @@ fn deps_machine_report(name: string, fresh: bool) string {
 }
 
 // deps_missing is the required programs an application lacks, one per line.
+// @req KEEP-APPS-0007
 fn deps_missing(name: string, fresh: bool) string {
     var out: string = ""
     var rest: string = deps_machine_report(name, fresh)
@@ -128,7 +130,7 @@ fn deps_report_rows(req: Request, report: string, name: string) string {
             detail = detail + " · " + tsv_field(line, 7)
             if name != "" {
                 action = "<button type=\"button\" class=\"small\" hx-post=\"/overview/app/" + escape_html(name) + "/install-dep?dep=" +
-                    escape_html(dep) + "&module=" + escape_html(tsv_field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\">" + i18n_t(req, "common.install") + "</button>"
+                    escape_html(dep) + "&module=" + escape_html(tsv_field(line, 0)) + "\" hx-target=\"#ins\" hx-swap=\"innerHTML\"" + keeper_csrf_vals() + ">" + i18n_t(req, "common.install") + "</button>"
             }
         } else if !rho_str_eq(status, "OK") {
             tone = "warn"
@@ -242,6 +244,7 @@ fn deps_inspector_body(req: Request, name: string) string {
 // deps_install_job installs one requirement of an application in the background.
 // The module is the one the doctor named; `rho keeper install` looks the
 // requirement up again rather than running a command the request carried.
+// @req KEEP-DEPS-0002
 fn deps_install_job(lang: string, name: string, owner: string, dep: string) string {
     if !valid_name(owner) || !valid_name(dep) {
         return keeper_say(lang, "deps.not_requirement")
@@ -285,6 +288,7 @@ fn deps_optional_missing(name: string) string {
 // installed: where it is, the port and unit it would get, and what it needs at
 // the three levels. A git URL is checked once it is cloned, so it goes straight
 // to Install, which does not start what lacks a required program.
+// @req KEEP-DEPS-0001
 fn deps_preview_page(req: Request) Response {
     let add: string = str_trim(query_str(req, "add"))
     let source: string = str_trim(query_str(req, "source"))
@@ -348,6 +352,7 @@ fn deps_preview_page(req: Request) Response {
 
 // system_page is the machine as a whole: what every application in the keeper
 // needs from it, and what the installed toolchain modules need.
+// @req KEEP-DEPS-0003
 fn system_page(req: Request) Response {
     var apps: string = ""
     var rest: string = catalog_names()

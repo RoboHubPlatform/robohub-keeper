@@ -68,6 +68,7 @@ fn app_released(name: string) bool {
 // puts it in use: the program, the manifest, static/ and deploy.files, copied
 // into a new release; `current` switched to it in one rename; the oldest beyond
 // three removed.
+// @req KEEP-APPS-0009
 fn app_release_lines(name: string) string {
     if !app_released(name) {
         return ""
@@ -175,6 +176,7 @@ fn app_port_of(name: string) string {
 // keeper — which is also the address the machine's own browser is forwarded to
 // under WSL — unless its manifest says `deploy.listen: lan`, for an application
 // devices on the network have to reach.
+// @req KEEP-0006
 fn app_listen_host(location: string) string {
     if rho_str_eq(yaml.value(manifest_of(location), "deploy.listen"), "lan") {
         return ""
@@ -219,6 +221,7 @@ fn env_quote(value: string) string {
 }
 
 // app_environment is the contract above for one application, as KEY=value lines.
+// @req KEEP-APPS-0005
 fn app_environment(name: string) string {
     let location: string = catalog_get(name, "location")
     let workspace: string = keeper_app_workspace(name)
@@ -316,6 +319,7 @@ fn app_unit_description(name: string, location: string) string {
 // app_unit_text is the unit the keeper writes for an application. It starts after
 // the applications it depends on (deploy.depends), and wants them; systemd
 // restarts it when it fails.
+// @req KEEP-APPS-0004
 fn app_unit_text(name: string) string {
     if integration_is(name) {
         // An integration runs its service's own program with the configuration
@@ -361,6 +365,7 @@ fn app_unit_text(name: string) string {
 // only where the machine's systemd can make a private view for a user service,
 // which the keeper tries once (app_isolation_works) — a unit that cannot start
 // would be worse than one that shares a folder.
+// @req KEEP-0006
 fn app_isolation(name: string) string {
     var out: string = "NoNewPrivileges=yes\n"
     if integration_is(name) || !app_isolation_works() {
@@ -477,6 +482,7 @@ fn app_healthy(name: string) bool {
 //   not-built    a folder whose program has not been built
 //   not-deployed no unit yet
 //   keeper       the keeper itself
+// @req KEEP-APPS-0006
 fn app_state(name: string) string {
     let location: string = catalog_get(name, "location")
     if app_kind(location) == "keeper" {
@@ -509,6 +515,7 @@ fn app_state(name: string) string {
 }
 
 // app_journal is the application's last lines from the journal.
+// @req KEEP-0015
 fn app_journal(name: string, lines: u32) string {
     let report: string = apps_report("journal-" + name)
     ignore_u32(rho_exec_args("journalctl", "--user\n-u\n" + app_unit_name(name) + ".service\n-n\n" +

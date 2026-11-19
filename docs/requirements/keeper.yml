@@ -1,0 +1,222 @@
+# What the keeper does towards the system requirements robohub holds. Written in
+# the R5 backfill from the keeper's documentation, changelog, code and tests;
+# all proposed until the maintainer approves them. The subsystems' requirements
+# are in the other files here, each serving one of these.
+level: NODE
+prefix: KEEP
+title: Keeper
+requirements:
+  - id: KEEP-0001
+    title: The keeper is the one sign-in authority
+    statement: >
+      The keeper shall sign people in for itself and for every application it
+      hosts, and shall be the only issuer of sign-in tickets, keeper sessions and
+      service tokens, publishing the public key that verifies them.
+    rationale: One issuer is one key to protect and one place a person signs in.
+    satisfies: [SYS-0003, SYS-0006, SYS-0010, SYS-0011, SYS-0029, SYS-0030]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [auth, security]
+
+  - id: KEEP-0002
+    title: People have a role in the keeper and grants per application
+    statement: >
+      The keeper shall keep a store of people, each with a role (admin, operator
+      or viewer) that limits what they may do in the keeper and grants that limit
+      what they reach in each application, and shall let an admin end a person's
+      sessions everywhere.
+    rationale: Who may restart an application and who may read a tank are separate questions.
+    satisfies: [SYS-0007, SYS-0008, SYS-0009]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [auth, people, least-privilege]
+
+  - id: KEEP-0003
+    title: Hosted applications are served under the keeper's origin
+    statement: >
+      The keeper shall serve every application it hosts at `/app/<name>/` on its
+      own address, and shall offer every application in a switcher and, when an
+      admin adds it, in its menu.
+    rationale: One address reaches everything, and one application's cookies never reach another.
+    satisfies: [SYS-0005, SYS-0017]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [apps, proxy]
+
+  - id: KEEP-0004
+    title: The keeper installs, supervises and removes applications
+    statement: >
+      The keeper shall install an application from the Rho registry, from a
+      folder on the machine or from a git URL, run each as a systemd user unit it
+      writes, show its state, and uninstall it while keeping its data.
+    rationale: Installing and running applications must not need a shell.
+    satisfies: [SYS-0012, SYS-0013, SYS-0016]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [apps, supervision]
+
+  - id: KEEP-0005
+    title: Applications are updated without losing the working version
+    statement: >
+      The keeper shall run an application built from a folder from a release,
+      put a new release in use only once it answers its health check, keep the
+      previous releases to roll back to, offer newer registry versions, and
+      deploy a prebuilt artifact only when it verifies.
+    rationale: An update that fails must leave the application as it was.
+    satisfies: [SYS-0014, SYS-0015, SYS-0035]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [apps, updates]
+
+  - id: KEEP-0006
+    title: Hosted applications run with least privilege
+    statement: >
+      The keeper shall start every hosted application without the ability to gain
+      privileges, listening on loopback unless its manifest asks for the LAN, and,
+      where systemd allows, unable to read the keeper's state other than its own
+      workspace and releases or any key that mints tokens.
+    rationale: Every application runs as the same user; systemd is what keeps them apart.
+    satisfies: [SYS-0031, SYS-0032]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [apps, security, isolation]
+
+  - id: KEEP-0007
+    title: The keeper says what the machine lacks
+    statement: >
+      The keeper shall report, from `rho doctor`, which programs each application
+      and each enabled toolchain module requires that the machine lacks, before an
+      application is installed and on its System page, and shall install a missing
+      one when an admin asks.
+    rationale: A missing program must be found before it breaks a start.
+    satisfies: [SYS-0004]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [dependencies]
+
+  - id: KEEP-0008
+    title: The keeper enrolls host nodes with one-time tokens
+    statement: >
+      The keeper shall enroll a node that presents a valid one-time token for its
+      device, issue it a credential, and answer whether a presented credential
+      belongs to an enrolled node and where that node is placed.
+    rationale: A Linux host gets an identity of its own only by proving it was meant.
+    satisfies: [SYS-0027]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [enrollment, security]
+
+  - id: KEEP-0009
+    title: The keeper raises alerts through the channels it binds
+    statement: >
+      The keeper shall raise its own alerts through every channel its
+      `robohub.alert` binding names, as configured for this installation, and
+      shall let an admin switch a channel on or off and send it a test alert.
+    rationale: A failed application must reach the person by the channel they read.
+    satisfies: [SYS-0036]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [alerts, plugins]
+
+  - id: KEEP-0010
+    title: The keeper runs the MQTT broker for devices
+    statement: >
+      The keeper shall run the MQTT integration as a user unit when an admin asks,
+      listening on loopback until an admin opens it to the network, with every
+      application that binds the bus and every device an admin adds as a broker
+      user limited to its own topics.
+    rationale: Network devices report locally and none reads another's topics.
+    satisfies: [SYS-0028, SYS-0032]
+    status: proposed
+    verification: demonstration
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [integrations, mqtt]
+
+  - id: KEEP-0011
+    title: The keeper serves the documentation
+    statement: >
+      The keeper shall serve the ecosystem's documentation at `/docs`, rendered
+      from the documentation tree on the machine by the toolchain's generator.
+    rationale: The manual is there when the network is not.
+    satisfies: [SYS-0038]
+    status: proposed
+    verification: demonstration
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [docs]
+
+  - id: KEEP-0012
+    title: The keeper maintains requirements and decisions
+    statement: >
+      The keeper shall show the workspace's requirements, architecture decisions,
+      trace matrix, check and export through `rho req`, and shall let only a
+      maintainer change them and commit the change locally, never pushing it.
+    rationale: The process is maintained where the maintainer already works, and the tool stays the one authority on the files.
+    satisfies: [SYS-0041]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [developer, process]
+
+  - id: KEEP-0013
+    title: The keeper's own surface is hardened
+    statement: >
+      The keeper shall refuse a form posted from another origin, keep its state
+      folder and every secret it writes readable by its owner only, and pass
+      every argument to a program it runs one per line, refusing a value with a
+      line break or a leading `-`.
+    rationale: The keeper runs programs on a person's behalf; nothing a request carries may become an option or a second argument.
+    satisfies: [SYS-0033, SYS-0034]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [security, web]
+
+  - id: KEEP-0014
+    title: The keeper deploys itself as a user service from a release
+    statement: >
+      The keeper's deploy script shall build the keeper, make a release of it,
+      point `current` at it, keep the three newest releases, enable lingering for
+      the user and restart the `robohub-keeper` user unit on that release,
+      listening on 127.0.0.1 unless `KEEPER_LISTEN` names another address.
+    rationale: The keeper must come back after a reboot, and a rebuild of the checkout must not change what runs.
+    satisfies: [SYS-0002, SYS-0032]
+    status: proposed
+    verification: demonstration
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [installation, deploy]
+
+  - id: KEEP-0015
+    title: The keeper reports health and shows logs
+    statement: >
+      The keeper shall answer `/healthz` without a session and shall show each
+      application's journal and the log of each of its jobs.
+    rationale: What is wrong must be visible without a shell.
+    satisfies: [SYS-0039]
+    status: proposed
+    verification: test
+    owner: maintainer
+    changed: 2026-11-19
+    tags: [observability]

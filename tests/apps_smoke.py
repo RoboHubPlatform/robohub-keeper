@@ -68,7 +68,10 @@ def get(base: str, path: str) -> str:
         return response.read().decode("utf-8", "replace")
 
 
-def post(base: str, path: str, fields: dict) -> str:
+def post(base: str, path: str, fields: dict, token: bool = True) -> str:
+    # Every form the keeper draws carries its token, so a browser's post does too.
+    if token and "csrf" not in fields:
+        fields = {**fields, "csrf": csrf_token(base)}
     body = urllib.parse.urlencode(fields).encode()
     request = urllib.request.Request(base + path, data=body, method="POST")
     request.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -97,11 +100,17 @@ def sign_in(base: str, audience: str, return_to: str, session: bool) -> tuple:
         return answer.code, answer.headers.get("Location", ""), answer.read().decode("utf-8", "replace")
 
 
+_TOKENS = {}
+
+
 def csrf_token(base: str) -> str:
     """The token the forms module drew the install form with."""
+    if base in _TOKENS:
+        return _TOKENS[base]
     match = re.search(r'name="csrf" value="([^"]*)"', get(base, "/applications"))
     if not match:
         raise AssertionError("the install form carries no CSRF token")
+    _TOKENS[base] = match.group(1)
     return match.group(1)
 
 
@@ -189,7 +198,10 @@ class Stand_in:
 
 
 def post_json(base: str, path: str) -> str:
-    request = urllib.request.Request(base + path, data=b"", method="POST")
+    # A browser's session posts the form token here as well.
+    data = urllib.parse.urlencode({"csrf": csrf_token(base)}).encode()
+    request = urllib.request.Request(base + path, data=data, method="POST")
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
     request.add_header("Origin", base)
     request.add_header("Cookie", f"keeper_session={SESSION}")
     with urllib.request.urlopen(request, timeout=20) as response:
@@ -207,6 +219,13 @@ def wait_job(base: str, name: str, timeout: float = 60.0) -> dict:
                 return jobs[0]
         time.sleep(0.5)
     raise AssertionError(f"the job of {name} did not end")
+
+
+def alert_count(log: Path, needle: str) -> int:
+    """How many lines of the keeper's alert log name `needle`."""
+    if not log.exists():
+        return 0
+    return sum(1 for line in log.read_text(encoding="utf-8").splitlines() if needle in line)
 
 
 def assert_contains(haystack: str, needles: list, label: str) -> None:
@@ -276,10 +295,20 @@ def main() -> int:
         fake = Path(state) / "fake-bin"
         fake.mkdir()
         real = shutil.which("systemctl") or "/bin/false"
+        # Stopping is refused, as systemd does when it cannot stop a unit, so the
+        # alert a refused stop raises can be seen.
         (fake / "systemctl").write_text("#!/bin/sh\n"
             "case \" $* \" in *\" restart \"*|*\" start \"*|*\" daemon-reload \"*) exit 0;; esac\n"
+            "case \" $* \" in *\" stop \"*) echo 'Failed to stop (smoke)' >&2; exit 1;; esac\n"
             f"exec {real} \"$@\"\n", encoding="utf-8")
         (fake / "systemctl").chmod(0o755)
+        # Fetching a package from the registry fails, as it does when the
+        # registry cannot be reached; everything else is the real toolchain.
+        real_rho = str(RHO) if RHO.exists() else (shutil.which("rho") or "rho")
+        (fake / "rho").write_text("#!/bin/sh\n"
+            "if [ \"$1\" = module ] && [ \"$2\" = install ]; then echo 'the registry cannot be reached (smoke)'; exit 1; fi\n"
+            f"exec {real_rho} \"$@\"\n", encoding="utf-8")
+        (fake / "rho").chmod(0o755)
         env["PATH"] = str(fake) + os.pathsep + env.get("PATH", "")
         # The applications page is behind the keeper's own session. Give the
         # smoke run one valid local session instead of disabling auth.
@@ -462,7 +491,7 @@ def main() -> int:
             if names["keeper"]["state"] != "keeper" or names["keeper"]["port"] != str(port):
                 raise AssertionError(f"the keeper's own record is wrong: {names['keeper']}")
 
-            forged = post(base, "/applications/install", {"name": "demo", "source": str(demo)})
+            forged = post(base, "/applications/install", {"name": "demo", "source": str(demo)}, token=False)
             assert_contains(forged, ["not drawn by this keeper"], "an install without the form's token")
             installed = post(
                 base,
@@ -477,6 +506,13 @@ def main() -> int:
             failed = wait_job(base, "demo")
             if failed["status"] != "failed" or "build failed" not in failed["reason"]:
                 raise AssertionError(f"building demo did not fail as it should: {failed}")
+            # A start that fails is an alert, raised once however often the job
+            # is looked at.
+            # @verifies KEEP-PROV-0001
+            get(base, "/jobs/strip")
+            get(base, "/api/v1/apps/demo")
+            if alert_count(alert_log, "Application demo could not start") != 1:
+                raise AssertionError("a failed start is not alerted once:\n" + alert_log.read_text())
             assert_contains(get(base, "/api/applications/rows"),
                             ["Demo App", "not built"], "installed row")
             home = get(base, "/")
@@ -490,6 +526,10 @@ def main() -> int:
             assert_contains(built, ["demo is being built"], "build")
             if wait_job(base, "demo")["status"] != "failed":
                 raise AssertionError("a build of an application with no sources did not fail")
+            # A build touches nothing that runs, so its failure is the job's alone.
+            get(base, "/jobs/strip")
+            if alert_count(alert_log, "Application demo") != 1:
+                raise AssertionError("a failed build raised an alert:\n" + alert_log.read_text())
 
             # The unit is the keeper's, written from the manifest and the catalogue:
             # one written for where the application used to be is written again.
@@ -505,6 +545,16 @@ def main() -> int:
                                                "ExecStart=" + str(releases_home / "demo" / "current" / "demo"),
                                                "EnvironmentFile="], "rewritten unit")
             wait_job(base, "demo")
+            # A stop that systemd refuses is an alert.
+            stopped = post(base, "/applications/stop", {"name": "demo"})
+            assert_contains(stopped, ["Could not stop demo"], "a refused stop")
+            if alert_count(alert_log, "Application demo could not be stopped") != 1:
+                raise AssertionError("a refused stop is not alerted:\n" + alert_log.read_text())
+            # A package the registry cannot give is an install that failed.
+            fetched = post(base, "/applications/install", {"package": "smoke-nothing@9.9.9", "csrf": csrf_token(base)})
+            assert_contains(fetched, ["smoke-nothing@9.9.9"], "a failed package install")
+            if alert_count(alert_log, "smoke-nothing@9.9.9 could not be installed") != 1:
+                raise AssertionError("a failed package install is not alerted:\n" + alert_log.read_text())
             redeployed = post(base, "/applications/redeploy", {"name": "demo"})
             assert_contains(redeployed, ["being built and redeployed"], "redeploy")
             if wait_job(base, "demo")["status"] != "failed":
@@ -609,6 +659,12 @@ def main() -> int:
                 raise AssertionError(f"a release that did not answer stayed in use: {os.readlink(current)}")
             if job["status"] != "failed" or "is back in use" not in job["reason"]:
                 raise AssertionError(f"the failed redeploy's job: {job}")
+            # A redeploy that was backed out is an alert, once, and says which
+            # release is back.
+            get(base, "/jobs/strip")
+            if alert_count(alert_log, "Application hello could not be redeployed") != 1 or \
+                    "is back in use" not in alert_log.read_text():
+                raise AssertionError("a backed-out redeploy is not alerted once:\n" + alert_log.read_text())
             failed = [r for r in (releases_home / "hello" / "releases").iterdir() if (r / ".failed").exists()]
             if len(failed) != 1:
                 raise AssertionError(f"the release that did not answer is not marked: {failed}")
@@ -638,6 +694,39 @@ def main() -> int:
             # Its releases go with it: the same name installed again starts afresh.
             if (releases_home / "hello").exists():
                 raise AssertionError("uninstalling left the releases behind")
+
+            # A person is named in lowercase, so two accounts cannot differ only
+            # by case: the keeper refuses a capital itself, and a name typed with
+            # capitals signs in as the lowercase person.
+            # @verifies KEEP-AUTH-0015
+            users = state_dir / "users.yml"
+            refused = post(base, "/people/add", {"name": "Ana", "role": "admin", "password": "smoke-pass-1"})
+            if "A name is lowercase letters" not in refused:
+                raise AssertionError("a name with a capital was not refused in the keeper's words:\n" +
+                                     refused[-2500:])
+            # A refused add said nothing at all before: its reason was dropped when
+            # no person was chosen.
+            if users.exists() and "Ana:" in users.read_text():
+                raise AssertionError("a name with a capital was stored")
+            added = post(base, "/people/add", {"name": "ana", "role": "admin", "password": "smoke-pass-1"})
+            if not users.exists() or "ana:" not in users.read_text():
+                raise AssertionError("the lowercase person was not stored:\n" + added[:2000])
+
+            def password_sign_in(name: str, password: str) -> int:
+                body = urllib.parse.urlencode({"name": name, "password": password}).encode()
+                request = urllib.request.Request(base + "/auth/login", data=body, method="POST")
+                request.add_header("Content-Type", "application/x-www-form-urlencoded")
+                request.add_header("Origin", base)
+                opener = urllib.request.build_opener(NoRedirect)
+                try:
+                    with opener.open(request, timeout=10) as response:
+                        return response.status
+                except urllib.error.HTTPError as answer:
+                    return answer.code
+
+            sessions = state_dir / "auth-sessions.txt"
+            if password_sign_in("Ana", "smoke-pass-1") not in (302, 303) or "|ana|" not in sessions.read_text():
+                raise AssertionError("a name typed with a capital did not sign in as the lowercase person")
         finally:
             process.terminate()
             try:

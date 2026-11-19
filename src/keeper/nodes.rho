@@ -70,7 +70,7 @@ fn node_rows(req: Request) string {
             vars("area", field(record, 3)) +
             vars("node", field(record, 4)) +
             vars("created", field(record, 6)) +
-            vars("status", node_status(req, device)) + i18n_vars(req) +
+            vars("status", node_status(req, device)) + i18n_vars(req) + vars("csrf", forms_csrf_field()) +
             vars("revoke_confirm", json_string(keeper_t1(req, "nodes.revoke_confirm", "device", device))))
     }
     if out == "" {
@@ -94,25 +94,34 @@ fn keeper_nodes_page(req: Request) Response {
     return keeper_nodes_page_message(req, "")
 }
 
+// @req KEEP-ENROLL-0008, KEEP-AUTH-0014
 fn keeper_nodes_revoke(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return keeper_csrf_refused(req)
+    }
     let device: string = str_trim(form_field(body, "device"))
     if node_record(device) == "" {
         return keeper_nodes_page_message(req, i18n_t(req, "nodes.not_enrolled"))
     }
     ignore_u32(rho_exec_args("rm", "-f\n" + node_path(device) + "\n", apps_report("node-revoke")))
     info("keeper", "revoked node " + device)
+    keeper_event("node.revoked", "", "Node " + device + " was revoked; its credential no longer verifies.")
     return keeper_nodes_page_message(req, keeper_t1(req, "nodes.revoked", "device", device))
 }
 
+// @req KEEP-ENROLL-0008, KEEP-AUTH-0014
 fn keeper_nodes_rotate(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
     }
     let body: string = request_body(req)
+    if !forms_csrf_ok(body) {
+        return keeper_csrf_refused(req)
+    }
     let device: string = str_trim(form_field(body, "device"))
     let record: string = node_record(device)
     if record == "" {
@@ -125,6 +134,7 @@ fn keeper_nodes_rotate(req: Request) Response {
     }
     ignore_bool(rho_write_secret(node_path(device), node_record_with(record, stored)))
     info("keeper", "rotated credential for node " + device)
+    keeper_event("node.rotated", "", "The credential of node " + device + " was rotated.")
     return keeper_nodes_page_message(req, keeper_t2(req, "nodes.new_credential", "device", device, "credential", credential))
 }
 
@@ -152,6 +162,7 @@ fn node_store_hashed(device: string, record: string) bool {
 
 // keeper_nodes_migrate hashes every node credential still kept in the clear;
 // the keeper runs it when it starts.
+// @req KEEP-ENROLL-0005
 fn keeper_nodes_migrate() void {
     let report: string = apps_report("node-migrate")
     if !rho_path_exists(node_dir()) {
@@ -186,6 +197,7 @@ fn keeper_nodes_migrate() void {
 // keeper_node_verify is the contract a gateway, Mesh or firmware calls before it
 // accepts a node. It is authenticated by the credential itself, and a client
 // has a budget of calls, so it is not a way to guess one.
+// @req KEEP-ENROLL-0007
 fn keeper_node_verify(req: Request) Response {
     if !rate_take(req, "verify", VERIFY_PER_CLIENT, VERIFY_PER_WINDOW) {
         return rate_refused()

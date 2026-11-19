@@ -12,11 +12,32 @@ suites:
   - name: tests/enrollment_test.rho
     kind: rho
     tags: [unit, rho, enrollment]
+  - name: tests/developer_test.rho
+    kind: rho
+    tags: [unit, rho, developer]
+  # @verifies KEEP-AUTH-0001, KEEP-AUTH-0004, KEEP-AUTH-0006, KEEP-AUTH-0015
+  # @verifies KEEP-APPS-0001, KEEP-APPS-0002, KEEP-APPS-0004, KEEP-APPS-0005
+  # @verifies KEEP-APPS-0008, KEEP-APPS-0009, KEEP-APPS-0010, KEEP-APPS-0011
+  # @verifies KEEP-APPS-0014, KEEP-APPS-0015, KEEP-APPS-0016
+  # @verifies KEEP-DOCS-0001, KEEP-PROV-0001, KEEP-PROV-0002, KEEP-PROV-0003
   - name: apps-smoke
     kind: command
     tags: [smoke]
     command: [python3, tests/apps_smoke.py]
+  # @verifies KEEP-ENROLL-0001, KEEP-ENROLL-0002, KEEP-ENROLL-0003, KEEP-ENROLL-0004
+  # @verifies KEEP-ENROLL-0005, KEEP-ENROLL-0006, KEEP-ENROLL-0007
   - name: enroll-smoke
     kind: command
     tags: [smoke, enrollment]
     command: [python3, tests/enroll_smoke.py]
+  # @verifies KEEP-DEV-0001, KEEP-DEV-0002, KEEP-DEV-0004, KEEP-DEV-0005
+  # @verifies KEEP-DEV-0007, KEEP-DEV-0008
+  - name: developer-smoke
+    kind: command
+    tags: [smoke, developer]
+    command: [python3, tests/developer_smoke.py]
+  # @verifies KEEP-AUTH-0014, KEEP-ENROLL-0008
+  - name: forms-smoke
+    kind: command
+    tags: [smoke, security]
+    command: [python3, tests/forms_smoke.py]

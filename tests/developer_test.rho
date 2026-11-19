@@ -1,0 +1,220 @@
+//
+// @file developer_test.rho
+// @brief The unit tests of the Developer section: reading `rho req --tsv`, the names a request may carry, who is a maintainer, and the commit's branch and message.
+//
+// @module keeper.developer_test
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-19
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.developer_test
+
+include "../src/keeper/apps_text.rho"
+include "../src/keeper/developer_text.rho"
+
+extern fn rho_strlen(s: string) u64
+extern fn rho_str_slice(s: string, start: u32, length: u32) string
+extern fn rho_str_index_of(s: string, needle: string) i32
+extern fn rho_str_from_byte(b: u8) string
+extern fn rho_str_eq(a: string, b: string) bool
+extern fn rho_str_starts_with(s: string, prefix: string) bool
+extern fn rho_int_from_str(s: string) u32
+extern fn rho_int_to_str(value: u32) string
+extern fn abort()
+
+fn check(condition: bool, what: string) void {
+    if !condition {
+        print("FAIL: " + what + "\n")
+        abort()
+    }
+}
+
+// What `rho req show GW-0001 --tsv` prints, with a log line and standard error
+// mixed in, as rho_exec_args captures it.
+const SHOWN: string = "[info] rho: reading the workspace\nreq\tGW-0001\tgateway\tNODE\tapproved\ttest\tSessions survive a gateway restart\tSYS-0001\tsecurity\tdocs/requirements/node.yml\t6\tmaintainer\t2026-11-19\nstatement\tAfter a restart\\tthe gateway\\nshall \\\\ recover.\nup\t0\tSYS-0001\tSurvive a power cut\tSYS\tapproved\nadr\tgateway\tADR-0001\taccepted\t2026-11-19\tReset sessions\tGW-0001\t\t\tdocs/architecture/adr/0001-reset-sessions.md\ntest\tGW-0001\tpass\tgateway\ttests/session_test.rho\t4\tsessions_survive\trho\t\ntest\tGW-0001\tfail\tgateway\ttests/smoke.py\t2\tsmoke\tsuite\t\nevidence\tfailing\n"
+
+// @verifies KEEP-DEV-0001
+test fn records_are_read_by_their_kind() void {
+    let req: string = dev_record(SHOWN, "req")
+    check(rho_str_eq(dev_field(req, 1), "GW-0001"), "the id is field 1")
+    check(rho_str_eq(dev_field(req, 6), "Sessions survive a gateway restart"), "the title")
+    check(rho_str_eq(dev_field(req, 12), "2026-11-19"), "the last field")
+    check(rho_str_eq(dev_field(req, 13), ""), "past the last field")
+    check(dev_count(dev_records(SHOWN, "test")) == 2, "two test records")
+    check(rho_str_eq(dev_records(SHOWN, "gap"), ""), "no gap records")
+    check(rho_str_eq(dev_field(dev_record(SHOWN, "evidence"), 1), "failing"), "the evidence")
+    check(rho_str_eq(dev_record(SHOWN, "[info]"), ""), "a log line is no record")
+    check(rho_str_eq(dev_record("requirement\tx\n", "req"), ""), "a kind is matched whole")
+    print("[PASS] records_are_read_by_their_kind\n")
+}
+
+// @verifies KEEP-DEV-0001
+test fn fields_are_unescaped() void {
+    check(rho_str_eq(dev_field(dev_record(SHOWN, "statement"), 1), "After a restart\tthe gateway\nshall \\ recover."),
+        "tab, line break and backslash")
+    check(rho_str_eq(dev_unescape("plain"), "plain"), "nothing to unescape")
+    check(rho_str_eq(dev_unescape("a\\rb"), "a\rb"), "a carriage return")
+    check(rho_str_eq(dev_unescape("end\\"), "end\\"), "a backslash at the end stays")
+    print("[PASS] fields_are_unescaped\n")
+}
+
+// @verifies KEEP-DEV-0001
+test fn errors_come_from_records_or_standard_error() void {
+    check(rho_str_eq(dev_errors("error\tGW-9999 does not exist in this workspace\nrho req show: GW-9999 does not exist in this workspace\n"),
+        "GW-9999 does not exist in this workspace\n"), "an error record is preferred")
+    check(rho_str_eq(dev_errors("[info] x\nrho req edit: --set needs key=value\n"), "rho req edit: --set needs key=value\n"),
+        "a tool without --tsv still says why")
+    check(rho_str_eq(dev_errors("created\tGW-0004\tgateway\tdocs/requirements/node.yml\n"), ""), "a success has no error")
+    print("[PASS] errors_come_from_records_or_standard_error\n")
+}
+
+// @verifies KEEP-DEV-0003
+test fn requirement_ids_cannot_be_paths_or_options() void {
+    check(dev_id_ok("GW-0012"), "a plain id")
+    check(dev_id_ok("GW-AUTH-0001"), "a sub-prefix")
+    check(dev_id_ok("SYS2-0001"), "digits in a prefix")
+    check(!dev_id_ok("gw-0012"), "lower case")
+    check(!dev_id_ok("GW-12"), "too few digits")
+    check(!dev_id_ok("GW-00123"), "too many digits")
+    check(!dev_id_ok("-0001"), "no prefix")
+    check(!dev_id_ok("--force"), "an option")
+    check(!dev_id_ok("../GW-0001"), "a path")
+    check(!dev_id_ok("GW--0001"), "an empty word")
+    check(!dev_id_ok("1GW-0001"), "a prefix starting with a digit")
+    check(dev_ids_ok("SYS-0001, SYS-0002 GW-0003"), "a list")
+    check(dev_ids_ok(""), "an empty list")
+    check(!dev_ids_ok("SYS-0001,--set"), "an option in a list")
+    print("[PASS] requirement_ids_cannot_be_paths_or_options\n")
+}
+
+// @verifies KEEP-DEV-0003
+test fn adr_references_and_lists() void {
+    check(dev_adr_ok("ADR-0009"), "a local ADR")
+    check(dev_adr_ok("robohub:ADR-0003"), "another repository's")
+    check(!dev_adr_ok("ADR-9"), "too short")
+    check(!dev_adr_ok("../x:ADR-0001"), "a path as repository")
+    check(!dev_adr_ok("robohub:ADR-000a"), "not digits")
+    check(dev_adrs_ok("ADR-0001, robohub:ADR-0002"), "a list")
+    check(!dev_adrs_ok("ADR-0001,GW-0001"), "a requirement is no ADR")
+    check(dev_tags_ok("security, power-cut"), "tags")
+    check(!dev_tags_ok("a/b"), "a tag is a plain word")
+    check(rho_str_eq(dev_list_clean(" a, b  c,,d "), "a,b,c,d"), "a typed list as rho req writes it")
+    check(rho_str_eq(dev_one_line("one\r\ntwo\nthree "), "one two three"), "a statement is one argument")
+    check(dev_list_has("a,b, c", "c") && !dev_list_has("a,b", "") && !dev_list_has("ab", "a"), "list membership")
+    print("[PASS] adr_references_and_lists\n")
+}
+
+// @verifies KEEP-DEV-0003
+test fn statuses_and_values() void {
+    check(dev_status_ok("draft") && dev_status_ok("retired") && !dev_status_ok("done"), "requirement statuses")
+    check(dev_verification_ok("analysis") && !dev_verification_ok("vibes"), "verifications")
+    check(dev_adr_status_ok("accepted") && !dev_adr_status_ok("superseded"), "superseded is supersede's")
+    check(dev_committed("approved") && dev_committed("verified") && !dev_committed("proposed"), "committed statuses")
+    check(dev_prefix_ok("GW") && dev_prefix_ok("GW-AUTH") && !dev_prefix_ok("GW-") && !dev_prefix_ok("gw"), "prefixes")
+    print("[PASS] statuses_and_values\n")
+}
+
+const REPOS: string = "repo\trobohub\t/w/robohub\tRH\t\t/w/robohub/MAINTAINERS.yml\tSYS,NODE\nrepo\tgateway\t/w/gateway\tGW\trobohub\t/w/robohub/MAINTAINERS.yml\tSYS,NODE\n"
+
+// @verifies KEEP-DEV-0003
+test fn repositories_are_the_family_only() void {
+    check(dev_repo_known(REPOS, "gateway"), "a family repository")
+    check(rho_str_eq(dev_repo_dir(REPOS, "gateway"), "/w/gateway"), "its directory is rho req's")
+    check(!dev_repo_known(REPOS, "standalone"), "a repository outside the family")
+    check(!dev_repo_known(REPOS, "../gateway"), "a path")
+    check(!dev_repo_known(REPOS, ""), "nothing")
+    check(dev_path_ok("docs/requirements/node.yml"), "a requirements file")
+    check(dev_path_ok("docs/architecture/adr/0003-x.md"), "an ADR")
+    check(!dev_path_ok("docs/doc/index.md"), "a documentation page")
+    check(!dev_path_ok("docs/requirements/../../src/main.rho"), "a way out")
+    check(!dev_path_ok("/etc/passwd"), "an absolute path")
+    check(!dev_path_ok("module.yml"), "the manifest")
+    check(dev_adr_file_ok("docs/architecture/adr/0001-a.md") && !dev_adr_file_ok("docs/requirements/x.yml"), "an ADR file")
+    print("[PASS] repositories_are_the_family_only\n")
+}
+
+// @verifies KEEP-DEV-0002
+test fn maintainers_are_admins_or_granted() void {
+    check(dev_maintainer_from("admin", "", ""), "an admin")
+    check(dev_maintainer_from("viewer", "mesh:read,keeper:maintainer", ""), "a person granted keeper:maintainer")
+    check(dev_maintainer_from("operator", "keeper:*", ""), "a person granted everything in the keeper")
+    check(!dev_maintainer_from("operator", "mesh:*", ""), "an operator is not")
+    check(!dev_maintainer_from("viewer", "keeper:maintainers", ""), "a grant is matched whole")
+    check(dev_maintainer_from("", "", "*"), "a ticket with every scope")
+    check(dev_maintainer_from("", "", "keeper:read,keeper:maintainer"), "a ticket with the scope")
+    check(!dev_maintainer_from("", "", "keeper:read"), "a reader")
+    check(!dev_maintainer_from("", "", ""), "nobody")
+    print("[PASS] maintainers_are_admins_or_granted\n")
+}
+
+const MAINTAINERS: string = "# Who approves.\nmaintainers:\n  - name: Ada Maintainer\n    github: ada\n    email: Ada@Example.org   # work\n  - { name: \"Bob Builder\", email: bob@example.org }\n"
+
+// @verifies KEEP-DEV-0006
+test fn a_git_identity_is_looked_up_in_maintainers() void {
+    check(dev_maintainer_listed(MAINTAINERS, "Someone", "ada@example.org"), "by email, ignoring case")
+    check(dev_maintainer_listed(MAINTAINERS, "Ada Maintainer", "other@example.org"), "by name")
+    check(dev_maintainer_listed(MAINTAINERS, "x", "123+ada@users.noreply.github.com"), "by a GitHub noreply address")
+    check(dev_maintainer_listed(MAINTAINERS, "Bob Builder", ""), "in a flow mapping")
+    check(dev_maintainer_listed(MAINTAINERS, "", "bob@example.org"), "an email in a flow mapping")
+    check(!dev_maintainer_listed(MAINTAINERS, "Eve", "eve@example.org"), "somebody else")
+    check(!dev_maintainer_listed(MAINTAINERS, "", ""), "no identity")
+    check(!dev_maintainer_listed("", "Ada Maintainer", "ada@example.org"), "no maintainers file")
+    print("[PASS] a_git_identity_is_looked_up_in_maintainers\n")
+}
+
+// @verifies KEEP-DEV-0005
+test fn a_commit_names_its_branch_ids_and_files() void {
+    check(rho_str_eq(dev_branch("2026-11-19", 1), "requirements/2026-11-19"), "the day's branch")
+    check(rho_str_eq(dev_branch("2026-11-19", 3), "requirements/2026-11-19-3"), "a later one")
+    let log: string = "gateway\tGW-0004\nrobohub\tSYS-0004\ngateway\tGW-0001\ngateway\tGW-0004\n"
+    check(rho_str_eq(dev_change_ids(log, "gateway"), "GW-0004,GW-0001"), "each id once, in order")
+    check(rho_str_eq(dev_change_log_without(log, "gateway"), "robohub\tSYS-0004\n"), "a committed repository leaves the log")
+    let changes: string = "M\tdocs/requirements/node.yml\nA\tdocs/architecture/adr/0003-use-y.md\nM\tdocs/architecture/adr/0000-template.md\n"
+    check(rho_str_eq(dev_adr_of_path("docs/architecture/adr/0003-use-y.md"), "ADR-0003"), "an ADR file's id")
+    check(rho_str_eq(dev_adr_of_path("docs/architecture/adr/0000-template.md"), ""), "the template is no decision")
+    let ids: string = dev_commit_ids(dev_change_ids(log, "gateway"), changes)
+    check(rho_str_eq(ids, "GW-0004,GW-0001,ADR-0003"), "requirements and decisions")
+    let message: string = dev_commit_message(ids, changes)
+    check(rho_str_starts_with(message, "requirements: GW-0004, GW-0001, ADR-0003\n\n"), "the ids are the subject")
+    check(rho_str_index_of(message, "  A docs/architecture/adr/0003-use-y.md\n") > 0, "the files are the body")
+    check(rho_str_starts_with(dev_commit_message("", changes), "requirements: update\n"), "a commit with no id")
+    print("[PASS] a_commit_names_its_branch_ids_and_files\n")
+}
+
+// @verifies KEEP-DEV-0005
+test fn git_answers_are_read_safely() void {
+    let sha: string = "0123456789abcdef0123456789abcdef01234567"
+    check(rho_str_eq(dev_sha_of("warning: something\n" + sha + "\n"), sha), "a warning before it")
+    check(rho_str_eq(dev_sha_of("0123456789ABCDEF0123456789abcdef01234567\n"), ""), "upper case is not git's")
+    check(rho_str_eq(dev_sha_of("fatal: not a git repository\n"), ""), "no object name")
+    check(rho_str_eq(dev_fingerprint("M\tdocs/requirements/a.yml\nA\tdocs/architecture/adr/0002-b.md\n"),
+        "M|docs/requirements/a.yml;A|docs/architecture/adr/0002-b.md;"), "a fingerprint is one attribute value")
+    print("[PASS] git_answers_are_read_safely\n")
+}
+
+// @verifies KEEP-DEV-0007
+test fn the_export_drops_html_anchors_only() void {
+    let md: string = "# R\n<a id=\"sys-0001\"></a>\n### SYS-0001\ntext <a id=\"x\"></a> inline\n<a id=\"a\" onclick=\"x\"></a>\n"
+    check(rho_str_eq(dev_without_anchors(md), "# R\n### SYS-0001\ntext <a id=\"x\"></a> inline\n<a id=\"a\" onclick=\"x\"></a>\n"),
+        "an anchor line goes, anything else stays")
+    print("[PASS] the_export_drops_html_anchors_only\n")
+}
+
+fn main() void {
+    records_are_read_by_their_kind()
+    fields_are_unescaped()
+    errors_come_from_records_or_standard_error()
+    requirement_ids_cannot_be_paths_or_options()
+    adr_references_and_lists()
+    statuses_and_values()
+    repositories_are_the_family_only()
+    maintainers_are_admins_or_granted()
+    a_git_identity_is_looked_up_in_maintainers()
+    a_commit_names_its_branch_ids_and_files()
+    git_answers_are_read_safely()
+    the_export_drops_html_anchors_only()
+    print("keeper developer tests ok\n")
+}

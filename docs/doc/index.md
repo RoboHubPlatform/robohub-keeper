@@ -98,6 +98,7 @@ An application whose manifest port is already taken is given the next free one f
 | **Nodes** `/nodes` | The node identities the keeper has issued. |
 | **System** `/system` | What the whole machine needs: every application's and every enabled toolchain module's system dependencies. |
 | **Docs** `/docs` | This documentation, built from the documentation site's tree. |
+| **Developer** `/developer` | The workspace's requirements, architecture decisions, traceability, check and export, through `rho req`; maintainers change them and commit the changes to a local branch ({ref}`keeper/developer`). |
 | **Settings** `/settings` | General, Alerts, Auth, Logging, Configuration. |
 | **Account** `/account` | Change one's own password. |
 
@@ -194,7 +195,8 @@ changes nothing until the next redeploy.
 
 - A release that systemd cannot restart, or that does not answer `/healthz`, is
   marked `.failed`, the release that was in use is put back and restarted, and the
-  job ends failed saying which release is back.
+  job ends failed saying which release is back, and the keeper raises an alert
+  saying so.
 - **Roll back** (in the application's inspector, or
   `POST /api/v1/apps/<name>/rollback`) puts the release made before the one in use
   back; a second rollback goes further back.
@@ -240,13 +242,17 @@ and grants:
 | viewer | read |
 
 Grants are what a person reaches in each application, as scopes — `mesh:*`,
-`mesh:greenhouse`, `aquarium:read`. **Users & access** is a matrix with a row per
+`mesh:greenhouse`, `aquarium:read`. The keeper has one grant of its own,
+`keeper:maintainer` (the **Maintainer** box in the inspector): a maintainer
+changes requirements and architecture decisions in the Developer section and
+commits them; an admin is one anyway ({ref}`keeper/developer`). **Users & access** is a matrix with a row per
 person and a column per application; the inspector sets a person's role and, per
 application, no access, read, everything or particular grants, and shows their
 sessions and sign-in history.
 
-**The first run.** The keeper makes an access token on its first start, owner-only,
-in `~/.rho/auth/master.token`, and a signing key pair if there is none. With nobody in
+**The first run.** The keeper makes an access token, owner-only, in
+`~/.rho/auth/master.token` the first time its sign-in page is asked for, and a
+signing key pair on the first sign-in if there is none. With nobody in
 the store the sign-in page asks for the token and nothing else; it signs the admin in
 afterwards too. Accounts with a name and a password are made under Users & access. A
 forgotten password is reset by an admin, or from the command line:
@@ -315,6 +321,13 @@ The alert channels are the `robohub.alert` binding in `module.yml` (the log, e-m
 and Telegram providers); the Alerts tab changes them for this installation, and the
 **Plugins** page switches a channel on or off and sends it a test.
 
+The keeper raises an ERROR alert, once for each event, when systemd refuses to
+start or stop an application; when a start or a rollback job fails; when a
+redeploy is backed out to the release before it; when cloning an application or
+fetching a package to install it fails; and when an application cannot be
+registered as a client. A build, or a redeploy whose build failed, touches nothing
+that runs, and is said in the jobs strip only.
+
 `keeper.proxy_apps=off` in `~/.rho/keeper/data/settings.conf` links applications on
 their own ports instead of through `/app/<name>/`.
 
@@ -366,11 +379,19 @@ and token to `POST /api/enroll` over https, and stores the issued credential as 
 The record under `~/.rho/keeper/nodes/` keeps the credential only as a salted
 hash (`s1$<salt>$<hmac>`); records an older keeper kept in the clear are hashed
 when it starts. `/api/enroll` and `/api/nodes/verify` have a budget of calls per
-client (the rightmost `X-Forwarded-For` entry the TLS proxy adds) and for all
-clients together: enrollment 10 a minute per client and 60 in all, verification 60
-and 600; past it they answer 429.
+client and for all clients together: enrollment 10 a minute per client and 60 in
+all, verification 60 and 600; past it they answer 429 with `Retry-After: 60`. The
+client is the address of the connection itself, which a caller cannot write.
+Only when that connection comes from this machine (`127.0.0.1` or `::1`) — a TLS
+proxy or an SSH tunnel in front of the keeper — is the proxy's address for the
+caller used instead: the rightmost `X-Forwarded-For` entry, else `X-Real-IP`, else
+one budget for every such caller. A caller elsewhere cannot choose its budget by
+sending those headers; they are ignored on a connection from another machine.
 
-**Nodes** lists the identities issued; each can be rotated or revoked. A gateway,
+**Nodes** lists the identities issued; an admin can rotate a node's credential
+(the new one is shown once) or revoke the node. Each form carries the keeper's
+form token, and each action is recorded as a `node.rotated` or `node.revoked`
+event. A gateway,
 Mesh or firmware checks a credential with `POST /api/nodes/verify`
 (`device_id=<device>&credential=<credential>`) and receives the registered
 project/area/node, or `403`. That endpoint is public because the credential
@@ -387,7 +408,7 @@ service token. Answers are JSON.
 | --- | --- |
 | `GET /api/v1/apps` | every application: state, port, version, URL (and its `/app/<name>/` path) |
 | `GET /api/v1/apps/{name}` | one of them |
-| `POST /api/v1/apps/{name}/{action}` | `start`, `stop`, `restart`, `redeploy`, `rollback`, `build` |
+| `POST /api/v1/apps/{name}/{action}` | `start`, `stop`, `restart`, `redeploy`, `rollback`, `build`; a request carrying the keeper's session cookie also sends the form token as `csrf`, one with only a ticket in `Authorization` does not |
 | `GET /api/v1/jobs` | recent jobs |
 | `GET /api/v1/jobs/{id}` | one job, with its log |
 | `GET /api/v1/registry` | the orchestrator's modules: role, path here, git (`?format=tsv` too) |
@@ -395,7 +416,7 @@ service token. Answers are JSON.
 | `GET /api/v1/services` | the services an application calls, and where |
 | `GET /api/v1/config/{app}` | an application's record and environment |
 | `GET /api/v1/switcher` | the applications for every app switcher (no sign-in; readable from this host's pages only) |
-| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added` |
+| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added`, `node.rotated`, `node.revoked` |
 
 Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
 `POST /auth/service-token`, `POST /api/enroll`, `POST /api/nodes/verify`, `/healthz`.
@@ -406,6 +427,15 @@ Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
   (`same_origin` in `project.yml`): an application on its own port is another origin
   of the same host, which a `SameSite` cookie does not tell apart. Programs that post
   to the keeper send no browser headers and are not affected.
+- Every form and HTMX button the keeper draws carries its form token (`csrf`), and
+  every route that changes something refuses a post without it, or with another,
+  with `403` before it acts — whoever is signed in. The routes that take a post
+  without it are the ones authenticated by what they carry: `/auth/login`,
+  `/auth/service-token`, `/api/enroll` and `/api/nodes/verify`. The token is one
+  per keeper, kept in an owner-only file of its workspace; a page served under the
+  keeper's own origin (an application at `/app/<name>/`) can read it like any
+  other page of that origin, so the token guards against other sites, not against
+  an application the keeper hosts.
 - The keeper's session cookie is never forwarded to a proxied application.
 - Every program the keeper runs gets its arguments one per line; a value with a line
   break or a leading `-` is refused.

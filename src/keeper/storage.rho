@@ -72,6 +72,7 @@ fn apps_report(name: string) string {
 // ensure_keeper_state makes the keeper's state folder, owner-only: it holds the
 // session list, the reports of the programs the keeper runs, and the private
 // folder where a secret is on disk for a moment.
+// @req KEEP-0013
 fn ensure_keeper_state() void {
     let dir: string = keeper_state_dir()
     ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "\n", "build/reports/mkdir-state.txt"))
@@ -109,6 +110,7 @@ fn shell_quote(value: string) string {
 // arg_ok is whether a value can be one argument of a program the keeper runs:
 // no line break, which would make it two, and no leading dash, which would make
 // it an option.
+// @req KEEP-0013
 fn arg_ok(value: string) bool {
     if value == "" || rho_str_starts_with(value, "-") {
         return false

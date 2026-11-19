@@ -131,6 +131,7 @@ fn catalog_write(flat: string) bool {
 
 // catalog_put records an application. The port is the one asked for when no other
 // application has it, the next free one otherwise.
+// @req KEEP-APPS-0001
 fn catalog_put(name: string, origin: string, where: string) string {
     // The catalogue's keys are `apps.<name>.<field>`: a name with a dot in it
     // would be read back as a record of its own.
@@ -194,6 +195,7 @@ fn catalog_port_taken(name: string, port: string) bool {
 // catalog_allocate_port is the port an application gets: its manifest's when that
 // is free, the first free one from CATALOG_FIRST_PORT otherwise. An application
 // that serves nothing gets none.
+// @req KEEP-APPS-0003
 fn catalog_allocate_port(name: string, wanted: string) string {
     if wanted == "" {
         return ""

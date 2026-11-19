@@ -4,7 +4,7 @@ RoboHub's supervisor and front door: it signs people in, installs the applicatio
 and runs them as systemd user units from releases, and serves them under its own
 origin at `/app/<name>/`. It listens on `127.0.0.1:19090`.
 
-The full guide is [docs/index.md](docs/index.md).
+The full guide is [docs/doc/index.md](docs/doc/index.md).
 
 This repository sits beside the orchestrator, `robohub`, whose registry and shared
 modules it reads; `ROBOHUB_ROOT` says where that is when it is somewhere else.
@@ -35,12 +35,17 @@ ROBOHUB_ROOT=../robohub ./build/keeper     # by hand, on 127.0.0.1:19090
 - Integrations it runs for the applications, starting with the MQTT broker
 - Node enrollment and the registry of issued node identities
 - The documentation site
+- Developer: the workspace's requirements, architecture decisions and their trace,
+  through `rho req` (rho-req 0.3.0); maintainers (admins, or people granted
+  `keeper:maintainer`) change them and commit the changes to a local branch, never
+  pushed — see [docs/doc/developer.md](docs/doc/developer.md)
 
 ## Environment
 
 | Variable | What it says |
 | --- | --- |
 | `ROBOHUB_ROOT` | the orchestrator's checkout (default: beside this one) |
+| `ROBOHUB_WORKSPACE` | the folder that holds the ecosystem's repositories; the Developer section's workspace |
 | `RHO_HTTP_ADDR` | where a keeper started by hand listens (`127.0.0.1:19090`) |
 | `RHO_KEEPER_STATE_DIR` | another state folder instead of `~/.rho/keeper` |
 | `ROBOHUB_APPS_HOME` | where applications installed from git are cloned (`~/.rho/apps`) |
@@ -57,7 +62,10 @@ rho test .
 The Rho unit suite checks the registry's name and list helpers; the smoke suite
 builds the keeper, starts it on loopback and walks the applications page over HTTP:
 the keeper row, installing and uninstalling an external application, pinning it to
-the menu, refusing to remove the keeper, releases, rollbacks and a stale job.
+the menu, refusing to remove the keeper, releases, rollbacks and a stale job. The
+developer smoke suite runs the Developer section against a scratch family of git
+repositories made from rho-req's fixture, with the rho-req built from the Rho
+checkout beside this one (or `RHO_REQ=<binary>`).
 
 ## License
 

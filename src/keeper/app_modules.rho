@@ -144,7 +144,7 @@ fn app_module_actions(req: Request, name: string, location: string, enabled: boo
     // A module can be included by more than one application, so there is no
     // single host to open from here. The registry lists the installed module;
     // the application that uses it serves its routes.
-    return template_fill(template_get("app-module-actions"), i18n_vars(req) +
+    return template_fill(template_get("app-module-actions"), i18n_vars(req) + vars("csrf", forms_csrf_field()) +
         vars("confirm_uninstall", i18n_t(req, "app_modules.uninstall_confirm")) + vars("name", name))
 }
 
@@ -299,9 +299,13 @@ fn app_module_users(wanted: string) string {
     return out
 }
 
+// @req KEEP-PROV-0004
 fn app_modules_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))

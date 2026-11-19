@@ -26,6 +26,7 @@ import std.web.http
 import std.web.template
 import rho.log
 
+// @req KEEP-PROV-0003
 fn plugin_state_set(name: string, enabled: string) void {
     let file: string = keeper_plugin_state_file()
     let text: string = rho_read_text(file)
@@ -59,7 +60,7 @@ fn plugin_action_forms(req: Request, name: string, enabled: bool) string {
     if enabled {
         enabled_flag = "true"
     }
-    return template_fill(template_get("plugin-actions"), i18n_vars(req) +
+    return template_fill(template_get("plugin-actions"), i18n_vars(req) + vars("csrf", forms_csrf_field()) +
         vars("confirm_uninstall", i18n_t(req, "plugins.uninstall_confirm")) +
         vars("name", name) +
         vars("enabled", enabled_flag))
@@ -144,7 +145,7 @@ fn channel_row_html(req: Request, name: string) string {
         vars("threshold_label", keeper_t1(req, "plugins.channel_from", "threshold", threshold)) +
         vars("status", status) +
         vars("actions", template_fill(template_get("channel-actions"),
-            i18n_vars(req) + vars("name", name) + vars("enabled", enabled_flag))))
+            i18n_vars(req) + vars("csrf", forms_csrf_field()) + vars("name", name) + vars("enabled", enabled_flag))))
 }
 
 fn channel_rows_html(req: Request) string {
@@ -189,9 +190,13 @@ fn plugins_page(req: Request) Response {
     return plugins_page_message(req, "")
 }
 
+// @req KEEP-PROV-0002, KEEP-PROV-0003
 fn plugins_toggle(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
@@ -231,9 +236,13 @@ fn plugins_toggle(req: Request) Response {
     return plugins_page_message(req, keeper_t1(req, "plugins.channel_enabled", "name", name))
 }
 
+// @req KEEP-PROV-0002
 fn plugins_test(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
@@ -330,6 +339,9 @@ fn plugins_install(req: Request) Response {
 fn plugins_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
+    }
+    if !forms_csrf_ok(request_body(req)) {
+        return keeper_csrf_refused(req)
     }
     let body: string = request_body(req)
     let name: string = str_trim(form_field(body, "name"))
