@@ -382,11 +382,11 @@ def main() -> int:
             # The addresses applications were served at under the keeper redirect
             # to their own ports, with the path, for anyone: the application signs
             # the person in itself. A post keeps its method (307), so a program
-            # posting to an old address still reaches the application. The query is
-            # not carried over until Rho's Go backend can read it.
+            # posting to an old address still reaches the application. The query
+            # goes along whole.
             # @verifies KEEP-APPS-0015, KEEP-APPS-0016
             for path, method, wanted_status, wanted in (
-                    ("/app/mesh/x?y=1", "GET", 302, "http://127.0.0.1:8478/x"),
+                    ("/app/mesh/x?y=1&z=a%20b", "GET", 302, "http://127.0.0.1:8478/x?y=1&z=a%20b"),
                     ("/app/mesh/mesh/p/default", "GET", 302, "http://127.0.0.1:8478/mesh/p/default"),
                     ("/app/mesh/", "GET", 302, "http://127.0.0.1:8478/"),
                     ("/app/mesh", "GET", 302, "http://127.0.0.1:8478/mesh"),

@@ -621,10 +621,12 @@ fn app_redirect(req: Request) Response {
     if rest == "" {
         rest = app_route(app_path(name))
     }
-    // The query is not carried over yet: Rho 0.19's Go backend cannot read a
-    // request's raw query (`req.query` is emitted as a field Go's Request does
-    // not have), and nothing else gives it whole.
-    let target: string = keeper_app_address(req, name, rest)
+    // The query goes along whole, so an old bookmark with one lands where it did.
+    var target: string = keeper_app_address(req, name, rest)
+    let query: string = request_query(req)
+    if query != "" {
+        target = target + "?" + query
+    }
     if rho_str_index_of(target, "\n") >= 0 || rho_str_index_of(target, "\r") >= 0 {
         return text(status_bad_request(), "That address cannot be followed.")
     }
