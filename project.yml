@@ -21,7 +21,10 @@ targets:
           session_file: ~/.rho/keeper/auth-sessions.txt
           # /app/<name>/… only redirects to an application's own port, which
           # signs the person in itself: an old link needs no keeper session.
-          skip_paths: /app,/api/v1/switcher,/auth/session,/ui,/auth/login,/auth/service-token,/auth/public-key,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
+          # /api/v1/bus/users (and /api/v1/bus/users/<name>) takes no session or
+          # ticket: an application proves itself with its own broker password on
+          # a loopback connection, which the handler checks (ADR-0006).
+          skip_paths: /app,/api/v1/switcher,/api/v1/bus/users,/auth/session,/ui,/auth/login,/auth/service-token,/auth/public-key,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
     default_locale: en
     locales:
       - locale: en

@@ -53,6 +53,8 @@ MACHINE = {
     "/auth/login": "a password or the access token; there is no session yet",
     "/app/{name}": "nothing: a redirect to the application's own port, which checks the post",
     "/app/{name}/{path...}": "nothing: a redirect to the application's own port, which checks the post",
+    "/api/v1/bus/users": "an application's own broker password, on a loopback connection (tests/bus_users_smoke.py)",
+    "/api/v1/bus/users/{name}": "an application's own broker password, on a loopback connection (tests/bus_users_smoke.py)",
 }
 
 # Every other POST route, with fields that would act if the token were not

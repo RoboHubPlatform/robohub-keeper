@@ -29,6 +29,8 @@ include "keeper/api.rho"
 include "keeper/packages.rho"
 include "keeper/deps.rho"
 include "keeper/integrations.rho"
+include "keeper/bus_users_text.rho"
+include "keeper/bus_users.rho"
 include "keeper/overview.rho"
 include "keeper/plugins.rho"
 include "keeper/providers.rho"
@@ -124,6 +126,10 @@ route POST "/api/v1/apps/{name}/{action}" => api_app_action
 route GET "/api/v1/events" => api_events
 route GET "/api/v1/jobs" => api_jobs
 route GET "/api/v1/jobs/{id}" => api_job
+// An application asks for broker users of its own under the roots it declares;
+// loopback only, with its broker password (ADR-0006).
+route POST "/api/v1/bus/users" => bus_users_post
+route DELETE "/api/v1/bus/users/{name}" => bus_users_delete
 route GET "/plugins" => plugins_page
 route POST "/plugins/toggle" => plugins_toggle
 route POST "/plugins/test" => plugins_test

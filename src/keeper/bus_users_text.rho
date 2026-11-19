@@ -1,0 +1,288 @@
+//
+// @file bus_users_text.rho
+// @brief The rules of issued broker users as text: names, topic prefixes, the roots a manifest declares, the `Bus` credential and the lines of issued.txt.
+//
+// @module keeper.bus_users_text
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-20
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.bus_users_text
+
+// What issuing a broker user decides, without a file, a request or a broker: the
+// name an application may ask for, the prefix it may confine the user to, whether
+// the manifest lists that prefix's root under `bus.issue`, the `Authorization: Bus`
+// value, the ACL lines a user gets, and the lines of services/mqtt/issued.txt.
+// bus_users.rho does the reading and writing; tests/bus_users_test.rho checks these.
+//
+// A line of issued.txt is
+//
+//   app|name|prefix
+//
+// and the broker user it makes is `<app>-<name>`, allowed `readwrite <prefix>/#`.
+//
+// Like apps_text.rho, a string is compared with rho_str_eq and the primitives are
+// declared by the module that includes this file.
+
+/// The longest short name an application may ask for.
+const BUS_NAME_MAX: u32 = 64
+
+/// The longest topic prefix a user may be confined to.
+const BUS_PREFIX_MAX: u32 = 200
+
+// bus_issue_name_ok is whether a short name may be asked for: a valid name with no
+// `.`, so it is one plain topic-safe word.
+// @req KEEP-PROV-0006
+fn bus_issue_name_ok(name: string) bool {
+    return valid_name(name) && rho_str_index_of(name, ".") < 0 && u32(rho_strlen(name)) <= BUS_NAME_MAX
+}
+
+// bus_issue_prefix_problem is why a topic prefix cannot confine a user, or "" when
+// it can: a plain topic of non-empty levels, without a wildcard, a space, a line
+// break, a tab or the `|` that separates the fields of issued.txt.
+// @req KEEP-PROV-0006
+fn bus_issue_prefix_problem(prefix: string) string {
+    let length: u32 = u32(rho_strlen(prefix))
+    if length == 0 {
+        return "the prefix is empty"
+    }
+    if length > BUS_PREFIX_MAX {
+        return "the prefix is longer than 200 characters"
+    }
+    if rho_str_index_of(prefix, "+") >= 0 || rho_str_index_of(prefix, "#") >= 0 {
+        return "the prefix has a wildcard"
+    }
+    if rho_str_index_of(prefix, " ") >= 0 || rho_str_index_of(prefix, "\n") >= 0 ||
+        rho_str_index_of(prefix, "\r") >= 0 || rho_str_index_of(prefix, "\t") >= 0 {
+        return "the prefix has a space or a line break"
+    }
+    if rho_str_index_of(prefix, "|") >= 0 {
+        return "the prefix has a |"
+    }
+    if rho_str_starts_with(prefix, "/") || rho_str_eq(rho_str_slice(prefix, length - 1, 1), "/") {
+        return "the prefix starts or ends with /"
+    }
+    if rho_str_index_of(prefix, "//") >= 0 {
+        return "the prefix has an empty level"
+    }
+    return ""
+}
+
+// bus_prefix_root is a prefix's first level.
+fn bus_prefix_root(prefix: string) string {
+    let at: i32 = rho_str_index_of(prefix, "/")
+    if at < 0 {
+        return prefix
+    }
+    return rho_str_slice(prefix, 0, u32(at))
+}
+
+// bus_root_declared is whether the prefix's first level is one of the roots a
+// manifest lists under `bus.issue` (one per line).
+// @req KEEP-PROV-0006
+fn bus_root_declared(roots: string, prefix: string) bool {
+    let root: string = bus_prefix_root(prefix)
+    return rho_strlen(root) > 0 && line_in_list(roots, root)
+}
+
+// bus_issued_user is the broker user an application's short name makes.
+fn bus_issued_user(app: string, name: string) string {
+    return app + "-" + name
+}
+
+// bus_issued_acl is what an issued user may do on the broker: its prefix and
+// everything under it, and nothing else.
+// @req KEEP-PROV-0006
+fn bus_issued_acl(app: string, name: string, prefix: string) string {
+    return "user " + bus_issued_user(app, name) + "\ntopic readwrite " + prefix + "/#\n\n"
+}
+
+// bus_auth_part is one half of an `Authorization: Bus <app>:<password>` value:
+// 0 the application, 1 the password; "" when the value is not of that scheme.
+fn bus_auth_part(header: string, index: u32) string {
+    let scheme: string = "Bus "
+    if !rho_str_starts_with(header, scheme) {
+        return ""
+    }
+    let rest: string = str_trim(rho_str_slice(header, 4, u32(rho_strlen(header)) - 4))
+    let colon: i32 = rho_str_index_of(rest, ":")
+    if colon <= 0 {
+        return ""
+    }
+    if index == 0 {
+        return rho_str_slice(rest, 0, u32(colon))
+    }
+    return rho_str_slice(rest, u32(colon) + 1, u32(rho_strlen(rest)) - u32(colon) - 1)
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The lines of issued.txt                                                   */
+/* -------------------------------------------------------------------------- */
+
+// bus_issued_prefix is the prefix an application's user was issued with, or ""
+// when it has no user of that name.
+fn bus_issued_prefix(lines: string, app: string, name: string) string {
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(field(line, 0), app) && rho_str_eq(field(line, 1), name) {
+            return field(line, 2)
+        }
+    }
+    return ""
+}
+
+// bus_issued_without is the lines without an application's user of that name;
+// an empty name drops every user the application was issued.
+fn bus_issued_without(lines: string, app: string, name: string) string {
+    var out: string = ""
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_strlen(line) == 0 {
+            continue
+        }
+        if rho_str_eq(field(line, 0), app) && (rho_strlen(name) == 0 || rho_str_eq(field(line, 1), name)) {
+            continue
+        }
+        out = out + line + "\n"
+    }
+    return out
+}
+
+// bus_issued_with is the lines with an application's user of that name confined
+// to a prefix: the line replaced where it was, or added at the end.
+fn bus_issued_with(lines: string, app: string, name: string, prefix: string) string {
+    let wanted: string = app + "|" + name + "|" + prefix
+    var out: string = ""
+    var found: bool = false
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_strlen(line) == 0 {
+            continue
+        }
+        if rho_str_eq(field(line, 0), app) && rho_str_eq(field(line, 1), name) {
+            if !found {
+                out = out + wanted + "\n"
+                found = true
+            }
+            continue
+        }
+        out = out + line + "\n"
+    }
+    if !found {
+        out = out + wanted + "\n"
+    }
+    return out
+}
+
+// bus_issued_of is the users an application was issued, `name|prefix` one per
+// line, or every application's `app|name|prefix` when app is empty.
+fn bus_issued_of(lines: string, app: string) string {
+    var out: string = ""
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_strlen(line) == 0 {
+            continue
+        }
+        if rho_strlen(app) == 0 {
+            out = out + line + "\n"
+        } else if rho_str_eq(field(line, 0), app) {
+            out = out + field(line, 1) + "|" + field(line, 2) + "\n"
+        }
+    }
+    return out
+}
+
+// bus_issued_user_clash is whether another application's issued user has the
+// same broker user name: `mesh` asking for `zb-1` and `mesh-zb` asking for `1`
+// would both be `mesh-zb-1`.
+fn bus_issued_user_clash(lines: string, app: string, name: string) bool {
+    let user: string = bus_issued_user(app, name)
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_strlen(line) == 0 || rho_str_eq(field(line, 0), app) {
+            continue
+        }
+        if rho_str_eq(bus_issued_user(field(line, 0), field(line, 1)), user) {
+            return true
+        }
+    }
+    return false
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Where the broker is reached                                               */
+/* -------------------------------------------------------------------------- */
+
+// bus_ipv4_ok is whether a word is a dotted IPv4 address.
+fn bus_ipv4_ok(word: string) bool {
+    let length: u32 = u32(rho_strlen(word))
+    if length < 7 || length > 15 {
+        return false
+    }
+    var dots: u32 = 0
+    var run: u32 = 0
+    var i: u32 = 0
+    while i < length {
+        let ch: string = rho_str_slice(word, i, 1)
+        if rho_str_eq(ch, ".") {
+            if run == 0 {
+                return false
+            }
+            dots = dots + 1
+            run = 0
+        } else if is_digit(ch) {
+            run = run + 1
+            if run > 3 {
+                return false
+            }
+        } else {
+            return false
+        }
+        i = i + 1
+    }
+    return dots == 3 && run > 0
+}
+
+// bus_route_source is the address this machine sends from, read from what
+// `ip -4 -o route get <address>` prints (`… src 192.168.1.20 uid …`), or "" when
+// the output names none.
+// @req KEEP-PROV-0007
+fn bus_route_source(output: string) string {
+    let at: i32 = rho_str_index_of(output, " src ")
+    if at < 0 {
+        return ""
+    }
+    var rest: string = rho_str_slice(output, u32(at) + 5, u32(rho_strlen(output)) - u32(at) - 5)
+    var end: u32 = 0
+    let length: u32 = u32(rho_strlen(rest))
+    while end < length {
+        let ch: string = rho_str_slice(rest, end, 1)
+        if rho_str_eq(ch, " ") || rho_str_eq(ch, "\n") || rho_str_eq(ch, "\t") {
+            break
+        }
+        end = end + 1
+    }
+    let word: string = rho_str_slice(rest, 0, end)
+    if !bus_ipv4_ok(word) || rho_str_starts_with(word, "127.") {
+        return ""
+    }
+    return word
+}

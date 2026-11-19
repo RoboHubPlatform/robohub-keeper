@@ -205,7 +205,7 @@ fn mqtt_topic_ok(topic: string) bool {
 // mqtt_write_files writes the broker's configuration, its users (hashed by
 // mosquitto_passwd) and their topics, and asks a running broker to read them
 // again. It answers "" or what went wrong.
-// @req KEEP-PROV-0005
+// @req KEEP-PROV-0005, KEEP-PROV-0006, KEEP-PROV-0008
 fn mqtt_write_files() string {
     let name: string = mqtt_name()
     if name == "" {
@@ -243,6 +243,25 @@ fn mqtt_write_files() string {
         }
         users = users + device + ":" + bus_password(dir + "/devices/" + device + ".secret") + "\n"
         acl = acl + "user " + device + "\ntopic readwrite " + prefix + "/#\n\n"
+    }
+    // The users applications were issued (bus_users.rho): a line whose application
+    // is gone, or no longer lists the root under `bus.issue`, makes no user, and
+    // neither does one whose name another user already has.
+    var issued: string = rho_read_text(mqtt_issued_file())
+    while issued != "" {
+        let at: i32 = rho_str_index_of(issued, "\n")
+        var line: string = issued
+        if at < 0 { issued = "" } else { line = rho_str_slice(issued, 0, u32(at)); issued = rho_str_slice(issued, u32(at) + 1, u32(rho_strlen(issued)) - u32(at) - 1) }
+        if line == "" || !bus_issued_in_use(line) {
+            continue
+        }
+        let user: string = bus_issued_user(field(line, 0), field(line, 1))
+        let secret: string = str_trim(rho_read_text(mqtt_issued_secret(field(line, 0), field(line, 1))))
+        if rho_strlen(secret) < 32 || rho_str_index_of("\n" + users, "\n" + user + ":") >= 0 {
+            continue
+        }
+        users = users + user + ":" + secret + "\n"
+        acl = acl + bus_issued_acl(field(line, 0), field(line, 1), field(line, 2))
     }
     // The passwords are written in the clear to an owner-only file of their own
     // and hashed there, so none of them is ever on a command line; only a hashed
@@ -352,7 +371,9 @@ fn tcp_answers(port: string) bool {
 /* -------------------------------------------------------------------------- */
 
 // mqtt_clients_body is who may use the broker: the keeper, the applications that
-// bind the bus with their topics, and the devices, with adding and removing one.
+// bind the bus with their topics, the users applications were issued, and the
+// devices, with adding and removing one.
+// @req KEEP-PROV-0008
 fn mqtt_clients_body(req: Request, name: string) string {
     var listen: string = i18n_t(req, "mqtt.this_machine_only")
     var other: string = "lan"
@@ -398,7 +419,7 @@ fn mqtt_clients_body(req: Request, name: string) string {
     if devices == "" {
         devices = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.no_device") + "</p>"
     }
-    return out + apps + "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.devices") + "</div>" + devices +
+    return out + apps + mqtt_issued_rows(req) + "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.devices") + "</div>" + devices +
         "<form class=\"rh-body\" style=\"padding:0\" hx-post=\"/overview/app/" + escape_html(name) + "/add-device\" hx-target=\"#ins\" hx-swap=\"innerHTML\">" + forms_csrf_field() +
         "<label>" + i18n_t(req, "mqtt.device") + "<input name=\"device\" placeholder=\"shellyplugmgen3-a1b2\"></label>" +
         "<label>" + i18n_t(req, "mqtt.its_topics") + "<input name=\"prefix\" placeholder=\"shellyplugmgen3-a1b2\"><small>" + i18n_t(req, "mqtt.its_topics_help") + "</small></label>" +

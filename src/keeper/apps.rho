@@ -1446,6 +1446,8 @@ fn applications_uninstall(req: Request) Response {
     }
     info("keeper", "uninstalled application " + name)
     keeper_event("app.uninstalled", name, message)
+    // The broker users it was issued go with it (KEEP-PROV-0008).
+    bus_issued_remove_app(name)
     if mqtt_name() != "" {
         ignore_string(mqtt_write_files())
     }

@@ -301,6 +301,61 @@ bus:
 
 A device is a broker user an admin adds on the Clients tab, allowed its own topic
 prefix; its password is shown once. **Topics** shows what the broker carries, live.
+
+**Issued users.** An application may ask for broker users of its own — Mesh does,
+for the Zigbee2MQTT it runs per coordinator — under the topic roots its manifest
+lists in `bus.issue` (ADR-0006):
+
+```yaml
+bus:
+  subscribe: [zigbee/#]
+  issue: [zigbee]
+```
+
+It asks on a loopback connection, with its own broker password (the file
+`ROBOHUB_BUS_PASSWORD_FILE` names) as the credential:
+
+```text
+POST /api/v1/bus/users
+Authorization: Bus mesh:<the content of its bus password file>
+Content-Type: application/json
+
+{"name": "zb1", "prefix": "zigbee/home/zb1"}
+```
+
+```json
+{"user": "mesh-zb1", "password": "…", "prefix": "zigbee/home/zb1",
+ "port": "1884", "loopback": "127.0.0.1", "network": "192.168.1.20"}
+```
+
+The user is `<app>-<name>`, allowed `readwrite <prefix>/#` and nothing else.
+`network` is this machine's address while an admin has opened the broker to the
+network, and `""` while it listens on this machine only — a client on another
+board cannot connect then, and the application should say so rather than start
+one. Asking again for the same name and prefix answers the same user and
+password; the same name with another prefix moves the user there and keeps its
+password. `DELETE /api/v1/bus/users/<name>` (the short name), with the same
+header, removes it.
+
+| Answer | When |
+| --- | --- |
+| 200 | issued (or answered again), or removed: `{"removed": "mesh-zb1"}` |
+| 400 | a name that is not letters, digits, `-` and `_`; a prefix with `+`, `#`, a pipe, an empty level, a leading or trailing `/`, a space or a line break, or longer than 200 characters |
+| 401 | no `Bus` credential, a wrong password, or a name that is not an installed application binding `robohub.bus` |
+| 403 | not on a loopback connection (or forwarded by a proxy: `X-Forwarded-For`, `X-Real-Ip`, `Forwarded`); a prefix whose first level the manifest does not list under `bus.issue` |
+| 404 | `DELETE` of a name the application was not issued |
+| 409 | `<app>-<name>` is already another broker user: an application, a device, or a user another application was issued |
+| 503 | the MQTT integration is not installed |
+
+Errors are `{"ok": false, "error": "…"}`. The users are kept in
+`~/.rho/keeper/services/mqtt/issued.txt` (`app|name|prefix`), their passwords in
+`services/mqtt/issued/<app>-<name>.secret`, owner-only. A line whose application
+is no longer installed, or no longer lists the root, makes no broker user, and the
+Clients tab shows it as not in use. The Clients tab lists every issued user with
+the application that asked for it and its prefix; uninstalling an application
+removes the users it was issued. Issuing, removing and refusing are the events
+`bus.user-issued`, `bus.user-removed` and `bus.user-refused`, and the running
+broker reads its users again without dropping connections.
 Passwords are hashed by `mosquitto_passwd` from an owner-only file, never put on a
 command line, and a change of users is read by the running broker without dropping
 its connections.
@@ -411,10 +466,13 @@ service token. Answers are JSON.
 | `GET /api/v1/services` | the services an application calls, and where |
 | `GET /api/v1/config/{app}` | an application's record and environment |
 | `GET /api/v1/switcher` | the applications for every app switcher (no sign-in; readable from this host's pages only) |
-| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added`, `node.rotated`, `node.revoked` |
+| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added`, `bus.user-issued`, `bus.user-removed`, `bus.user-refused`, `node.rotated`, `node.revoked` |
+| `POST /api/v1/bus/users` | a broker user for the application that asks, under a root its manifest lists in `bus.issue` (no sign-in: loopback only, `Authorization: Bus <app>:<password>`; see *Issued users*) |
+| `DELETE /api/v1/bus/users/{name}` | removes one the application was issued (same) |
 
 Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
-`POST /auth/service-token`, `POST /api/enroll`, `POST /api/nodes/verify`, `/healthz`.
+`POST /auth/service-token`, `POST /api/enroll`, `POST /api/nodes/verify`, `/healthz`,
+and `/api/v1/bus/users`, which checks an application's broker password itself.
 
 ## Security
 

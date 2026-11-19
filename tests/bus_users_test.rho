@@ -1,0 +1,140 @@
+//
+// @file bus_users_test.rho
+// @brief The unit tests of issued broker users: the names and prefixes asked for, the roots a manifest declares, the Bus credential, the ACL lines and issued.txt.
+//
+// @module keeper.bus_users_test
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-20
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.bus_users_test
+
+include "../src/keeper/apps_text.rho"
+include "../src/keeper/bus_users_text.rho"
+
+extern fn rho_strlen(s: string) u64
+extern fn rho_str_slice(s: string, start: u32, length: u32) string
+extern fn rho_str_index_of(s: string, needle: string) i32
+extern fn rho_str_from_byte(b: u8) string
+extern fn rho_str_eq(a: string, b: string) bool
+extern fn rho_str_starts_with(s: string, prefix: string) bool
+extern fn rho_int_from_str(s: string) u32
+extern fn rho_int_to_str(value: u32) string
+extern fn abort()
+
+fn check(condition: bool, what: string) void {
+    if !condition {
+        print("FAIL: " + what + "\n")
+        abort()
+    }
+}
+
+// @verifies KEEP-PROV-0006
+test fn a_name_is_one_plain_word() void {
+    check(bus_issue_name_ok("zb1"), "a plain name")
+    check(bus_issue_name_ok("coord_01-a"), "letters, digits, - and _")
+    check(!bus_issue_name_ok(""), "no name")
+    check(!bus_issue_name_ok("zb.1"), "a dot is refused")
+    check(!bus_issue_name_ok("zb/1"), "a slash is refused")
+    check(!bus_issue_name_ok("zb 1"), "a space is refused")
+    check(!bus_issue_name_ok("zb:1"), "a colon would break the password file")
+    check(!bus_issue_name_ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "65 characters is too long")
+    print("[PASS] a_name_is_one_plain_word\n")
+}
+
+// @verifies KEEP-PROV-0006
+test fn a_prefix_is_a_plain_topic() void {
+    check(rho_str_eq(bus_issue_prefix_problem("zigbee/home/zb1"), ""), "a plain topic")
+    check(rho_str_eq(bus_issue_prefix_problem("zigbee"), ""), "one level")
+    check(!rho_str_eq(bus_issue_prefix_problem(""), ""), "empty")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee/#"), ""), "a multi-level wildcard")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee/+/zb1"), ""), "a single-level wildcard")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee//zb1"), ""), "an empty level")
+    check(!rho_str_eq(bus_issue_prefix_problem("/zigbee/zb1"), ""), "a leading slash")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee/zb1/"), ""), "a trailing slash")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee/zb 1"), ""), "a space")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee/zb1\nuser keeper"), ""), "a newline cannot add an ACL line")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee/zb1\r"), ""), "a carriage return")
+    check(!rho_str_eq(bus_issue_prefix_problem("zigbee|x"), ""), "the field separator of issued.txt")
+    print("[PASS] a_prefix_is_a_plain_topic\n")
+}
+
+// @verifies KEEP-PROV-0006
+test fn the_root_is_one_the_manifest_declares() void {
+    let roots: string = "zigbee\nthread\n"
+    check(rho_str_eq(bus_prefix_root("zigbee/home/zb1"), "zigbee"), "the root is the first level")
+    check(rho_str_eq(bus_prefix_root("zigbee"), "zigbee"), "a one-level prefix is its own root")
+    check(bus_root_declared(roots, "zigbee/home/zb1"), "a declared root")
+    check(bus_root_declared(roots, "thread/x"), "another declared root")
+    check(!bus_root_declared(roots, "tasmota/plug"), "an undeclared root")
+    check(!bus_root_declared(roots, "zigbeex/home"), "a root is a whole level, not a string prefix")
+    check(!bus_root_declared("", "zigbee/home"), "a manifest without bus.issue declares nothing")
+    print("[PASS] the_root_is_one_the_manifest_declares\n")
+}
+
+// @verifies KEEP-PROV-0006
+test fn an_issued_user_reaches_its_prefix_only() void {
+    check(rho_str_eq(bus_issued_user("mesh", "zb1"), "mesh-zb1"), "the user is <app>-<name>")
+    check(rho_str_eq(bus_issued_acl("mesh", "zb1", "zigbee/home/zb1"),
+        "user mesh-zb1\ntopic readwrite zigbee/home/zb1/#\n\n"), "readwrite under the prefix, and nothing else")
+    print("[PASS] an_issued_user_reaches_its_prefix_only\n")
+}
+
+// @verifies KEEP-PROV-0006
+test fn the_bus_credential_names_app_and_password() void {
+    check(rho_str_eq(bus_auth_part("Bus mesh:s3cret", 0), "mesh"), "the application")
+    check(rho_str_eq(bus_auth_part("Bus mesh:s3cret", 1), "s3cret"), "the password")
+    check(rho_str_eq(bus_auth_part("Bus mesh:a:b", 1), "a:b"), "the password is everything after the first colon")
+    check(rho_str_eq(bus_auth_part("Bearer abc", 0), ""), "another scheme")
+    check(rho_str_eq(bus_auth_part("Bus :x", 0), ""), "no application")
+    check(rho_str_eq(bus_auth_part("Bus mesh", 0), ""), "no password")
+    check(rho_str_eq(bus_auth_part("", 1), ""), "no header")
+    print("[PASS] the_bus_credential_names_app_and_password\n")
+}
+
+// @verifies KEEP-PROV-0006, KEEP-PROV-0008
+test fn issued_lines_are_kept_per_application() void {
+    var lines: string = ""
+    lines = bus_issued_with(lines, "mesh", "zb1", "zigbee/home/zb1")
+    lines = bus_issued_with(lines, "mesh", "zb2", "zigbee/home/zb2")
+    lines = bus_issued_with(lines, "garden", "zb1", "zigbee/garden/zb1")
+    check(rho_str_eq(lines, "mesh|zb1|zigbee/home/zb1\nmesh|zb2|zigbee/home/zb2\ngarden|zb1|zigbee/garden/zb1\n"), "added in order")
+    check(rho_str_eq(bus_issued_prefix(lines, "mesh", "zb2"), "zigbee/home/zb2"), "a user's prefix")
+    check(rho_str_eq(bus_issued_prefix(lines, "mesh", "zb3"), ""), "no such user")
+    lines = bus_issued_with(lines, "mesh", "zb1", "zigbee/attic/zb1")
+    check(rho_str_eq(bus_issued_prefix(lines, "mesh", "zb1"), "zigbee/attic/zb1"), "the same name replaces its prefix")
+    check(rho_str_eq(bus_issued_of(lines, "mesh"), "zb1|zigbee/attic/zb1\nzb2|zigbee/home/zb2\n"), "one application's users")
+    check(rho_str_eq(bus_issued_without(lines, "mesh", "zb2"), "mesh|zb1|zigbee/attic/zb1\ngarden|zb1|zigbee/garden/zb1\n"), "one user removed")
+    check(rho_str_eq(bus_issued_without(lines, "mesh", ""), "garden|zb1|zigbee/garden/zb1\n"), "an application's users removed with it")
+    check(bus_issued_user_clash("mesh|zb-1|zigbee/a\n", "mesh-zb", "1"), "two applications cannot make the same user")
+    check(!bus_issued_user_clash("mesh|zb-1|zigbee/a\n", "mesh", "zb-1"), "an application's own user is no clash")
+    print("[PASS] issued_lines_are_kept_per_application\n")
+}
+
+// @verifies KEEP-PROV-0007
+test fn the_network_address_is_the_routes_source() void {
+    check(rho_str_eq(bus_route_source("1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.20 uid 1000 \\    cache \n"), "192.168.1.20"), "the source address")
+    check(rho_str_eq(bus_route_source("1.1.1.1 dev eth0 src 10.0.0.7\n"), "10.0.0.7"), "the source at the end of the line")
+    check(rho_str_eq(bus_route_source("RTNETLINK answers: Network is unreachable\n"), ""), "no route")
+    check(rho_str_eq(bus_route_source("x src 127.0.0.1 uid 0"), ""), "the loopback is not the network")
+    check(rho_str_eq(bus_route_source("x src fe80::1 uid 0"), ""), "only IPv4")
+    check(bus_ipv4_ok("192.168.1.20"), "an address")
+    check(!bus_ipv4_ok("192.168.1"), "three parts")
+    check(!bus_ipv4_ok("192.168..20"), "an empty part")
+    check(!bus_ipv4_ok("1921.168.1.20"), "a part too long")
+    print("[PASS] the_network_address_is_the_routes_source\n")
+}
+
+fn main() void {
+    a_name_is_one_plain_word()
+    a_prefix_is_a_plain_topic()
+    the_root_is_one_the_manifest_declares()
+    an_issued_user_reaches_its_prefix_only()
+    the_bus_credential_names_app_and_password()
+    issued_lines_are_kept_per_application()
+    the_network_address_is_the_routes_source()
+    print("keeper bus users tests ok\n")
+}

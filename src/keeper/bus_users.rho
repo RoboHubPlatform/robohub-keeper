@@ -1,0 +1,292 @@
+//
+// @file bus_users.rho
+// @brief Broker users the keeper issues to an application, under the topic roots its manifest declares.
+//
+// @module keeper.bus_users
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-20
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.bus_users
+
+// An application that binds the bus may ask the keeper for broker users of its
+// own making — Mesh, for the Zigbee2MQTT it runs per coordinator — each confined
+// to one topic prefix under a root its manifest lists in `bus.issue` (ADR-0006):
+//
+//   POST   /api/v1/bus/users           {"name": "zb1", "prefix": "zigbee/home/zb1"}
+//   DELETE /api/v1/bus/users/{name}
+//
+// Both are asked on a loopback connection, with the application's own broker
+// password: `Authorization: Bus <app>:<password>`. The auth middleware lets the
+// two through (skip_paths in project.yml) and this file checks the credential
+// itself, so no session or ticket is involved and nothing else is opened.
+//
+// The users are kept in services/mqtt/issued.txt, `app|name|prefix` one per line,
+// and their passwords in services/mqtt/issued/<app>-<name>.secret, owner-only;
+// mqtt_write_files makes each a broker user `<app>-<name>` allowed
+// `readwrite <prefix>/#`.
+
+import std.web.http
+
+fn mqtt_issued_file() string {
+    return integration_dir("mqtt") + "/issued.txt"
+}
+
+fn mqtt_issued_secret(app: string, name: string) string {
+    return integration_dir("mqtt") + "/issued/" + bus_issued_user(app, name) + ".secret"
+}
+
+// bus_request_local is whether a request came over a loopback connection from a
+// program on this machine: the connection's own address, which a caller cannot
+// write, and no proxy header, since a proxy on this machine connects from the
+// loopback on behalf of whoever reached it.
+// @req KEEP-PROV-0006
+fn bus_request_local(req: Request) bool {
+    let peer: string = request_remote(req)
+    let loopback: bool = rho_str_starts_with(peer, "127.") || rho_str_eq(peer, "::1") || rho_str_starts_with(peer, "::ffff:127.")
+    return loopback && !has_header(req, "X-Forwarded-For") && !has_header(req, "X-Real-Ip") && !has_header(req, "Forwarded")
+}
+
+// bus_caller is the application a request's `Authorization: Bus` names, when the
+// password it carries is that application's broker password, or "". The
+// password is compared without stopping at the first difference.
+// @req KEEP-PROV-0006
+fn bus_caller(req: Request) string {
+    let header: string = header_str(req, "Authorization")
+    let app: string = bus_auth_part(header, 0)
+    let presented: string = bus_auth_part(header, 1)
+    if !catalog_has(app) || integration_is(app) || !app_binds_bus(catalog_get(app, "location")) {
+        return ""
+    }
+    // Read, never made here: an application that was never started with the bus
+    // has no password, and asking cannot give it one.
+    let stored: string = str_trim(rho_read_text(bus_password_file(app)))
+    if rho_strlen(stored) < 32 || !secret_same(presented, stored) {
+        return ""
+    }
+    return app
+}
+
+// bus_refused records a refused request and answers it.
+fn bus_refused(status: u32, app: string, message: string) Response {
+    keeper_event("bus.user-refused", app, message)
+    return api_error(status, message)
+}
+
+// bus_user_taken is whether a broker user of that name exists other than as an
+// issued user: the keeper, an application, or a device an admin added.
+fn bus_user_taken(user: string) bool {
+    if rho_str_eq(user, "keeper") || catalog_has(user) {
+        return true
+    }
+    var rest: string = rho_read_text(mqtt_devices_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(field(line, 0), user) {
+            return true
+        }
+    }
+    return false
+}
+
+// bus_lan_address is this machine's address on its network while the broker is
+// open to it, and "" while it listens on the loopback only.
+// @req KEEP-PROV-0007
+fn bus_lan_address() string {
+    if !rho_str_eq(integration_listen("mqtt"), "0.0.0.0") {
+        return ""
+    }
+    // Asking the kernel which address a packet to the internet would leave from
+    // sends nothing; it names the interface the default route goes through.
+    let report: string = apps_report("bus-route")
+    if rho_exec_args("ip", "-4\n-o\nroute\nget\n1.1.1.1\n", report) == 0 {
+        let address: string = bus_route_source(rho_read_text(report))
+        if address != "" {
+            return address
+        }
+    }
+    let names: string = apps_report("bus-hostname")
+    if rho_exec_args("hostname", "-I\n", names) == 0 {
+        var rest: string = str_trim(rho_read_text(names)) + " "
+        while rest != "" {
+            let at: i32 = rho_str_index_of(rest, " ")
+            if at < 0 { break }
+            let word: string = rho_str_slice(rest, 0, u32(at))
+            rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+            if bus_ipv4_ok(word) && !rho_str_starts_with(word, "127.") {
+                return word
+            }
+        }
+    }
+    return ""
+}
+
+// bus_users_post issues a broker user to the application that asks, or answers
+// the one it was issued before: the same password for the same name, the prefix
+// replaced when it changed.
+// @req KEEP-PROV-0006, KEEP-PROV-0007
+fn bus_users_post(req: Request) Response {
+    if !bus_request_local(req) {
+        return bus_refused(403, "", "broker users are issued on a loopback connection only")
+    }
+    let app: string = bus_caller(req)
+    if app == "" {
+        var claimed: string = bus_auth_part(header_str(req, "Authorization"), 0)
+        if !valid_name(claimed) {
+            claimed = ""
+        }
+        return bus_refused(401, claimed, "Authorization: Bus <app>:<password> with the application's own broker password")
+    }
+    if mqtt_name() == "" {
+        return api_error(503, "MQTT is not installed")
+    }
+    let body: string = request_body(req)
+    let name: string = json_str_field(body, "name")
+    let prefix: string = json_str_field(body, "prefix")
+    if !bus_issue_name_ok(name) {
+        return api_error(400, "the name is letters, digits, - and _ only")
+    }
+    let problem: string = bus_issue_prefix_problem(prefix)
+    if problem != "" {
+        return api_error(400, problem)
+    }
+    let where: string = catalog_get(app, "location")
+    if !bus_root_declared(app_manifest_list(where, "bus.issue"), prefix) {
+        return bus_refused(403, app, app + " does not declare " + bus_prefix_root(prefix) + " under bus.issue in its manifest")
+    }
+    let user: string = bus_issued_user(app, name)
+    rho_lock("keeper.bus-issued")
+    let lines: string = rho_read_text(mqtt_issued_file())
+    if bus_issued_user_clash(lines, app, name) || bus_user_taken(user) {
+        rho_unlock("keeper.bus-issued")
+        return api_error(409, user + " is already another broker user")
+    }
+    let previous: string = bus_issued_prefix(lines, app, name)
+    if !rho_str_eq(previous, prefix) {
+        ignore_bool(rho_write_text(mqtt_issued_file(), bus_issued_with(lines, app, name, prefix)))
+    }
+    let password: string = bus_password(mqtt_issued_secret(app, name))
+    rho_unlock("keeper.bus-issued")
+    // The broker is written again even when nothing changed, so asking again
+    // after a write that failed is what puts the user in place.
+    let failure: string = mqtt_write_files()
+    if failure != "" {
+        return api_error(500, failure)
+    }
+    if !rho_str_eq(previous, prefix) {
+        info("keeper", "issued the broker user " + user + " to " + app + " for " + prefix + "/#")
+        keeper_event("bus.user-issued", app, user + " may use " + prefix + "/#.")
+    }
+    return json(status_ok(), "{\"user\":" + json_string(user) + ",\"password\":" + json_string(password) +
+        ",\"prefix\":" + json_string(prefix) + ",\"port\":" + json_string(catalog_get("mqtt", "port")) +
+        ",\"loopback\":\"127.0.0.1\",\"network\":" + json_string(bus_lan_address()) + "}")
+}
+
+// bus_users_delete removes a user the asking application was issued.
+// @req KEEP-PROV-0008
+fn bus_users_delete(req: Request) Response {
+    if !bus_request_local(req) {
+        return bus_refused(403, "", "broker users are removed on a loopback connection only")
+    }
+    let app: string = bus_caller(req)
+    if app == "" {
+        return bus_refused(401, "", "Authorization: Bus <app>:<password> with the application's own broker password")
+    }
+    let name: string = param(req, "name")
+    let user: string = bus_issued_user(app, name)
+    rho_lock("keeper.bus-issued")
+    let lines: string = rho_read_text(mqtt_issued_file())
+    if !bus_issue_name_ok(name) || bus_issued_prefix(lines, app, name) == "" {
+        rho_unlock("keeper.bus-issued")
+        return api_error(status_not_found(), app + " was issued no broker user " + name)
+    }
+    ignore_bool(rho_write_text(mqtt_issued_file(), bus_issued_without(lines, app, name)))
+    ignore_u32(rho_exec_args("rm", "-f\n--\n" + mqtt_issued_secret(app, name) + "\n", apps_report("bus-rm")))
+    rho_unlock("keeper.bus-issued")
+    if mqtt_name() != "" {
+        ignore_string(mqtt_write_files())
+    }
+    info("keeper", "removed the broker user " + user + " issued to " + app)
+    keeper_event("bus.user-removed", app, user + " was removed.")
+    return json(status_ok(), "{\"removed\":" + json_string(user) + "}")
+}
+
+// bus_issued_remove_app removes every broker user an application was issued,
+// when the application itself is removed. The broker is written again by the
+// caller.
+// @req KEEP-PROV-0008
+fn bus_issued_remove_app(app: string) void {
+    if !valid_name(app) || !rho_path_exists(mqtt_issued_file()) {
+        return
+    }
+    rho_lock("keeper.bus-issued")
+    let lines: string = rho_read_text(mqtt_issued_file())
+    var removed: string = ""
+    var rest: string = bus_issued_of(lines, app)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let name: string = field(line, 0)
+        if name == "" { continue }
+        ignore_u32(rho_exec_args("rm", "-f\n--\n" + mqtt_issued_secret(app, name) + "\n", apps_report("bus-rm")))
+        removed = removed + bus_issued_user(app, name) + "\n"
+    }
+    if removed != "" {
+        ignore_bool(rho_write_text(mqtt_issued_file(), bus_issued_without(lines, app, "")))
+    }
+    rho_unlock("keeper.bus-issued")
+    while removed != "" {
+        let at: i32 = rho_str_index_of(removed, "\n")
+        let user: string = rho_str_slice(removed, 0, u32(at))
+        removed = rho_str_slice(removed, u32(at) + 1, u32(rho_strlen(removed)) - u32(at) - 1)
+        keeper_event("bus.user-removed", app, user + " was removed with " + app + ".")
+    }
+}
+
+// bus_issued_in_use is whether an issued.txt line still makes a broker user: its
+// application is in the catalogue, binds the bus and still lists the prefix's
+// root under `bus.issue`, and the name and prefix are ones the keeper issues.
+// @req KEEP-PROV-0006, KEEP-PROV-0008
+fn bus_issued_in_use(line: string) bool {
+    let app: string = field(line, 0)
+    let name: string = field(line, 1)
+    let prefix: string = field(line, 2)
+    if !catalog_has(app) || integration_is(app) || !bus_issue_name_ok(name) || bus_issue_prefix_problem(prefix) != "" {
+        return false
+    }
+    let where: string = catalog_get(app, "location")
+    return app_binds_bus(where) && bus_root_declared(app_manifest_list(where, "bus.issue"), prefix)
+}
+
+// mqtt_issued_rows is the issued users for the broker's Clients tab: the user,
+// the application that asked for it and its topics. A line that no longer makes
+// a user says so.
+// @req KEEP-PROV-0008
+fn mqtt_issued_rows(req: Request) string {
+    var out: string = ""
+    var rest: string = rho_read_text(mqtt_issued_file())
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if field(line, 0) == "" { continue }
+        var row: string = "rh-row ok"
+        var said: string = keeper_t2(req, "mqtt.issued_by", "app", field(line, 0), "prefix", field(line, 2))
+        if !bus_issued_in_use(line) {
+            row = "rh-row"
+            said = said + " · " + i18n_t(req, "mqtt.issued_unused")
+        }
+        out = out + "<div class=\"" + row + "\"><b>" + escape_html(bus_issued_user(field(line, 0), field(line, 1))) + "</b><span>" +
+            escape_html(said) + "</span></div>"
+    }
+    if out == "" {
+        out = "<p class=\"rh-empty\">" + i18n_t(req, "mqtt.no_issued") + "</p>"
+    }
+    return "<div class=\"rh-sec\">" + i18n_t(req, "mqtt.issued_users") + "</div>" + out
+}

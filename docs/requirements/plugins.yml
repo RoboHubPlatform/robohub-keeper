@@ -80,3 +80,58 @@ requirements:
     owner: maintainer
     changed: 2026-11-19
     tags: [mqtt, integrations, least-privilege]
+
+  - id: KEEP-PROV-0006
+    title: An application may be issued broker users under the topic roots it declares
+    statement: >
+      The keeper shall accept `POST /api/v1/bus/users` with a name and a topic
+      prefix from an application whose manifest binds `robohub.bus` and lists
+      the prefix's first level under `bus.issue`, authenticated by that
+      application's own broker password (`Authorization: Bus <app>:<password>`)
+      on a loopback connection; it shall refuse a prefix with a wildcard, an empty
+      level, a space or a newline, or whose first level the manifest does not
+      list, and a name that is not a valid name; it shall make a broker user named
+      `<app>-<name>` limited to `readwrite <prefix>/#`, with a random password kept
+      owner-only under the keeper's `services/mqtt/`, answer the user and its
+      password once, reload the broker, and record a `bus.user-issued` event.
+    rationale: Mesh runs a Zigbee coordinator that must reach the broker as a user of its own, confined to its own topics, without an admin adding it by hand and without Mesh handing out its own broker credential (robohub:ADR-0017).
+    satisfies: [KEEP-0010]
+    decided_by: [ADR-0006]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [mqtt, integrations, least-privilege, api]
+
+  - id: KEEP-PROV-0007
+    title: An issued user's answer says where the broker is reached
+    statement: >
+      The answer to an issued broker user shall carry the broker's port, its
+      loopback address, and its network address only while an admin has opened
+      the broker to the network, so the application can refuse to configure a
+      client on another machine while the broker listens on loopback only.
+    rationale: A coordinator on another board can reach the broker only when it is open (SYS-0032); the application must say that rather than start a client that can never connect.
+    satisfies: [KEEP-0010]
+    decided_by: [ADR-0006]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [mqtt, api]
+
+  - id: KEEP-PROV-0008
+    title: Issued users are shown with who issued them and go with their application
+    statement: >
+      `DELETE /api/v1/bus/users/<name>`, under the same authentication, shall
+      remove a user the same application was issued and reload the broker; the
+      MQTT integration's Clients tab shall list issued users with the application
+      that issued them and their prefix; and removing an application shall remove
+      every broker user it was issued.
+    rationale: A credential no one remembers issuing is one no one revokes; an issued user must be visible and must not outlive what asked for it.
+    satisfies: [KEEP-0010]
+    decided_by: [ADR-0006]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [mqtt, least-privilege]

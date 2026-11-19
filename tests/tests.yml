@@ -15,6 +15,9 @@ suites:
   - name: tests/developer_test.rho
     kind: rho
     tags: [unit, rho, developer]
+  - name: tests/bus_users_test.rho
+    kind: rho
+    tags: [unit, rho, mqtt]
   # @verifies KEEP-AUTH-0001, KEEP-AUTH-0004, KEEP-AUTH-0006, KEEP-AUTH-0015
   # @verifies KEEP-APPS-0001, KEEP-APPS-0002, KEEP-APPS-0004, KEEP-APPS-0005
   # @verifies KEEP-APPS-0008, KEEP-APPS-0009, KEEP-APPS-0010, KEEP-APPS-0011
@@ -41,3 +44,8 @@ suites:
     kind: command
     tags: [smoke, security]
     command: [python3, tests/forms_smoke.py]
+  # @verifies KEEP-PROV-0006, KEEP-PROV-0007, KEEP-PROV-0008
+  - name: bus-users-smoke
+    kind: command
+    tags: [smoke, mqtt, security]
+    command: [python3, tests/bus_users_smoke.py]
