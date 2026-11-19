@@ -62,8 +62,6 @@ const DOCS_TREE: string = "build/doctree"
 const DOCS_SITE: string = "build/site"
 
 fn init() void {
-    // The proxy's list of applications, current from the start.
-    ignore_string(keeper_switcher_apps())
     log_config_apply("keeper")
     // Node credentials kept in the clear by an older keeper become salted hashes.
     keeper_nodes_migrate()
@@ -102,6 +100,12 @@ route POST "/applications/restart" => applications_restart
 route POST "/applications/menu" => applications_menu
 route GET "/api/applications/candidates" => applications_candidates_endpoint
 route GET "/apps/{name}" => app_page
+// The addresses applications were served at under the keeper, which now lead to
+// their own ports.
+route GET "/app/{name}" => app_redirect
+route GET "/app/{name}/{path...}" => app_redirect
+route POST "/app/{name}" => app_redirect
+route POST "/app/{name}/{path...}" => app_redirect
 route GET "/overview/cards" => overview_cards_endpoint
 route GET "/overview/app/{name}" => overview_inspector_endpoint
 route POST "/overview/app/{name}/{action}" => overview_action_endpoint

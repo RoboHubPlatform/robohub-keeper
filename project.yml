@@ -7,15 +7,6 @@ targets:
     api:
       public_paths: "/, /modules, /applications, /plugins, /providers, /app-modules, /auth/login, /docs"
     middleware:
-      # The applications this keeper hosts are served under its own origin, at
-      # /app/<name>/, so a person never visits their ports: cookies are scoped by
-      # host and not by port, and the keeper's session is never forwarded to
-      # them. The list is written by the keeper (keeper_write_proxy).
-      - name: app_proxy
-        options:
-          prefix: /app/
-          apps_file: ~/.rho/keeper/proxy.txt
-          strip_cookie: keeper_session
       # A form posted from another origin is refused before anything else:
       # every application this keeper hosts is another port of the same host,
       # which a SameSite cookie does not tell apart. Programs that post to the
@@ -28,7 +19,9 @@ targets:
           cookie: keeper_session
           login_url: "/auth/login?audience=keeper"
           session_file: ~/.rho/keeper/auth-sessions.txt
-          skip_paths: /api/v1/switcher,/auth/session,/ui,/auth/login,/auth/service-token,/auth/public-key,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
+          # /app/<name>/… only redirects to an application's own port, which
+          # signs the person in itself: an old link needs no keeper session.
+          skip_paths: /app,/api/v1/switcher,/auth/session,/ui,/auth/login,/auth/service-token,/auth/public-key,/api/enroll,/api/nodes/verify,/i18n,/healthz,/assets,/assets/,/static
     default_locale: en
     locales:
       - locale: en

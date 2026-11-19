@@ -53,13 +53,12 @@ requirements:
     statement: >
       The keeper shall mint a sign-in ticket only for a `return_to` that is the
       audience's own callback — on loopback or the host the keeper was reached on,
-      at the application's port and `/auth/callback` or `<route>/auth/callback`,
-      or at `/app/<name>/auth/callback` on the keeper's port; for the audience
-      `gateway`, `/auth/callback` on loopback or the keeper's host — and shall
-      answer 400 to any other.
+      at the application's port and `/auth/callback` or `<route>/auth/callback`;
+      for the audience `gateway`, `/auth/callback` on loopback or the keeper's
+      host — and shall answer 400 to any other.
     rationale: A ticket is a credential; an address that is not the application's is where it would leak to.
     satisfies: [KEEP-0001, KEEP-0003]
-    status: proposed
+    status: approved
     verification: test
     owner: maintainer
     changed: 2026-11-19

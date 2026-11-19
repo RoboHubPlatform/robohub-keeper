@@ -1,8 +1,8 @@
 # RoboHub Keeper
 
 RoboHub's supervisor and front door: it signs people in, installs the applications
-and runs them as systemd user units from releases, and serves them under its own
-origin at `/app/<name>/`. It listens on `127.0.0.1:19090`.
+and runs them as systemd user units from releases, and links to each on its own
+loopback port. It listens on `127.0.0.1:19090`.
 
 The full guide is [docs/doc/index.md](docs/doc/index.md).
 
@@ -30,8 +30,8 @@ ROBOHUB_ROOT=../robohub ./build/keeper     # by hand, on 127.0.0.1:19090
   redeploy under `~/.rho/keeper/apps/<name>/releases/`
 - Sign-in for every application: people with roles (admin, operator, viewer) and
   grants per application, tickets signed with the keeper's key
-- The applications behind its own origin, `/app/<name>/` (setting
-  `keeper.proxy_apps`)
+- Each application on its own port, linked from the overview, the menu and the
+  switcher; the old addresses `/app/<name>/…` redirect there
 - Integrations it runs for the applications, starting with the MQTT broker
 - Node enrollment and the registry of issued node identities
 - The documentation site

@@ -36,18 +36,20 @@ requirements:
     tags: [auth, people, least-privilege]
 
   - id: KEEP-0003
-    title: Hosted applications are served under the keeper's origin
+    title: The keeper leads to every application on its own port
     statement: >
-      The keeper shall serve every application it hosts at `/app/<name>/` on its
-      own address, and shall offer every application in a switcher and, when an
-      admin adds it, in its menu.
-    rationale: One address reaches everything, and one application's cookies never reach another.
+      The keeper shall link to every application it hosts at the application's
+      own address, on its own port, offer every application in a switcher and,
+      when an admin adds it, in its menu, and redirect its earlier addresses
+      `/app/<name>/…` there.
+    rationale: Each application is an origin of its own, with the browser's connections to itself, so one application's event streams never hold up another's pages; old links and bookmarks keep working.
     satisfies: [SYS-0005, SYS-0017]
-    status: proposed
+    status: approved
     verification: test
+    decided_by: [robohub:ADR-0016]
     owner: maintainer
     changed: 2026-11-19
-    tags: [apps, proxy]
+    tags: [apps, switcher]
 
   - id: KEEP-0004
     title: The keeper installs, supervises and removes applications

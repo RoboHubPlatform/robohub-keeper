@@ -566,51 +566,73 @@ fn keeper_switcher_apps() string {
         }
         out = out + name + "|" + app_title(name, path) + "|" + app_port_of(name) + "|" + app_route(path) + "|" + state + "\n"
     }
-    keeper_write_proxy(out)
     return out
 }
 
-// keeper_proxy_on is whether the keeper's links to its applications go through
-// its own origin (/app/<name>/) rather than to their ports: on unless turned off.
-fn keeper_proxy_on() bool {
-    return !rho_str_eq(settings_get("keeper.proxy_apps", "on"), "off")
-}
-
-// keeper_app_href is where the keeper sends a person for an application.
-fn keeper_app_href(name: string, first_page: string) string {
-    var first: string = first_page
-    if first == "" {
-        first = "/"
+// keeper_app_host is the host an application is reached at: the loopback, where
+// it listens unless its manifest opens it to the network, and for one opened
+// (`deploy.listen: lan`) the host the keeper itself was reached at.
+fn keeper_app_host(req: Request, name: string) string {
+    let listen: string = app_listen_host(catalog_get(name, "location"))
+    if listen != "" {
+        return listen
     }
-    return "/app/" + name + first
+    let host: string = auth_host(header_str(req, "Host"))
+    if host == "" {
+        return "127.0.0.1"
+    }
+    return host
 }
 
-// keeper_proxy_file is the list the app_proxy middleware reads: where its
-// project.yml says, in the keeper's home folder.
-fn keeper_proxy_file() string {
-    return getenv("HOME") + "/.rho/keeper/proxy.txt"
-}
-
-// keeper_write_proxy writes the hosted applications and their ports for the
-// proxy, `name port` per line, when they changed.
+// keeper_app_address is where the keeper sends a person for an application: its
+// own port, at `path` there. Every application is an origin of its own, with the
+// browser's connections to itself; "" when it has no port.
 // @req KEEP-APPS-0015
-fn keeper_write_proxy(apps: string) void {
-    var out: string = ""
-    var rest: string = apps
-    while rest != "" {
-        let at: i32 = rho_str_index_of(rest, "\n")
-        var line: string = rest
-        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
-        let name: string = field(line, 0)
-        let port: string = field(line, 2)
-        if name != "" && !rho_str_eq(name, "keeper") && port != "" {
-            out = out + name + " " + port + "\n"
-        }
+fn keeper_app_address(req: Request, name: string, path: string) string {
+    let port: string = app_port_of(name)
+    if port == "" {
+        return ""
     }
-    if !rho_str_eq(rho_read_text(keeper_proxy_file()), out) {
-        ignore_u32(rho_exec_args("mkdir", "-p\n" + getenv("HOME") + "/.rho/keeper\n", apps_report("proxy-mkdir")))
-        ignore_bool(rho_write_text(keeper_proxy_file(), out))
+    var at: string = path
+    if at == "" {
+        at = "/"
     }
+    return "http://" + keeper_app_host(req, name) + ":" + port + at
+}
+
+// app_redirect answers the addresses the keeper served its applications at
+// before they were reached on their own ports, /app/<name>/<path>: the same path
+// on the application's port, so a link or a bookmark still
+// leads there. A post keeps its method and body (307). An application the
+// keeper does not host is not found here.
+// @req KEEP-APPS-0015
+fn app_redirect(req: Request) Response {
+    let name: string = param(req, "name")
+    if name == "" || !catalog_has(name) || app_kind(app_path(name)) != "keeper-hosted" || app_port_of(name) == "" {
+        return text(status_not_found(), "There is no application here by that name.")
+    }
+    let prefix: string = "/app/" + name
+    let full: string = request_path(req)
+    var rest: string = ""
+    if rho_str_starts_with(full, prefix) {
+        rest = rho_str_slice(full, u32(rho_strlen(prefix)), u32(rho_strlen(full)) - u32(rho_strlen(prefix)))
+    }
+    // /app/<name> alone is the application's first page.
+    if rest == "" {
+        rest = app_route(app_path(name))
+    }
+    // The query is not carried over yet: Rho 0.19's Go backend cannot read a
+    // request's raw query (`req.query` is emitted as a field Go's Request does
+    // not have), and nothing else gives it whole.
+    let target: string = keeper_app_address(req, name, rest)
+    if rho_str_index_of(target, "\n") >= 0 || rho_str_index_of(target, "\r") >= 0 {
+        return text(status_bad_request(), "That address cannot be followed.")
+    }
+    var status: u32 = status_found()
+    if !rho_str_eq(request_method(req), "GET") && !rho_str_eq(request_method(req), "HEAD") {
+        status = 307
+    }
+    return Response{ status, "", "text/plain; charset=utf-8", "Location: " + target + "\nCache-Control: no-store" }
 }
 
 fn keeper_topbar(req: Request) string {
@@ -698,17 +720,14 @@ fn pinned_nav(req: Request) string {
     return out
 }
 
+// open_link opens an application on its own port, in a tab of its own.
+// @req KEEP-0003
 fn open_link(req: Request, name: string, path: string) string {
     if app_kind(path) == "keeper" {
         return "<a class=\"button quiet\" href=\"/\">" + i18n_t(req, "common.open") + "</a>"
     }
-    if keeper_proxy_on() {
-        return "<a class=\"button\" href=\"" + escape_html(keeper_app_href(name, app_route(path))) +
-            "\" target=\"_blank\" rel=\"noopener\">" + i18n_t(req, "apps.open_application") + " ↗</a>"
-    }
-    return "<a class=\"button app-open\" href=\"#\" target=\"_blank\" rel=\"noopener\" data-app-port=\"" +
-        escape_html(app_port_of(name)) + "\" data-app-route=\"" +
-        escape_html(app_route(path)) + "\">" + i18n_t(req, "apps.open_application") + " ↗</a>"
+    return "<a class=\"button\" href=\"" + escape_html(keeper_app_address(req, name, app_route(path))) +
+        "\" target=\"_blank\" rel=\"noopener\">" + i18n_t(req, "apps.open_application") + " ↗</a>"
 }
 
 fn app_actions(req: Request, name: string, path: string, origin: string) string {

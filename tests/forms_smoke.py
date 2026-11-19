@@ -51,6 +51,8 @@ MACHINE = {
     "/api/nodes/verify": "a node credential",
     "/auth/service-token": "a client secret",
     "/auth/login": "a password or the access token; there is no session yet",
+    "/app/{name}": "nothing: a redirect to the application's own port, which checks the post",
+    "/app/{name}/{path...}": "nothing: a redirect to the application's own port, which checks the post",
 }
 
 # Every other POST route, with fields that would act if the token were not

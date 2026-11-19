@@ -2,9 +2,9 @@
 
 The keeper is RoboHub's supervisor and front door. It signs people in for every
 application, installs the applications and runs each as a systemd user unit from a
-release it made, serves them under its own origin at `/app/<name>/`, and shows what
-the machine needs to run them. It is the one page a person opens; Mesh, the
-aquarium and energy are reached through it.
+release it made, links to each on its own port, and shows what the machine needs
+to run them. It is the page a person opens first; Mesh, the aquarium and energy are
+reached from it.
 
 ![Every application on the machine, with the inspector of one beside them](images/keeper-apps.png)
 
@@ -45,33 +45,33 @@ checkout. Started by hand for a test:
 ROBOHUB_ROOT=../robohub ./build/keeper
 ```
 
-## Applications behind one origin
+## Applications on their own ports
 
-Every hosted application is reached through the keeper at
-`http://127.0.0.1:19090/app/<name>/` — Mesh at `/app/mesh/mesh`, the aquarium at
-`/app/aquarium/`, energy at `/app/energy/`. The keeper's links, **Open application**
-and the app switcher in every application's top bar go there.
+Every hosted application is reached on its own loopback port, at its own address —
+Mesh at `http://127.0.0.1:8478/mesh`, the aquarium at `http://127.0.0.1:8480/`,
+energy at `http://127.0.0.1:8482/`. The keeper's links, **Open application**, its
+overview and the app switcher in every application's top bar go there; an
+application whose manifest opens it to the network (`deploy.listen: lan`) is linked
+on the host the keeper was reached at.
 
-A browser scopes cookies by host and not by port, so an application on a port of
-its own would receive every other application's cookies, the keeper's admin session
-among them. Through the keeper it never does:
+Each application is an origin of its own, so it has the browser's six connections
+to itself. When every application was served under the keeper's origin, the
+event streams each page holds open — Mesh's faults, the notifications, the
+widgets — took those six connections between them, and ordinary requests queued
+behind them (robohub ADR-0016).
 
-- The `app_proxy` middleware (in `project.yml`) serves `/app/<name>/…` from the
-  application's loopback port and never forwards the keeper's `keeper_session`
-  cookie.
-- The application's own cookies are scoped to its path, and its root-relative links,
-  redirects and form targets are rewritten onto the prefix. `X-Forwarded-Prefix`,
-  `-Host` and `-Proto` tell it where it is reached. Server-sent events stream
-  through.
-- The list of applications and ports is `~/.rho/keeper/proxy.txt` (`name port` per
-  line), which the keeper writes whenever its list of applications changes and the
-  proxy reads again when the file changes, so a newly installed application is
-  reachable without a restart.
-- An application signs in through the keeper's origin as well: its callback is
-  `/app/<name>/auth/callback` on the keeper's port.
+The addresses the keeper served its applications at before, `/app/<name>/<path>`,
+redirect to the same path on the application's port, so old links and bookmarks
+still work: `302` for a page, `307` for a post, which keeps its method and body,
+and `404` for a name that is not an application the keeper hosts. The redirect
+needs no keeper session; the application signs the person in itself. The query
+of an old address is not carried over yet (Rho 0.19's Go backend cannot read a
+request's raw query).
 
-Each application still listens on its own loopback port, which is what the proxy
-calls and what a script on the machine may use:
+An application signs in on its own port: the keeper sends the person back to
+`/auth/callback` (or `<route>/auth/callback`) on the application's port.
+
+The ports the applications listen on:
 
 | Application | Name | Loopback port | First page |
 | --- | --- | --- | --- |
@@ -81,8 +81,7 @@ calls and what a script on the machine may use:
 | Energy | `energy` | 8482 | `/` |
 
 An application whose manifest port is already taken is given the next free one from
-8500. To go back to linking each application on its own port, set
-`keeper.proxy_apps=off` in the keeper's settings file.
+8500.
 
 ## Pages
 
@@ -265,9 +264,8 @@ rho auth user passwd --store ~/.rho/keeper/users.yml --name ana --password-file 
 short-lived ES256 ticket for the application: its audience, redirect URI, a one-use
 id, a 30-second lifetime, the person's name and only their grants for it (an admin's
 carry `*`). A person with no grant is told so rather than signed in. The ticket goes
-back to the application's callback: `/app/<name>/auth/callback` on the keeper's
-origin when it is reached through the keeper, `/auth/callback` at the root of its
-own port otherwise. Applications verify tickets with the key published at
+back to the application's callback on its own port: `/auth/callback` at its root,
+or `<route>/auth/callback` under its route. Applications verify tickets with the key published at
 `/auth/public-key`.
 
 **Sessions end together.** A ticket names the keeper session by a handle derived from
@@ -327,9 +325,6 @@ redeploy is backed out to the release before it; when cloning an application or
 fetching a package to install it fails; and when an application cannot be
 registered as a client. A build, or a redeploy whose build failed, touches nothing
 that runs, and is said in the jobs strip only.
-
-`keeper.proxy_apps=off` in `~/.rho/keeper/data/settings.conf` links applications on
-their own ports instead of through `/app/<name>/`.
 
 ## Registry, plugins, providers and app modules
 
@@ -406,7 +401,7 @@ service token. Answers are JSON.
 
 | Method and path | What it answers |
 | --- | --- |
-| `GET /api/v1/apps` | every application: state, port, version, URL (and its `/app/<name>/` path) |
+| `GET /api/v1/apps` | every application: state, port, version, URL on its own port |
 | `GET /api/v1/apps/{name}` | one of them |
 | `POST /api/v1/apps/{name}/{action}` | `start`, `stop`, `restart`, `redeploy`, `rollback`, `build`; a request carrying the keeper's session cookie also sends the form token as `csrf`, one with only a ticket in `Authorization` does not |
 | `GET /api/v1/jobs` | recent jobs |
@@ -432,11 +427,11 @@ Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
   with `403` before it acts — whoever is signed in. The routes that take a post
   without it are the ones authenticated by what they carry: `/auth/login`,
   `/auth/service-token`, `/api/enroll` and `/api/nodes/verify`. The token is one
-  per keeper, kept in an owner-only file of its workspace; a page served under the
-  keeper's own origin (an application at `/app/<name>/`) can read it like any
-  other page of that origin, so the token guards against other sites, not against
-  an application the keeper hosts.
-- The keeper's session cookie is never forwarded to a proxied application.
+  per keeper, kept in an owner-only file of its workspace. Every application is
+  on an origin of its own, so no application's page can read the keeper's pages or
+  its token.
+- `/app/<name>/…` takes a post without the token because it does nothing but
+  redirect it, with its method, to the application, which checks it.
 - Every program the keeper runs gets its arguments one per line; a value with a line
   break or a leading `-` is refused.
 - `~/.rho/keeper` is owner-only. Session ids, tokens and credentials come from the
@@ -453,7 +448,6 @@ Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
 | Application workspaces (their data) | `~/.rho/keeper/workspaces/<name>` |
 | People and sessions | `~/.rho/keeper/users.yml`, `~/.rho/keeper/auth-sessions.txt` |
 | Access token, signing keys | `~/.rho/auth/` |
-| Proxy list | `~/.rho/keeper/proxy.txt` |
 | Keeper's own settings | `~/.rho/keeper/data/settings.conf` |
 | Alerts log | `~/.rho/keeper/alerts.log` |
 | Deploy log | `~/.rho/keeper/deploy.log` |

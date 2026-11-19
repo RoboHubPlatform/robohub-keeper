@@ -100,6 +100,21 @@ def sign_in(base: str, audience: str, return_to: str, session: bool) -> tuple:
         return answer.code, answer.headers.get("Location", ""), answer.read().decode("utf-8", "replace")
 
 
+def no_follow(base: str, path: str, method: str = "GET", cookie: bool = False) -> tuple:
+    """The keeper's answer to a request, not followed: the status and where it
+    sends the client."""
+    data = b"x=1" if method == "POST" else None
+    request = urllib.request.Request(base + path, data=data, method=method)
+    if cookie:
+        request.add_header("Cookie", f"keeper_session={SESSION}")
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        with opener.open(request, timeout=10) as response:
+            return response.status, ""
+    except urllib.error.HTTPError as answer:
+        return answer.code, answer.headers.get("Location", "")
+
+
 _TOKENS = {}
 
 
@@ -161,24 +176,6 @@ class _Healthy(http.server.BaseHTTPRequestHandler):
         self.send_response(200 if self.path == "/healthz" else 404)
         self.end_headers()
         self.wfile.write(b"ok")
-
-    def log_message(self, *args):
-        pass
-
-
-class _Page(http.server.BaseHTTPRequestHandler):
-    """An application's page behind the keeper's proxy: links written from the
-    root, a cookie of its own, and what it was sent."""
-
-    def do_GET(self):
-        body = (f'<a href="/water">w</a><form action="/rules"></form>|cookie={self.headers.get("Cookie", "")}'
-                f'|prefix={self.headers.get("X-Forwarded-Prefix", "")}').encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.send_header("Set-Cookie", "rho_session_hello=s; Path=/; HttpOnly")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
     def log_message(self, *args):
         pass
@@ -381,6 +378,31 @@ def main() -> int:
                     said = response.headers.get("Access-Control-Allow-Origin", "")
                 if (said == origin) != allowed or said == "*":
                     raise AssertionError(f"switcher CORS for {origin}: {said!r}")
+
+            # The addresses applications were served at under the keeper redirect
+            # to their own ports, with the path, for anyone: the application signs
+            # the person in itself. A post keeps its method (307), so a program
+            # posting to an old address still reaches the application. The query is
+            # not carried over until Rho's Go backend can read it.
+            # @verifies KEEP-APPS-0015, KEEP-APPS-0016
+            for path, method, wanted_status, wanted in (
+                    ("/app/mesh/x?y=1", "GET", 302, "http://127.0.0.1:8478/x"),
+                    ("/app/mesh/mesh/p/default", "GET", 302, "http://127.0.0.1:8478/mesh/p/default"),
+                    ("/app/mesh/", "GET", 302, "http://127.0.0.1:8478/"),
+                    ("/app/mesh", "GET", 302, "http://127.0.0.1:8478/mesh"),
+                    ("/app/mesh/mesh/api/nodes/key", "POST", 307, "http://127.0.0.1:8478/mesh/api/nodes/key")):
+                status, location = no_follow(base, path, method)
+                if status != wanted_status or location != wanted:
+                    raise AssertionError(f"{method} {path}: {status} {location!r}, wanted {wanted_status} {wanted!r}")
+            for path in ("/app/nosuch/x", "/app/nosuch", "/app/keeper/"):
+                status, location = no_follow(base, path, cookie=True)
+                if status != 404 or location:
+                    raise AssertionError(f"{path} is not unknown here ({status}, {location!r})")
+            listed = json.loads(get(base, "/api/v1/switcher"))
+            mesh = [a for a in listed["apps"] if a["name"] == "mesh"]
+            if not mesh or mesh[0].get("port") != "8478" or mesh[0].get("route") != "/mesh" or "path" in mesh[0]:
+                raise AssertionError(f"the switcher's Mesh is not its own port: {mesh}")
+            assert_contains(get(base, "/api/applications/rows"), ['href="http://127.0.0.1:8478/mesh"'], "Mesh's Open link")
 
             # Signing in to an application on a port of its own returns to its
             # callback at the root of that port: Mesh at :8478 is answered at
@@ -622,35 +644,28 @@ def main() -> int:
             finally:
                 stand_in.stop()
 
-            # The application is served under the keeper's origin: its links are
-            # under its prefix, its cookie is scoped to it, and the keeper's
-            # session never reaches it.
-            page_server = http.server.HTTPServer(("127.0.0.1", 9011), _Page)
-            threading.Thread(target=page_server.serve_forever, daemon=True).start()
-            try:
-                request = urllib.request.Request(base + "/api/v1/switcher")
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    listed = json.loads(response.read())
-                hello = [a for a in listed["apps"] if a["name"] == "hello"]
-                if not hello or not hello[0].get("path", "").startswith("/app/hello/"):
-                    raise AssertionError(f"the switcher does not route hello through the keeper: {hello}")
-                request = urllib.request.Request(base + "/app/hello/")
-                request.add_header("Cookie", f"keeper_session={SESSION}; theme=dark")
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    proxied = response.read().decode()
-                    cookie = response.headers.get("Set-Cookie", "")
-                assert_contains(proxied, ['href="/app/hello/water"', 'action="/app/hello/rules"', "|cookie=theme=dark|",
-                                          "|prefix=/app/hello"], "a page through the proxy")
-                if SESSION in proxied or "keeper_session" in proxied:
-                    raise AssertionError("the keeper's session reached the application")
-                if "Path=/app/hello/" not in cookie:
-                    raise AssertionError(f"the application's cookie is not scoped to it: {cookie!r}")
-                status, location, _ = sign_in(base, "hello", base + "/app/hello/auth/callback", True)
-                if status not in (302, 303) or "/app/hello/auth/callback?ticket=" not in location:
-                    raise AssertionError(f"signing in through the proxy did not return to it ({status}, {location!r})")
-            finally:
-                page_server.shutdown()
-                page_server.server_close()
+            # The application is reached on its own port: the switcher gives its
+            # port and no path under the keeper, the keeper's pages link to the
+            # port, and the address it was served at under the keeper leads there.
+            # @verifies KEEP-APPS-0015
+            request = urllib.request.Request(base + "/api/v1/switcher")
+            with urllib.request.urlopen(request, timeout=10) as response:
+                listed = json.loads(response.read())
+            hello = [a for a in listed["apps"] if a["name"] == "hello"]
+            if not hello or hello[0].get("port") != "9011" or "path" in hello[0]:
+                raise AssertionError(f"the switcher does not send a person to hello's port: {hello}")
+            assert_contains(get(base, "/api/applications/rows"), ['href="http://127.0.0.1:9011/"'], "hello's Open link")
+            status, location = no_follow(base, "/app/hello/water")
+            if status != 302 or location != "http://127.0.0.1:9011/water":
+                raise AssertionError(f"/app/hello/water did not redirect to hello's port ({status}, {location!r})")
+            # An application signs in on its own port; the keeper's old prefix is
+            # no callback any more.
+            status, location, _ = sign_in(base, "hello", "http://127.0.0.1:9011/auth/callback", True)
+            if status not in (302, 303) or not location.startswith("http://127.0.0.1:9011/auth/callback?ticket="):
+                raise AssertionError(f"signing in to hello on its port did not return there ({status}, {location!r})")
+            status, _, _ = sign_in(base, "hello", base + "/app/hello/auth/callback", True)
+            if status != 400:
+                raise AssertionError(f"a sign-in returning under the keeper's old prefix was not refused ({status})")
 
             # A release that does not answer is taken back out of use: the one
             # before it is in use again, and the job says so.

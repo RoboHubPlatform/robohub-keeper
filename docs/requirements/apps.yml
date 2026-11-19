@@ -1,6 +1,6 @@
-# The catalogue, installing, the units, jobs, releases, updates, the proxy and
-# the menu: src/keeper/apps.rho, catalog.rho, supervisor.rho, jobs.rho,
-# packages.rho, api.rho and project.yml's app_proxy.
+# The catalogue, installing, the units, jobs, releases, updates, the redirects
+# from the old addresses and the menu: src/keeper/apps.rho, catalog.rho,
+# supervisor.rho, jobs.rho, packages.rho and api.rho.
 level: SUB
 prefix: KEEP-APPS
 title: Applications
@@ -227,31 +227,33 @@ requirements:
     tags: [uninstall, data]
 
   - id: KEEP-APPS-0015
-    title: The proxy keeps the keeper's session from applications
+    title: Old addresses under the keeper redirect to the application's port
     statement: >
-      The keeper shall write `proxy.txt` (`name port` per line) whenever its list
-      of hosted applications changes, and serve `/app/<name>/` from that port
-      without forwarding the `keeper_session` cookie, with the application's
-      cookies scoped to its prefix and its links and form targets rewritten onto
-      it.
-    rationale: Cookies are scoped by host, not port; through the proxy no application sees another's or the admin's.
+      The keeper shall answer `/app/<name>` and `/app/<name>/<path>`, without
+      a session, with a redirect to `<path>` (the application's route for
+      none) on the address the application listens on — the loopback, or the
+      host the keeper was reached at for an application open to the network —
+      on its port: 302 for a GET, 307 for any other method; and with 404 for a
+      name that is not an application it hosts.
+    rationale: Links and bookmarks from when the keeper proxied its applications still lead to them, and a program posting to an old address keeps its method and body.
     satisfies: [KEEP-0003]
-    status: proposed
+    status: approved
     verification: test
+    decided_by: [robohub:ADR-0016]
     owner: maintainer
     changed: 2026-11-19
-    tags: [proxy, security]
+    tags: [redirect, compatibility]
 
   - id: KEEP-APPS-0016
     title: The menu and the switcher lead to every application
     statement: >
-      An admin shall add an application to and remove it from the keeper's menu,
-      kept in `menu.txt`, and `/api/v1/switcher` shall list the applications with
-      their `/app/<name>/` paths without a session, readable cross-origin only by
-      pages of the keeper's own host.
+      An admin shall add an application to and remove it from the keeper's
+      menu, kept in `menu.txt`, and `/api/v1/switcher` shall list the
+      applications with their ports and routes without a session, readable
+      cross-origin only by pages of the keeper's own host.
     rationale: Every application's top bar can show the switcher without another site reading it.
     satisfies: [KEEP-0003]
-    status: proposed
+    status: approved
     verification: test
     owner: maintainer
     changed: 2026-11-19
