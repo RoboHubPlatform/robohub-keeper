@@ -467,6 +467,7 @@ service token. Answers are JSON.
 | `GET /api/v1/config/{app}` | an application's record and environment |
 | `GET /api/v1/switcher` | the applications for every app switcher (no sign-in; readable from this host's pages only) |
 | `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added`, `bus.user-issued`, `bus.user-removed`, `bus.user-refused`, `node.rotated`, `node.revoked` |
+| `GET /api/v1/notifications/stream` | Server-Sent Events: the keeper's toasts ("mesh: redeploy done"), which every application's page follows beside its own; answered across ports only to the origin of an application in the catalogue (this host, that application's port), with credentials |
 | `POST /api/v1/bus/users` | a broker user for the application that asks, under a root its manifest lists in `bus.issue` (no sign-in: loopback only, `Authorization: Bus <app>:<password>`; see *Issued users*) |
 | `DELETE /api/v1/bus/users/{name}` | removes one the application was issued (same) |
 

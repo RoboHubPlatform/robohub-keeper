@@ -393,6 +393,77 @@ fn keeper_event(kind: string, app: string, message: string) void {
         ",\"app\":" + json_string(app) + ",\"message\":" + json_string(message) + "}\n"))
 }
 
+// api_notifications_cors is the cross-origin answer for the keeper's toast feed:
+// only to a page of an application this keeper runs — an origin on this host
+// whose port is the port of an application in the catalogue — and with
+// credentials, since the page's EventSource carries the keeper's session
+// cookie. Any other origin gets no CORS header and the browser keeps the stream
+// from it.
+// @req KEEP-0016
+fn api_notifications_cors(req: Request) string {
+    if api_switcher_cors(req) == "" {
+        return ""
+    }
+    let origin: string = header_str(req, "Origin")
+    let port: string = api_origin_port(origin)
+    if port == "" {
+        return ""
+    }
+    var rest: string = catalog_names()
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var app: string = rest
+        if at < 0 { rest = "" } else { app = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if app != "" && !integration_is(app) && rho_str_eq(catalog_get(app, "port"), port) {
+            return "Access-Control-Allow-Origin: " + origin + "\nAccess-Control-Allow-Credentials: true\nVary: Origin\n"
+        }
+    }
+    return ""
+}
+
+// api_origin_port is the port an origin names — `8478` for
+// http://127.0.0.1:8478 — or "" when it names none or it is not digits.
+// @req KEEP-0016
+fn api_origin_port(origin: string) string {
+    var rest: string = origin
+    let scheme: i32 = rho_str_index_of(rest, "://")
+    if scheme >= 0 {
+        rest = rho_str_slice(rest, u32(scheme) + 3, u32(rho_strlen(rest)) - u32(scheme) - 3)
+    }
+    let colon: i32 = rho_str_index_of(rest, ":")
+    if colon < 0 {
+        return ""
+    }
+    let port: string = rho_str_slice(rest, u32(colon) + 1, u32(rho_strlen(rest)) - u32(colon) - 1)
+    if port == "" || rho_strlen(port) > 5 {
+        return ""
+    }
+    var i: u32 = 0
+    while i < u32(rho_strlen(port)) {
+        let c: string = rho_str_slice(port, i, 1)
+        if !is_digit(c) {
+            return ""
+        }
+        i = i + 1
+    }
+    return port
+}
+
+// api_notifications_stream streams the keeper's toast feed — what its jobs
+// announce, "mesh: redeploy done" — to the keeper's own pages and, across ports,
+// to the pages of the applications it runs, which follow it beside their own
+// (notifications NOTIF-0011). It is behind sign-in like the rest of the API.
+// @req KEEP-0016
+fn api_notifications_stream(req: Request) Response {
+    let path: string = notification_live_path()
+    ignore_bool(rho_append_text(path, ""))
+    let cors: string = api_notifications_cors(req)
+    if cors == "" {
+        return sse_file(path, 1000)
+    }
+    return with_headers(sse_file(path, 1000), cors)
+}
+
 fn api_events(req: Request) Response {
     ignore_bool(rho_append_text(events_file(), ""))
     return sse_file(events_file(), 1000)

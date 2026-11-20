@@ -124,6 +124,7 @@ route GET "/api/v1/apps" => api_apps
 route GET "/api/v1/apps/{name}" => api_app
 route POST "/api/v1/apps/{name}/{action}" => api_app_action
 route GET "/api/v1/events" => api_events
+route GET "/api/v1/notifications/stream" => api_notifications_stream
 route GET "/api/v1/jobs" => api_jobs
 route GET "/api/v1/jobs/{id}" => api_job
 // An application asks for broker users of its own under the roots it declares;

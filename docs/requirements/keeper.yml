@@ -222,3 +222,21 @@ requirements:
     owner: maintainer
     changed: 2026-11-19
     tags: [observability]
+
+  - id: KEEP-0016
+    title: The keeper's toasts reach the pages of the applications it runs
+    statement: >
+      `GET /api/v1/notifications/stream` shall stream the keeper's toast feed,
+      behind sign-in, and shall answer a request whose Origin is this host on the
+      port of an application in the catalogue with that origin in
+      `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true`,
+      and any other origin — another host, an unknown port, an integration's —
+      with no CORS header.
+    rationale: Since every application runs on its own port (robohub ADR-0016), what the keeper's jobs announce must still reach the application's open pages (notifications NOTIF-0011), and only them.
+    satisfies: [SYS-0059]
+    decided_by: [robohub:ADR-0016]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [live, sse, cors]

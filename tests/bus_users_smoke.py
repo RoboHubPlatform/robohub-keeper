@@ -94,6 +94,21 @@ def call(base: str, method: str, path: str, body=None, headers=None, session: st
         return answer.code, answer.read().decode("utf-8", "replace")
 
 
+def stream_headers(base: str, path: str, origin: str, session: str = "") -> tuple:
+    """The status and headers of a stream, without waiting for its events."""
+    import http.client
+    host = base.split("://", 1)[1]
+    connection = http.client.HTTPConnection(host, timeout=10)
+    headers = {"Origin": origin}
+    if session:
+        headers["Cookie"] = f"keeper_session={session}"
+    connection.request("GET", path, headers=headers)
+    response = connection.getresponse()
+    answer = (response.status, {k.lower(): v for k, v in response.getheaders()})
+    connection.close()
+    return answer
+
+
 def bus(app: str, password: str) -> dict:
     return {"Authorization": f"Bus {app}:{password}"}
 
@@ -312,6 +327,21 @@ def main() -> int:
             expect(status == 200 and "zapp-zb1" in page and "zapp-zb2" in page, "the Clients tab lists the issued users")
             expect("issued by zapp · zigbee/home/zb1/#" in page, "with the application that issued each and its prefix")
             expect("ghost-zb9" in page and "not in use" in page, "a line that makes no user is shown as not in use")
+
+            # @verifies KEEP-0016
+            # The keeper's toast feed is answered across ports only to a page of
+            # an application in the catalogue, with credentials.
+            status, headers = stream_headers(base, "/api/v1/notifications/stream", "http://127.0.0.1:9013", ADMIN)
+            expect(status == 200 and headers.get("content-type", "").startswith("text/event-stream") and
+                   headers.get("access-control-allow-origin") == "http://127.0.0.1:9013" and
+                   headers.get("access-control-allow-credentials") == "true",
+                   f"the toast feed answers an application's page with its origin and credentials ({status}, {headers.get('access-control-allow-origin')})")
+            for other in ("http://127.0.0.1:1884", "http://127.0.0.1:9999", "http://evil.example:9013"):
+                status, headers = stream_headers(base, "/api/v1/notifications/stream", other, ADMIN)
+                expect("access-control-allow-origin" not in headers,
+                       f"and no other origin: not an integration, an unknown port or another host ({other})")
+            status, headers = stream_headers(base, "/api/v1/notifications/stream", "http://127.0.0.1:9013")
+            expect(status != 200 and "access-control-allow-origin" not in headers, f"and only behind sign-in ({status})")
 
             status, text = call(base, "DELETE", "/api/v1/bus/users/zb2", headers=bus("zapp", OTHER))
             expect(status == 401, f"removing needs the application's password too ({status})")

@@ -44,7 +44,7 @@ suites:
     kind: command
     tags: [smoke, security]
     command: [python3, tests/forms_smoke.py]
-  # @verifies KEEP-PROV-0006, KEEP-PROV-0007, KEEP-PROV-0008
+  # @verifies KEEP-PROV-0006, KEEP-PROV-0007, KEEP-PROV-0008, KEEP-0016
   - name: bus-users-smoke
     kind: command
     tags: [smoke, mqtt, security]
