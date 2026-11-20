@@ -258,3 +258,97 @@ requirements:
     owner: maintainer
     changed: 2026-11-19
     tags: [menu, switcher]
+
+  - id: KEEP-APPS-0017
+    title: An application's unit restarts it always, forever, and kills what will not stop
+    statement: >
+      The unit the keeper writes for an application shall restart it whenever it
+      ends without the keeper stopping it (`Restart=always`, `RestartSec=5`), shall
+      never stop restarting it (`StartLimitIntervalSec=0`), and shall kill it when it
+      has not stopped 20 s after being asked (`TimeoutStopSec=20`).
+    rationale: An application that exits cleanly by mistake, or fails five times in a row, must not stay down until a person notices; one that ignores SIGTERM must not hold a redeploy (robohub ADR-0018).
+    satisfies: [KEEP-0004]
+    decided_by: [robohub:ADR-0018]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [services, robustness]
+
+  - id: KEEP-APPS-0018
+    title: An application that can tell systemd it is alive is watched
+    statement: >
+      When an application's program carries the marker `rho-sd-notify-v1`, the
+      keeper shall write its unit as `Type=notify` with `NotifyAccess=main` and
+      `WatchdogSec=30`, so systemd restarts it when it stops saying it is alive;
+      a program without the marker shall be written as `Type=simple` with no
+      watchdog.
+    rationale: systemd restarts a process that exits, not one that hangs; only a program that pings the watchdog may be watched, or it would be killed every 30 s (robohub ADR-0018).
+    satisfies: [KEEP-0004]
+    decided_by: [robohub:ADR-0018]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [services, robustness, watchdog]
+
+  - id: KEEP-APPS-0019
+    title: An application's resources are bounded as its manifest says
+    statement: >
+      The keeper shall write an application's `deploy.limits` — `memory` (as
+      `MemoryMax`), `tasks` (`TasksMax`) and `cpu_weight` (`CPUWeight`) — into its
+      unit, with 2G, 1024 and 100 for any it does not give, shall refuse a value
+      that is not a size, a count or a weight, and shall say on the application's
+      page when this machine cannot enforce them (no cgroup v2).
+    rationale: One leaking application must not starve the machine and the keeper with it; where limits do nothing the person must know it rather than trust them.
+    satisfies: [KEEP-0004]
+    decided_by: [robohub:ADR-0018]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [services, resources]
+
+  - id: KEEP-APPS-0020
+    title: An application's helpers are units the keeper runs for it
+    statement: >
+      The keeper shall accept, on a loopback connection authenticated by the
+      application's own client secret (`Authorization: App <app>:<secret>`), a
+      request to run a helper whose name matches a pattern the application's
+      manifest lists under `helpers:` — `POST /api/v1/helpers` with its name,
+      program, arguments, working directory and environment — and shall write it
+      as `rh-<app>-<name>.service` with the restart policy of KEEP-APPS-0017,
+      `NoNewPrivileges` and its output appended to a log in the application's
+      workspace, enable and start it; it shall answer the application's helpers
+      with their state (`GET /api/v1/helpers`), start, stop or restart one
+      (`POST /api/v1/helpers/<name>/<action>`), remove one (`DELETE`), list them on
+      the application's page, refuse an environment value naming a secret or a
+      program outside the machine's paths, and remove every helper of an
+      application that is uninstalled; a restart of the application shall not
+      stop its helpers.
+    rationale: A gateway or a Zigbee coordinator must outlive a redeploy of Mesh and be restarted when it crashes, and on a machine without a user D-Bus session only the keeper, through systemctl, can make it a unit (robohub ADR-0018).
+    satisfies: [KEEP-0004]
+    decided_by: [robohub:ADR-0018]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [services, helpers, api]
+
+  - id: KEEP-APPS-0021
+    title: Whether systemd can isolate an application is asked without D-Bus
+    statement: >
+      The keeper shall find out whether this machine's systemd can give a user
+      service a private view of the file system by starting a throwaway unit it
+      writes, through `systemctl --user`, with the settings an application's unit
+      gets — `PrivateUsers=yes` among them, which a user manager needs to make a
+      mount namespace — and shall ask again when the answer it kept was reached by
+      a probe that could not run or lacked them.
+    rationale: The probe through `systemd-run --user` fails wherever there is no user D-Bus session — as on this WSL machine — and the keeper then ran every application able to read its signing key (KEEP-0006 unmet).
+    satisfies: [KEEP-0006]
+    decided_by: [robohub:ADR-0018]
+    status: approved
+    verification: test
+    owner: maintainer
+    changed: 2026-11-20
+    tags: [security, isolation]

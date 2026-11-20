@@ -1,0 +1,272 @@
+//
+// @file helpers_test.rho
+// @brief The unit tests of supervision: the restart policy, the watchdog marker, resource limits, helper names and patterns, their environment, systemd's quoting, the helper unit, helpers.txt, the App credential, the isolation answer and the JSON a helper is asked for in.
+//
+// @module keeper.helpers_test
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-20
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.helpers_test
+
+include "../src/keeper/apps_text.rho"
+include "../src/keeper/helpers_text.rho"
+
+extern fn rho_strlen(s: string) u64
+extern fn rho_str_slice(s: string, start: u32, length: u32) string
+extern fn rho_str_index_of(s: string, needle: string) i32
+extern fn rho_str_from_byte(b: u8) string
+extern fn rho_str_eq(a: string, b: string) bool
+extern fn rho_str_starts_with(s: string, prefix: string) bool
+extern fn rho_int_from_str(s: string) u32
+extern fn rho_int_to_str(value: u32) string
+extern fn abort()
+
+fn check(condition: bool, what: string) void {
+    if !condition {
+        print("FAIL: " + what + "\n")
+        abort()
+    }
+}
+
+fn has(text: string, part: string) bool {
+    return rho_str_index_of(text, part) >= 0
+}
+
+// @verifies KEEP-APPS-0017
+test fn every_unit_restarts_always_and_forever() void {
+    check(rho_str_eq(unit_start_limit(), "StartLimitIntervalSec=0\n"), "no start limit")
+    check(rho_str_eq(unit_restart_policy(), "Restart=always\nRestartSec=5\nTimeoutStopSec=20\n"), "always, after 5 s, killed after 20 s")
+    print("[PASS] every_unit_restarts_always_and_forever\n")
+}
+
+// @verifies KEEP-APPS-0018
+test fn only_a_marked_program_is_watched() void {
+    let nul: string = rho_str_from_byte(u8(0))
+    check(program_has_marker("ELF" + nul + nul + "xx rho-sd-notify-v1 yy"), "the marker among other bytes")
+    check(!program_has_marker("ELF" + nul + "rho-sd-notify-v"), "a part of it is not the marker")
+    check(!program_has_marker(""), "no program")
+    check(rho_str_eq(unit_type_lines(true), "Type=notify\nNotifyAccess=main\nWatchdogSec=30\n"), "watched")
+    check(rho_str_eq(unit_type_lines(false), "Type=simple\n"), "a plain process, no watchdog")
+    check(has(unit_type_dropin(false), "Type=simple\nNotifyAccess=none\nWatchdogSec=0\n"), "a drop-in undoes a watchdog")
+    check(has(unit_type_dropin(true), "[Service]\nType=notify\nNotifyAccess=main\nWatchdogSec=30\n"), "a drop-in asks for one")
+    print("[PASS] only_a_marked_program_is_watched\n")
+}
+
+// @verifies KEEP-APPS-0019
+test fn limits_are_sizes_counts_and_weights() void {
+    check(rho_str_eq(limit_problem("memory", "512M"), ""), "512M")
+    check(rho_str_eq(limit_problem("memory", "2G"), ""), "2G")
+    check(rho_str_eq(limit_problem("memory", "4096K"), ""), "K")
+    check(rho_str_eq(limit_problem("memory", "1T"), ""), "T")
+    check(!rho_str_eq(limit_problem("memory", "2GB"), ""), "GB is not a unit")
+    check(!rho_str_eq(limit_problem("memory", "512"), ""), "a size has a unit")
+    check(!rho_str_eq(limit_problem("memory", "0M"), ""), "nothing is no limit")
+    check(!rho_str_eq(limit_problem("memory", "-1G"), ""), "negative")
+    check(!rho_str_eq(limit_problem("memory", "1.5G"), ""), "a fraction")
+    check(!rho_str_eq(limit_problem("memory", "2G\nExecStart=/bin/sh"), ""), "a line break cannot add a directive")
+    check(!rho_str_eq(limit_problem("memory", "infinity"), ""), "infinity is not bounded")
+    check(rho_str_eq(limit_problem("tasks", "16"), ""), "16 tasks")
+    check(rho_str_eq(limit_problem("tasks", "4096"), ""), "4096 tasks")
+    check(!rho_str_eq(limit_problem("tasks", "15"), ""), "fewer than 16")
+    check(!rho_str_eq(limit_problem("tasks", "lots"), ""), "not a number")
+    check(!rho_str_eq(limit_problem("tasks", "50%"), ""), "a percentage")
+    check(rho_str_eq(limit_problem("cpu_weight", "1"), ""), "the lowest weight")
+    check(rho_str_eq(limit_problem("cpu_weight", "10000"), ""), "the highest weight")
+    check(!rho_str_eq(limit_problem("cpu_weight", "0"), ""), "0")
+    check(!rho_str_eq(limit_problem("cpu_weight", "10001"), ""), "above 10000")
+    check(!rho_str_eq(limit_problem("swap", "1G"), ""), "not a limit the keeper writes")
+    check(rho_str_eq(limit_flow_value("{memory: 4G, tasks: 4096}", "memory"), "4G"), "a map on one line")
+    check(rho_str_eq(limit_flow_value("{memory: 4G, tasks: 4096}", "tasks"), "4096"), "its second key")
+    check(rho_str_eq(limit_flow_value("{memory: \"4G\"}", "memory"), "4G"), "a quoted value")
+    check(rho_str_eq(limit_flow_value("{memory: 4G}", "cpu_weight"), ""), "a key it does not have")
+    check(rho_str_eq(limit_flow_value("", "memory"), ""), "no map")
+    check(rho_str_eq(limit_lines("2G", "1024", "100"), "MemoryMax=2G\nTasksMax=1024\nCPUWeight=100\n"), "the unit's lines")
+    check(rho_str_eq(LIMIT_MEMORY_DEFAULT + LIMIT_TASKS_DEFAULT + LIMIT_CPU_WEIGHT_DEFAULT, "2G1024100"), "the defaults")
+    check(cgroup_v2_enforces("cpuset cpu io memory hugetlb pids rdma\n"), "cgroup v2 with memory")
+    check(!cgroup_v2_enforces("cpuset cpu io pids\n"), "cgroup v2 without memory")
+    check(!cgroup_v2_enforces(""), "no cgroup v2")
+    check(!cgroup_v2_enforces("memoryx"), "a whole word")
+    print("[PASS] limits_are_sizes_counts_and_weights\n")
+}
+
+// @verifies KEEP-APPS-0020
+test fn helper_names_match_the_declared_patterns() void {
+    check(helper_name_ok("z2m-home-zb1"), "a plain name")
+    check(helper_name_ok("gateway_A1"), "letters, digits, - and _")
+    check(!helper_name_ok(""), "no name")
+    check(!helper_name_ok("z2m.home"), "a dot")
+    check(!helper_name_ok("z2m/home"), "a slash")
+    check(!helper_name_ok("z2m home"), "a space")
+    check(!helper_name_ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "65 characters")
+    check(helper_pattern_ok("z2m-*"), "a prefix and a star")
+    check(helper_pattern_ok("gateway"), "a whole name")
+    check(!helper_pattern_ok("*"), "a star alone allows everything")
+    check(!helper_pattern_ok("*-z2m"), "a star only at the end")
+    check(!helper_pattern_ok("z2m-*-x"), "a star in the middle")
+    check(!helper_pattern_ok("z2m-**"), "two stars")
+    check(helper_pattern_match("z2m-*", "z2m-home-zb1"), "a name under the prefix")
+    check(!helper_pattern_match("z2m-*", "z2m-"), "the prefix alone is no name under it")
+    check(!helper_pattern_match("z2m-*", "gateway-home"), "another prefix")
+    check(!helper_pattern_match("z2m-*", "xz2m-home"), "the prefix is the start")
+    check(helper_pattern_match("gateway", "gateway"), "the same name")
+    check(!helper_pattern_match("gateway", "gateway2"), "a whole name is not a prefix")
+    let declared: string = "gateway-*\nz2m-*\n"
+    check(helper_declared(declared, "gateway-home"), "declared by the first pattern")
+    check(helper_declared(declared, "z2m-home-zb1"), "declared by the second")
+    check(!helper_declared(declared, "shell"), "declared by none")
+    check(!helper_declared("", "z2m-home"), "a manifest without helpers: declares none")
+    check(rho_str_eq(helper_unit("mesh", "z2m-home-zb1"), "rh-mesh-z2m-home-zb1.service"), "the unit's name")
+    print("[PASS] helper_names_match_the_declared_patterns\n")
+}
+
+// @verifies KEEP-APPS-0020
+test fn a_helper_is_given_no_secret() void {
+    check(rho_str_eq(helper_env_problem("ZIGBEE2MQTT_DATA", "/home/u/.rho/keeper/workspaces/mesh/z2m"), ""), "a plain entry")
+    check(rho_str_eq(helper_env_problem("Z2M_ONBOARD_NO_SERVER", "1"), ""), "digits in the name")
+    check(rho_str_eq(helper_env_problem("_X", ""), ""), "an underscore first, an empty value")
+    check(!rho_str_eq(helper_env_problem("lower", "x"), ""), "a lowercase name")
+    check(!rho_str_eq(helper_env_problem("1X", "x"), ""), "a digit first")
+    check(!rho_str_eq(helper_env_problem("A-B", "x"), ""), "a dash")
+    check(!rho_str_eq(helper_env_problem("", "x"), ""), "no name")
+    check(!rho_str_eq(helper_env_problem("MQTT_PASSWORD", "hunter2"), ""), "a password")
+    check(!rho_str_eq(helper_env_problem("API_TOKEN", "abc"), ""), "a token")
+    check(!rho_str_eq(helper_env_problem("CLIENT_SECRET", "abc"), ""), "a secret")
+    check(!rho_str_eq(helper_env_problem("RELAY_KEY", "00ff00ff"), ""), "a key")
+    check(rho_str_eq(helper_env_problem("GATEWAY_KEY_FILE", "/home/u/.rho/keeper/workspaces/mesh/gw.key"), ""),
+        "the path of the file a key is in")
+    check(!rho_str_eq(helper_env_problem("GATEWAY_KEY_FILE", "relative/gw.key"), ""), "a secret's file is an absolute path")
+    check(!rho_str_eq(helper_env_problem("A", "x\nExecStart=/bin/sh"), ""), "a line break cannot add a directive")
+    check(!rho_str_eq(helper_env_problem("A", "x\ry"), ""), "a carriage return")
+    if rho_strlen(rho_str_from_byte(u8(0))) == 1 {
+        check(!rho_str_eq(helper_env_problem("A", "x" + rho_str_from_byte(u8(0)) + "y"), ""), "a NUL")
+    }
+    check(rho_str_eq(helper_path_problem("/usr/bin/node"), ""), "an absolute path")
+    check(!rho_str_eq(helper_path_problem("node"), ""), "a bare name is looked up nowhere")
+    check(!rho_str_eq(helper_path_problem("/usr/bin/../../tmp/x"), ""), "a .. part")
+    check(!rho_str_eq(helper_path_problem("/usr/./bin/node"), ""), "a . part")
+    check(!rho_str_eq(helper_path_problem("/usr/bin/node\n"), ""), "a line break")
+    check(path_within("/a/b", "/a/b") && path_within("/a/b/c", "/a/b") && !path_within("/a/bc", "/a/b"), "a folder and what is under it")
+    print("[PASS] a_helper_is_given_no_secret\n")
+}
+
+// @verifies KEEP-APPS-0020
+test fn values_are_quoted_as_systemd_reads_them() void {
+    check(rho_str_eq(unit_exec_word("/usr/bin/node"), "\"/usr/bin/node\""), "a plain word, quoted")
+    check(rho_str_eq(unit_exec_word("a b"), "\"a b\""), "a space stays inside one word")
+    check(rho_str_eq(unit_exec_word("say \"hi\""), "\"say \\\"hi\\\"\""), "a quote is escaped")
+    check(rho_str_eq(unit_exec_word("C:\\x"), "\"C:\\\\x\""), "a backslash is escaped")
+    check(rho_str_eq(unit_exec_word("100%"), "\"100%%\""), "a percent is no specifier")
+    check(rho_str_eq(unit_exec_word("$HOME"), "\"$$HOME\""), "a dollar is no variable")
+    check(rho_str_eq(unit_env_assignment("A", "x y"), "\"A=x y\""), "an environment word")
+    check(rho_str_eq(unit_env_assignment("A", "\"q\"\\%$"), "\"A=\\\"q\\\"\\\\%%$\""), "quote, backslash and percent escaped; a dollar is not expanded there")
+    check(rho_str_eq(unit_percent("/home/u/50%/x"), "/home/u/50%%/x"), "a path's percent")
+    print("[PASS] values_are_quoted_as_systemd_reads_them\n")
+}
+
+// @verifies KEEP-APPS-0017, KEEP-APPS-0020
+test fn a_helper_unit_runs_on_its_own() void {
+    let text: string = helper_unit_text("mesh", "z2m-home-zb1", "/usr/bin/node", "/opt/z2m/index.js\n--flag\n", "/opt/z2m",
+        "ZIGBEE2MQTT_DATA=/w/z2m\nZ2M_ONBOARD_NO_SERVER=1\n", "/w/helpers/z2m-home-zb1.log", "NoNewPrivileges=yes\n")
+    check(has(text, "[Unit]\nDescription=RoboHub mesh helper z2m-home-zb1\nStartLimitIntervalSec=0\n"), "described, never given up on")
+    check(has(text, "[Service]\nType=simple\nWorkingDirectory=/opt/z2m\n"), "its folder")
+    check(has(text, "Environment=\"ZIGBEE2MQTT_DATA=/w/z2m\"\nEnvironment=\"Z2M_ONBOARD_NO_SERVER=1\"\n"), "its environment")
+    check(has(text, "ExecStart=\"/usr/bin/node\" \"/opt/z2m/index.js\" \"--flag\"\n"), "its program and arguments, each one word")
+    check(has(text, "\nUMask=0077\n"), "what it writes is its user's only")
+    check(has(text, "NoNewPrivileges=yes\nRestart=always\nRestartSec=5\nTimeoutStopSec=20\n"), "the restart policy")
+    check(has(text, "StandardOutput=append:/w/helpers/z2m-home-zb1.log\nStandardError=append:/w/helpers/z2m-home-zb1.log\n"), "its log")
+    check(has(text, "[Install]\nWantedBy=default.target\n"), "started at boot")
+    check(!has(text, "PartOf") && !has(text, "BindsTo") && !has(text, "Requires"), "not bound to its application's unit")
+    print("[PASS] a_helper_unit_runs_on_its_own\n")
+}
+
+// @verifies KEEP-APPS-0020
+test fn helper_lines_are_kept_per_application() void {
+    var lines: string = ""
+    lines = helper_lines_with(lines, "mesh", "gateway-home")
+    lines = helper_lines_with(lines, "mesh", "z2m-home-zb1")
+    lines = helper_lines_with(lines, "garden", "pump")
+    lines = helper_lines_with(lines, "mesh", "gateway-home")
+    check(rho_str_eq(lines, "mesh|gateway-home\nmesh|z2m-home-zb1\ngarden|pump\n"), "added once, in order")
+    check(helper_lines_has(lines, "mesh", "z2m-home-zb1"), "a helper is found")
+    check(!helper_lines_has(lines, "garden", "z2m-home-zb1"), "under its own application only")
+    check(rho_str_eq(helper_lines_of(lines, "mesh"), "gateway-home\nz2m-home-zb1\n"), "one application's helpers")
+    check(rho_str_eq(helper_lines_without(lines, "mesh", "gateway-home"), "mesh|z2m-home-zb1\ngarden|pump\n"), "one removed")
+    check(rho_str_eq(helper_lines_without(lines, "mesh", ""), "garden|pump\n"), "an application's helpers removed with it")
+    check(helper_unit_clash("mesh|zb-1\n", "mesh-zb", "1"), "two applications cannot make the same unit")
+    check(!helper_unit_clash("mesh|zb-1\n", "mesh", "zb-1"), "an application's own helper is no clash")
+    print("[PASS] helper_lines_are_kept_per_application\n")
+}
+
+// @verifies KEEP-APPS-0020
+test fn the_app_credential_names_app_and_secret() void {
+    check(rho_str_eq(app_auth_part("App mesh:s3cret", 0), "mesh"), "the application")
+    check(rho_str_eq(app_auth_part("App mesh:s3cret", 1), "s3cret"), "the secret")
+    check(rho_str_eq(app_auth_part("App mesh:a:b", 1), "a:b"), "everything after the first colon")
+    check(rho_str_eq(app_auth_part("Bus mesh:s3cret", 0), ""), "another scheme")
+    check(rho_str_eq(app_auth_part("App :x", 0), ""), "no application")
+    check(rho_str_eq(app_auth_part("App mesh", 0), ""), "no secret")
+    print("[PASS] the_app_credential_names_app_and_secret\n")
+}
+
+// @verifies KEEP-APPS-0021
+test fn a_no_from_the_old_probe_is_asked_again() void {
+    check(rho_str_eq(isolation_kept("yes\n"), "yes"), "the old probe's yes stands")
+    check(rho_str_eq(isolation_kept("no\n"), "ask"), "the old probe's no is asked again")
+    check(rho_str_eq(isolation_kept(""), "ask"), "nothing kept is asked")
+    check(rho_str_eq(isolation_kept("yes-v2\n"), "yes"), "the new probe's yes")
+    check(rho_str_eq(isolation_kept("no-v2\n"), "ask"), "a no from the probe without PrivateUsers= is asked again")
+    check(rho_str_eq(isolation_kept("yes-v3\n"), "yes") && rho_str_eq(isolation_kept("no-v3\n"), "no"), "the v3 probe's answers are kept")
+    let unit: string = isolation_probe_unit("/home/u/.rho/keeper", "/home/u/.rho/auth")
+    check(has(unit, "Type=oneshot\nNoNewPrivileges=yes\nPrivateUsers=yes\nTemporaryFileSystem=/home/u/.rho/keeper:ro\n"), "the view an application gets")
+    check(has(unit, "InaccessiblePaths=-/home/u/.rho/auth/private.pem\nExecStart=/bin/true\n"), "a key hidden, nothing run")
+    print("[PASS] a_no_from_the_old_probe_is_asked_again\n")
+}
+
+// @verifies KEEP-APPS-0020
+test fn the_request_is_read_at_its_top_level() void {
+    let body: string = "{\"env\": {\"name\": \"wrong\", \"A\": \"1\"}, \"name\" : \"z2m-a\", \"args\": [\"x\", \"y z\"], \"n\": 3, \"t\": true}"
+    check(rho_str_eq(hjson_unquote(hjson_top(body, "name")), "z2m-a"), "the top-level name, not the one inside env")
+    check(rho_str_eq(hjson_top(body, "n"), "3"), "a number, raw")
+    check(rho_str_eq(hjson_top(body, "missing"), ""), "a key it does not have")
+    check(rho_str_eq(hjson_top("[1]", "name"), ""), "not an object")
+    check(rho_str_eq(helper_args(hjson_top(body, "args")), "x\ny z\n"), "the arguments")
+    check(rho_str_eq(helper_args_problem(hjson_top(body, "args")), ""), "an array of strings")
+    check(rho_str_eq(helper_args_problem(""), ""), "no arguments")
+    check(rho_str_eq(helper_args_problem("[]"), ""), "an empty array")
+    check(!rho_str_eq(helper_args_problem("[1]"), ""), "a number is no argument")
+    check(!rho_str_eq(helper_args_problem("\"x\""), ""), "a string is no array")
+    check(!rho_str_eq(helper_args_problem("[\"a\\nb\"]"), ""), "an escaped line break is refused")
+    check(rho_str_eq(helper_env_lines(hjson_top(body, "env")), "name=wrong\nA=1\n") ||
+        rho_str_starts_with(helper_env_lines(hjson_top(body, "env")), "!"), "the environment, read whole")
+    check(rho_str_eq(helper_env_lines("{\"A\": \"1\", \"B_2\": \"x y\"}"), "A=1\nB_2=x y\n"), "KEY=value lines")
+    check(rho_str_eq(helper_env_lines_problem(helper_env_lines("{\"A\": \"1\"}")), ""), "a good environment")
+    check(!rho_str_eq(helper_env_lines_problem(helper_env_lines("{\"A\": 1}")), ""), "a number is no value")
+    check(!rho_str_eq(helper_env_lines_problem(helper_env_lines("{\"A\": \"x\\nB=y\"}")), ""), "a line break cannot add an entry")
+    check(!rho_str_eq(helper_env_lines_problem(helper_env_lines("{\"PASSWORD\": \"x\"}")), ""), "a secret is refused")
+    check(!rho_str_eq(helper_env_lines_problem(helper_env_lines("[\"A=1\"]")), ""), "an array is no environment")
+    check(rho_str_eq(hjson_unquote("\"a\\\"b\\\\c\\/d\""), "a\"b\\c/d"), "escapes")
+    check(rho_str_eq(hjson_unquote("\"\\u0041\\u00e9\""), "A" + rho_str_from_byte(u8(195)) + rho_str_from_byte(u8(169))), "\\u escapes, as UTF-8")
+    check(has(hjson_unquote("\"\\u0000\""), rho_str_from_byte(u8(0))) || rho_strlen(hjson_unquote("\"\\u0000\"")) == 0, "\\u0000 is a NUL, which a value check refuses")
+    check(!rho_str_eq(helper_value_problem(hjson_unquote("\"a\\u000ab\"")), ""), "an escaped line break is still one")
+    check(!hjson_is_string("\"unterminated"), "an unterminated string")
+    print("[PASS] the_request_is_read_at_its_top_level\n")
+}
+
+fn main() void {
+    every_unit_restarts_always_and_forever()
+    only_a_marked_program_is_watched()
+    limits_are_sizes_counts_and_weights()
+    helper_names_match_the_declared_patterns()
+    a_helper_is_given_no_secret()
+    values_are_quoted_as_systemd_reads_them()
+    a_helper_unit_runs_on_its_own()
+    helper_lines_are_kept_per_application()
+    the_app_credential_names_app_and_secret()
+    a_no_from_the_old_probe_is_asked_again()
+    the_request_is_read_at_its_top_level()
+    print("keeper helpers tests ok\n")
+}

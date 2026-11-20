@@ -1411,7 +1411,7 @@ fn applications_restart(req: Request) Response {
 // goes, and its catalogue record. Its files go only when the keeper fetched them
 // itself; a checkout or a package is left where it is, and Install offers it
 // again.
-// @req KEEP-APPS-0014
+// @req KEEP-APPS-0014, KEEP-APPS-0020
 fn applications_uninstall(req: Request) Response {
     if !keeper_allowed(req, "admin") {
         return keeper_refused(req)
@@ -1446,8 +1446,10 @@ fn applications_uninstall(req: Request) Response {
     }
     info("keeper", "uninstalled application " + name)
     keeper_event("app.uninstalled", name, message)
-    // The broker users it was issued go with it (KEEP-PROV-0008).
+    // The broker users it was issued go with it (KEEP-PROV-0008), and the
+    // helpers it runs (KEEP-APPS-0020).
     bus_issued_remove_app(name)
+    helpers_remove_app(name)
     if mqtt_name() != "" {
         ignore_string(mqtt_write_files())
     }

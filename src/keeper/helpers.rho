@@ -1,0 +1,413 @@
+//
+// @file helpers.rho
+// @brief Helpers: units the keeper writes and runs for an application that asks, under the names its manifest declares.
+//
+// @module keeper.helpers
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-20
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.helpers
+
+// An application may ask the keeper to run a program as a unit of its own — Mesh,
+// for a mesh's native gateway and each coordinator's Zigbee2MQTT — so that it
+// outlives a redeploy of the application and systemd restarts it when it crashes
+// (robohub ADR-0018). The application could not make the unit itself: without a
+// user D-Bus session `systemd-run --user` cannot run, and the keeper, which writes
+// unit files and drives `systemctl --user`, needs none.
+//
+//   GET    /api/v1/helpers                    the asking application's helpers
+//   POST   /api/v1/helpers                    {"name", "program", "args", "dir", "env"}
+//   POST   /api/v1/helpers/{name}/{action}    start | stop | restart
+//   DELETE /api/v1/helpers/{name}
+//
+// Each is asked on a loopback connection with the application's own client
+// secret — the content of the file its RHO_CLIENT_SECRET_FILE names:
+// `Authorization: App <app>:<secret>`. The auth middleware lets them through
+// (skip_paths in project.yml) and this file checks the credential itself, as
+// bus_users.rho does for broker users.
+//
+// A helper's name must match a pattern the application's manifest lists under
+// `helpers:` (`[z2m-*, gateway-*]`). It runs as `rh-<app>-<name>.service` with
+// the restart policy every unit the keeper writes has, NoNewPrivileges and the
+// isolation its application has, its output appended to
+// <workspace>/helpers/<name>.log. The helpers are kept in services/helpers.txt,
+// `app|name` one per line.
+
+import std.web.http
+
+fn helpers_file() string {
+    return keeper_state_dir() + "/services/helpers.txt"
+}
+
+fn helper_unit_file(app: string, name: string) string {
+    return getenv("HOME") + "/.config/systemd/user/" + helper_unit(app, name)
+}
+
+// helper_log is where a helper's output goes: its application's workspace, which
+// the application can read in its own view of the file system.
+fn helper_log(app: string, name: string) string {
+    return keeper_app_workspace(app) + "/helpers/" + name + ".log"
+}
+
+// helper_caller is the application a request's `Authorization: App` names, when
+// the secret it carries is that application's client secret, or "". The secret
+// is compared without stopping at the first difference.
+// @req KEEP-APPS-0020
+fn helper_caller(req: Request) string {
+    let header: string = header_str(req, "Authorization")
+    let app: string = app_auth_part(header, 0)
+    let presented: string = app_auth_part(header, 1)
+    if !auth_safe_name(app) || !catalog_has(app) || integration_is(app) {
+        return ""
+    }
+    // Read, never made here: an application the keeper never registered as a
+    // client has no secret, and asking cannot give it one.
+    let stored: string = str_trim(rho_read_text(app_client_secret_file(app)))
+    if rho_strlen(stored) < 16 || !secret_same(presented, stored) {
+        return ""
+    }
+    return app
+}
+
+// helper_refused records a refused request and answers it.
+fn helper_refused(status: u32, app: string, message: string) Response {
+    keeper_event("helper.refused", app, message)
+    return api_error(status, message)
+}
+
+// helper_gate answers a request that may not go on: 403 when it is not on a
+// loopback connection, 401 when it does not carry an application's own client
+// secret.
+fn helper_gate(req: Request) Response {
+    if !bus_request_local(req) {
+        return helper_refused(403, "", "helpers are asked for on a loopback connection only")
+    }
+    var claimed: string = app_auth_part(header_str(req, "Authorization"), 0)
+    if !valid_name(claimed) {
+        claimed = ""
+    }
+    return helper_refused(401, claimed, "Authorization: App <app>:<secret> with the application's own client secret")
+}
+
+// helper_systemd runs systemctl --user on a helper's unit.
+fn helper_systemd(verb: string, app: string, name: string) u32 {
+    return app_systemd(verb + "\n" + helper_unit(app, name) + "\n", "helper-" + verb + "-" + app + "-" + name)
+}
+
+// helper_state is what systemd says of a helper's unit: active, activating,
+// inactive, failed, … — or "none" when it has no unit file.
+// @req KEEP-APPS-0020
+fn helper_state(app: string, name: string) string {
+    if !rho_path_exists(helper_unit_file(app, name)) {
+        return "none"
+    }
+    let report: string = "helper-is-active-" + app + "-" + name
+    ignore_u32(app_systemd("is-active\n" + helper_unit(app, name) + "\n", report))
+    let state: string = first_line(rho_read_text(apps_report(report)))
+    if state == "" {
+        return "inactive"
+    }
+    return state
+}
+
+// helper_place_problem is why a helper may not run a program or start in a
+// folder at that path, or "": it must be on this machine and not in the
+// keeper's own folders — the keeper's state but for the application's own
+// workspace and releases, and the signing keys.
+// @req KEEP-APPS-0020
+fn helper_place_problem(app: string, path: string) string {
+    let problem: string = helper_path_problem(path)
+    if problem != "" {
+        return problem
+    }
+    if path_within(path, auth_dir()) {
+        return "it is in the keeper's keys"
+    }
+    if path_within(path, keeper_state_dir()) && !path_within(path, keeper_app_workspace(app)) && !path_within(path, app_home(app)) {
+        return "it is in the keeper's folder, outside " + app + "'s workspace and releases"
+    }
+    return ""
+}
+
+// helper_json is one helper as the API answers it.
+fn helper_json(app: string, name: string) string {
+    return "{\"name\":" + json_string(name) + ",\"unit\":" + json_string(helper_unit(app, name)) +
+        ",\"state\":" + json_string(helper_state(app, name)) + ",\"log\":" + json_string(helper_log(app, name)) + "}"
+}
+
+// helpers_get answers the asking application's helpers.
+// @req KEEP-APPS-0020
+fn helpers_get(req: Request) Response {
+    if !bus_request_local(req) {
+        return helper_gate(req)
+    }
+    let app: string = helper_caller(req)
+    if app == "" {
+        return helper_gate(req)
+    }
+    var out: string = ""
+    var rest: string = helper_lines_of(rho_read_text(helpers_file()), app)
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let name: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if out != "" {
+            out = out + ","
+        }
+        out = out + helper_json(app, name)
+    }
+    return json(status_ok(), "{\"helpers\":[" + out + "]}")
+}
+
+// helpers_post writes, enables and (re)starts a helper for the application that
+// asks: a new one, or one it asked for before, whose unit is written again with
+// what it asks now. Asking again with the same definition restarts it too: the
+// caller asked for it to run as it says.
+// @req KEEP-APPS-0017, KEEP-APPS-0020
+fn helpers_post(req: Request) Response {
+    if !bus_request_local(req) {
+        return helper_gate(req)
+    }
+    let app: string = helper_caller(req)
+    if app == "" {
+        return helper_gate(req)
+    }
+    let body: string = request_body(req)
+    if u32(rho_strlen(body)) > 65536 {
+        return helper_refused(400, app, "the request is larger than 64 KiB")
+    }
+    let raw_name: string = hjson_top(body, "name")
+    let name: string = hjson_unquote(raw_name)
+    if !hjson_is_string(raw_name) || !helper_name_ok(name) {
+        return helper_refused(400, app, "the name is 1 to 64 letters, digits, - and _")
+    }
+    let location: string = catalog_get(app, "location")
+    if !helper_declared(app_manifest_list(location, "helpers"), name) {
+        return helper_refused(403, app, app + " declares no helper pattern under helpers: in its manifest that " + name + " matches")
+    }
+    let raw_program: string = hjson_top(body, "program")
+    let program: string = hjson_unquote(raw_program)
+    if !hjson_is_string(raw_program) {
+        return helper_refused(400, app, "program is the absolute path of an executable file")
+    }
+    var problem: string = helper_place_problem(app, program)
+    if problem == "" && rho_exec_args("test", "-f\n" + program + "\n-a\n-x\n" + program + "\n", apps_report("helper-test")) != 0 {
+        problem = "it is not an executable file"
+    }
+    if problem != "" {
+        return helper_refused(400, app, "program " + program + ": " + problem)
+    }
+    var dir: string = keeper_app_workspace(app)
+    let raw_dir: string = hjson_top(body, "dir")
+    if raw_dir != "" {
+        if !hjson_is_string(raw_dir) {
+            return helper_refused(400, app, "dir is the absolute path of a folder")
+        }
+        dir = hjson_unquote(raw_dir)
+        problem = helper_place_problem(app, dir)
+        if problem == "" && rho_exec_args("test", "-d\n" + dir + "\n", apps_report("helper-test")) != 0 {
+            problem = "it is not a folder"
+        }
+        if problem != "" {
+            return helper_refused(400, app, "dir " + dir + ": " + problem)
+        }
+    }
+    let raw_args: string = hjson_top(body, "args")
+    problem = helper_args_problem(raw_args)
+    if problem != "" {
+        return helper_refused(400, app, problem)
+    }
+    let env: string = helper_env_lines(hjson_top(body, "env"))
+    problem = helper_env_lines_problem(env)
+    if problem != "" {
+        return helper_refused(400, app, problem)
+    }
+    // A name that says it is a secret is given a file's path: that file must be
+    // there, so the value cannot be a secret that merely starts with a slash.
+    var rest: string = env
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let eq: i32 = rho_str_index_of(line, "=")
+        let key: string = rho_str_slice(line, 0, u32(eq))
+        let value: string = rho_str_slice(line, u32(eq) + 1, u32(rho_strlen(line)) - u32(eq) - 1)
+        if helper_env_names_secret(key) && (helper_place_problem(app, value) != "" ||
+            rho_exec_args("test", "-f\n" + value + "\n", apps_report("helper-test")) != 0) {
+            return helper_refused(400, app, key + " names a secret: a helper is given the path of the file a secret is in, never the secret")
+        }
+    }
+    let unit: string = helper_unit(app, name)
+    let file: string = helper_unit_file(app, name)
+    let log: string = helper_log(app, name)
+    let text: string = helper_unit_text(app, name, program, helper_args(raw_args), dir, env, log, app_isolation(app))
+    rho_lock("keeper.helpers")
+    let lines: string = rho_read_text(helpers_file())
+    // A unit file of that name that is not this helper's is someone else's.
+    let mine: bool = helper_lines_has(lines, app, name) ||
+        rho_str_index_of(rho_read_text(file), "\nDescription=RoboHub " + app + " helper " + name + "\n") >= 0
+    if helper_unit_clash(lines, app, name) || (rho_path_exists(file) && !mine) {
+        rho_unlock("keeper.helpers")
+        return helper_refused(409, app, unit + " is already another unit")
+    }
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + getenv("HOME") + "/.config/systemd/user\n" + keeper_state_dir() + "/services\n" +
+        keeper_app_workspace(app) + "/helpers\n", apps_report("mkdir-helper")))
+    if !rho_write_text(file, text) {
+        rho_unlock("keeper.helpers")
+        return api_error(500, "the unit " + unit + " could not be written")
+    }
+    let fresh: bool = !helper_lines_has(lines, app, name)
+    ignore_bool(rho_write_text(helpers_file(), helper_lines_with(lines, app, name)))
+    rho_unlock("keeper.helpers")
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+    ignore_u32(helper_systemd("enable", app, name))
+    ignore_u32(rho_exec_args("loginctl", "enable-linger\n" + getenv("USER") + "\n", apps_report("linger")))
+    let code: u32 = helper_systemd("restart", app, name)
+    if fresh {
+        info("keeper", "wrote the helper " + unit + " for " + app)
+    }
+    if code != 0 {
+        keeper_event("helper.refused", app, "systemd could not start " + unit + ".")
+    } else {
+        keeper_event("helper.started", app, unit + " was started for " + app + ".")
+    }
+    return json(status_ok(), "{\"unit\":" + json_string(unit) + ",\"state\":" + json_string(helper_state(app, name)) +
+        ",\"log\":" + json_string(log) + "}")
+}
+
+// helpers_action starts, stops or restarts one of the asking application's
+// helpers.
+// @req KEEP-APPS-0020
+fn helpers_action(req: Request) Response {
+    if !bus_request_local(req) {
+        return helper_gate(req)
+    }
+    let app: string = helper_caller(req)
+    if app == "" {
+        return helper_gate(req)
+    }
+    let name: string = param(req, "name")
+    let action: string = param(req, "action")
+    if !helper_name_ok(name) || !helper_lines_has(rho_read_text(helpers_file()), app, name) {
+        return api_error(status_not_found(), app + " has no helper " + name)
+    }
+    if !rho_str_eq(action, "start") && !rho_str_eq(action, "stop") && !rho_str_eq(action, "restart") {
+        return api_error(400, "the action is start, stop or restart")
+    }
+    let unit: string = helper_unit(app, name)
+    if helper_systemd(action, app, name) != 0 {
+        return api_error(500, "systemd could not " + action + " " + unit)
+    }
+    if rho_str_eq(action, "stop") {
+        keeper_event("helper.stopped", app, unit + " was stopped.")
+    } else {
+        keeper_event("helper.started", app, unit + " was " + action + "ed.")
+    }
+    return json(status_ok(), "{\"state\":" + json_string(helper_state(app, name)) + "}")
+}
+
+// helper_remove stops and disables a helper, removes its unit and forgets it.
+// The caller holds no lock; systemd is told once the file is gone.
+fn helper_remove(app: string, name: string) void {
+    ignore_u32(app_systemd("disable\n--now\n" + helper_unit(app, name) + "\n", "helper-disable-" + app + "-" + name))
+    ignore_u32(rho_exec_args("rm", "-f\n--\n" + helper_unit_file(app, name) + "\n", apps_report("helper-rm")))
+}
+
+// helpers_delete removes one of the asking application's helpers.
+// @req KEEP-APPS-0020
+fn helpers_delete(req: Request) Response {
+    if !bus_request_local(req) {
+        return helper_gate(req)
+    }
+    let app: string = helper_caller(req)
+    if app == "" {
+        return helper_gate(req)
+    }
+    let name: string = param(req, "name")
+    rho_lock("keeper.helpers")
+    let lines: string = rho_read_text(helpers_file())
+    if !helper_name_ok(name) || !helper_lines_has(lines, app, name) {
+        rho_unlock("keeper.helpers")
+        return api_error(status_not_found(), app + " has no helper " + name)
+    }
+    helper_remove(app, name)
+    ignore_bool(rho_write_text(helpers_file(), helper_lines_without(lines, app, name)))
+    rho_unlock("keeper.helpers")
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+    let unit: string = helper_unit(app, name)
+    info("keeper", "removed the helper " + unit + " of " + app)
+    keeper_event("helper.removed", app, unit + " was removed.")
+    return json(status_ok(), "{\"removed\":" + json_string(unit) + "}")
+}
+
+// helpers_remove_app removes every helper of an application that is being
+// uninstalled. Restarting or redeploying an application never calls this: its
+// helpers are units of their own and keep running.
+// @req KEEP-APPS-0020
+fn helpers_remove_app(app: string) void {
+    if !valid_name(app) || !rho_path_exists(helpers_file()) {
+        return
+    }
+    rho_lock("keeper.helpers")
+    let lines: string = rho_read_text(helpers_file())
+    let names: string = helper_lines_of(lines, app)
+    var rest: string = names
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let name: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        helper_remove(app, name)
+    }
+    if names != "" {
+        ignore_bool(rho_write_text(helpers_file(), helper_lines_without(lines, app, "")))
+    }
+    rho_unlock("keeper.helpers")
+    if names == "" {
+        return
+    }
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+    rest = names
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let name: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        keeper_event("helper.removed", app, helper_unit(app, name) + " was removed with " + app + ".")
+    }
+}
+
+// helpers_section is an application's helpers for its page: each with what
+// systemd says of it, its unit and its log.
+// @req KEEP-APPS-0020
+fn helpers_section(req: Request, app: string) string {
+    let names: string = helper_lines_of(rho_read_text(helpers_file()), app)
+    if names == "" {
+        if rho_strlen(app_manifest_list(catalog_get(app, "location"), "helpers")) == 0 {
+            return ""
+        }
+        return "<div class=\"rh-sec\">" + i18n_t(req, "helpers.title") + "</div><p class=\"rh-empty\">" + i18n_t(req, "helpers.none") + "</p>"
+    }
+    var out: string = ""
+    var rest: string = names
+    while rest != "" {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let name: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let state: string = helper_state(app, name)
+        var tone: string = "rh-pill"
+        if rho_str_eq(state, "active") {
+            tone = "rh-pill ok"
+        } else if rho_str_eq(state, "failed") {
+            tone = "rh-pill bad"
+        } else if rho_str_eq(state, "activating") || rho_str_eq(state, "deactivating") {
+            tone = "rh-pill busy"
+        }
+        out = out + "<div class=\"rh-row helper\"><b>" + escape_html(name) + "</b><span><span class=\"" + tone + "\">" +
+            escape_html(state) + "</span> " + escape_html(keeper_t2(req, "helpers.unit_log", "unit", helper_unit(app, name), "log", helper_log(app, name))) +
+            "</span></div>"
+    }
+    return "<div class=\"rh-sec\">" + i18n_t(req, "helpers.title") + "</div>" + out
+}

@@ -717,5 +717,15 @@
   "dev.committed_on": "{repo}: committed {commit} on {branch}. Nothing was pushed.",
   "dev.committed_to": "{repo}: committed {commit} to {branch}; the working copy is unchanged; push or merge it yourself.",
   "dev.identity_not_maintainer": "{who}, who commits in {repo}, is not in MAINTAINERS.yml: CI will refuse an approval in that commit.",
-  "dev.no_identity": "No git identity"
+  "dev.no_identity": "No git identity",
+  "limits.title": "Limits",
+  "limits.memory": "Memory",
+  "limits.tasks": "Tasks",
+  "limits.cpu_weight": "CPU weight",
+  "limits.refused": "Refused in the manifest",
+  "limits.not_enforced": "Not enforced on this machine",
+  "limits.not_enforced_body": "The unit carries these limits, but this machine has no cgroup v2 with the memory controller, so systemd does not apply them.",
+  "helpers.title": "Helpers",
+  "helpers.none": "None running: the application has not asked for any of the helpers its manifest declares.",
+  "helpers.unit_log": "{unit} · log {log}"
 }

@@ -156,15 +156,148 @@ keeper cloned it.
 ## How an application runs
 
 Each application is a systemd user unit the keeper writes from its manifest and its
-record — `After=`/`Wants=` for what `deploy.depends` names, `Restart=on-failure`,
-`NoNewPrivileges`, and `EnvironmentFile=` its `app.env`. The unit is written again
+record — `After=`/`Wants=` for what `deploy.depends` names, the restart policy and
+limits below, `NoNewPrivileges`, and `EnvironmentFile=` its `app.env`. The unit is written again
 whenever it no longer says what the keeper would write, so a moved folder or a new
 port is picked up by the next start. The state a card shows comes from systemd and
 the application's `/healthz`: **running**, **starting**, **failed**, **stopped**,
 **not built**, **no service yet**. **Log** is the unit's journal.
 
-Where the machine's systemd can make a private view for a user service, an
-application sees the keeper's folder empty but for its own workspace and releases.
+### Supervision
+
+systemd is the supervisor (robohub ADR-0018). Every unit the keeper writes — an
+application's, an integration's, a helper's — restarts whatever ends without being
+stopped and never gives up:
+
+| Line | Why |
+| --- | --- |
+| `StartLimitIntervalSec=0` (in `[Unit]`) | five quick failures do not stop the restarts for good |
+| `Restart=always`, `RestartSec=5` | an application that exits, even with 0, is back five seconds later |
+| `TimeoutStopSec=20` | one that ignores SIGTERM is killed rather than holding a redeploy |
+
+**Watchdog.** A program built by rho 0.20.0 or later tells systemd it is ready and,
+while its own `/healthz` answers, that it is alive; it carries the marker
+`rho-sd-notify-v1`. The keeper reads the program the unit runs and searches it for the
+marker (nothing is run): with it the unit is `Type=notify`, `NotifyAccess=main`,
+`WatchdogSec=30`, so a hung application is restarted within about 30 s; without it,
+`Type=simple` and no watchdog. A job that puts another release in use — a redeploy,
+a first start, a rollback, a release backed out — writes a drop-in
+(`<unit>.service.d/keeper-type.conf`) saying the same for the program now in use, so a
+rollback to a release built before the marker does not wait for a `READY=1` that never
+comes; the next time the keeper writes the unit, the drop-in is folded into it.
+
+**Limits.** An application declares what it may use under `deploy.limits`, as a block
+or on one line:
+
+```yaml
+deploy:
+  limits: {memory: 4G, tasks: 4096, cpu_weight: 200}
+```
+
+| Key | Unit line | Default | A value is |
+| --- | --- | --- | --- |
+| `memory` | `MemoryMax=` | `2G` | digits and `K`, `M`, `G` or `T` |
+| `tasks` | `TasksMax=` | `1024` | a whole number, at least 16 |
+| `cpu_weight` | `CPUWeight=` | `100` | 1 to 10000 |
+
+A value that is none of these is refused: the default is written and the
+application's page says which value and why. systemd enforces the limits only on
+cgroup v2 with the memory controller (`/sys/fs/cgroup/cgroup.controllers` lists
+`memory`); elsewhere — WSL's cgroup v1, among others — the unit carries them, they do
+nothing, and the application's page says so.
+
+**Isolation.** Where the machine's systemd can make a private view for a user
+service, an application sees the keeper's folder empty but for its own workspace and
+releases, and the signing keys are hidden. The keeper asks once: it writes a
+throwaway unit, `rh-keeper-isolation-probe.service` (`Type=oneshot`, the same
+`TemporaryFileSystem`, `InaccessiblePaths` and `NoNewPrivileges`,
+`ExecStart=/bin/true`), runs `systemctl --user daemon-reload` and
+`systemctl --user start` on it — the exit status is the answer — and removes it. No
+user D-Bus session is needed, unlike the `systemd-run --user` probe of earlier
+keepers, which said no wherever there was none. The answer is kept in
+`isolation.txt` as `yes-v2` or `no-v2`; a `no` the old probe kept is asked again once,
+and a `yes` stands. Delete the file to ask again.
+
+### Helpers
+
+An application can ask the keeper to run a program as a unit of its own — Mesh does,
+for a mesh's native gateway and each coordinator's Zigbee2MQTT — so that it outlives a
+redeploy of the application, starts at boot and is restarted when it crashes. It lists
+the names it may use in its manifest, as patterns where `*` may only end one (a bare
+`*` is not a pattern):
+
+```yaml
+helpers: [gateway-*, z2m-*]
+```
+
+and asks over the keeper's API, on a loopback connection, with its own client secret
+(the content of the file `RHO_CLIENT_SECRET_FILE` names):
+
+```
+POST /api/v1/helpers
+Authorization: App mesh:<client secret>
+
+{"name": "z2m-home-zb1", "program": "/usr/bin/node", "args": ["/opt/z2m/index.js"],
+ "dir": "/opt/z2m", "env": {"ZIGBEE2MQTT_DATA": "/home/u/.rho/keeper/workspaces/mesh/z2m"}}
+```
+
+- `name` is 1 to 64 letters, digits, `-` and `_`, and must match a declared pattern
+  (403 otherwise).
+- `program` is the absolute path of an executable file; nothing goes through a shell.
+  `dir` (the application's workspace when left out) is an existing absolute folder.
+  Neither may be in the keeper's folder — except the application's own workspace and
+  releases — or among the keeper's keys, and neither may have a `.` or `..` part.
+- `args` is an array of at most 64 strings, `env` an object of at most 64 strings with
+  names `[A-Z_][A-Z0-9_]*`. No value may hold a line break. A name containing
+  `SECRET`, `PASSWORD`, `TOKEN` or `KEY` is accepted only when its value is the path of
+  an existing file (`GATEWAY_KEY_FILE=/…/gateway.key`): a unit file and
+  `systemctl show` are no place for a secret.
+
+The keeper writes `~/.config/systemd/user/rh-<app>-<name>.service`:
+
+```ini
+[Unit]
+Description=RoboHub <app> helper <name>
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=<dir>
+Environment="K=V"
+ExecStart="<program>" "<arg>" …
+UMask=0077
+NoNewPrivileges=yes
+<the isolation the application has>
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StandardOutput=append:<workspace>/helpers/<name>.log
+StandardError=append:<workspace>/helpers/<name>.log
+
+[Install]
+WantedBy=default.target
+```
+
+Each argument and value is quoted as systemd reads it whole, with `%` and (in
+`ExecStart`) `$` doubled, so nothing is expanded into it. The keeper then reloads
+systemd, enables the unit and restarts it — asking again with a changed definition
+rewrites and restarts it; an unchanged one is restarted too — records it in
+`services/helpers.txt` (`app|name`), and answers
+`{"unit": "rh-<app>-<name>.service", "state": "active", "log": "<path>"}`.
+
+| Request | Answer |
+| --- | --- |
+| `GET /api/v1/helpers` | `{"helpers": [{"name", "unit", "state", "log"}]}`, the asking application's only (`[]` when it has none) |
+| `POST /api/v1/helpers/{name}/{start\|stop\|restart}` | `{"state": …}`; 404 for a helper the application does not have |
+| `DELETE /api/v1/helpers/{name}` | stops and disables it, removes the unit, reloads systemd, forgets it: `{"removed": "rh-<app>-<name>.service"}` |
+
+A missing or wrong credential is 401; a request that is not on a loopback connection,
+or that a proxy forwarded, is 403; a definition that breaks a rule above is 400 with
+the reason; a unit name another application's helper already has is 409. The
+application's page lists its helpers with their state, unit and log. Restarting or
+redeploying the application leaves its helpers running; uninstalling it removes them.
+Starting, stopping, removing and refusing are the events `helper.started`,
+`helper.stopped`, `helper.removed` and `helper.refused`.
 
 What a started application is told, in `app.env` (owner-only):
 
@@ -466,14 +599,19 @@ service token. Answers are JSON.
 | `GET /api/v1/services` | the services an application calls, and where |
 | `GET /api/v1/config/{app}` | an application's record and environment |
 | `GET /api/v1/switcher` | the applications for every app switcher (no sign-in; readable from this host's pages only) |
-| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added`, `bus.user-issued`, `bus.user-removed`, `bus.user-refused`, `node.rotated`, `node.revoked` |
+| `GET /api/v1/events` | Server-Sent Events: `app.installed`, `app.started`, `app.stopped`, `app.restarted`, `app.updated`, `app.rollback`, `app.uninstalled`, `job.started`, `job.done`, `job.failed`, `person.signed-in`, `person.signed-out`, `keys.rotated`, `bus.device-added`, `bus.user-issued`, `bus.user-removed`, `bus.user-refused`, `helper.started`, `helper.stopped`, `helper.removed`, `helper.refused`, `node.rotated`, `node.revoked` |
 | `GET /api/v1/notifications/stream` | Server-Sent Events: the keeper's toasts ("mesh: redeploy done"), which every application's page follows beside its own; answered across ports only to the origin of an application in the catalogue (this host, that application's port), with credentials |
 | `POST /api/v1/bus/users` | a broker user for the application that asks, under a root its manifest lists in `bus.issue` (no sign-in: loopback only, `Authorization: Bus <app>:<password>`; see *Issued users*) |
 | `DELETE /api/v1/bus/users/{name}` | removes one the application was issued (same) |
+| `GET /api/v1/helpers` | the asking application's helpers and their state (no sign-in: loopback only, `Authorization: App <app>:<client secret>`; see *Helpers*) |
+| `POST /api/v1/helpers` | writes, enables and (re)starts a helper under a name the manifest's `helpers:` allows (same) |
+| `POST /api/v1/helpers/{name}/{action}` | `start`, `stop` or `restart` one (same) |
+| `DELETE /api/v1/helpers/{name}` | removes one (same) |
 
 Without a session: `GET /auth/public-key`, `GET /auth/session/{handle}`,
 `POST /auth/service-token`, `POST /api/enroll`, `POST /api/nodes/verify`, `/healthz`,
-and `/api/v1/bus/users`, which checks an application's broker password itself.
+`/api/v1/bus/users`, which checks an application's broker password itself, and
+`/api/v1/helpers`, which checks an application's client secret itself.
 
 ## Security
 
@@ -505,6 +643,8 @@ and `/api/v1/bus/users`, which checks an application's broker password itself.
 | Catalogue | `~/.rho/keeper/installed.yml` |
 | Releases | `~/.rho/keeper/apps/<name>/releases/`, `current` |
 | Application workspaces (their data) | `~/.rho/keeper/workspaces/<name>` |
+| Helpers | `~/.rho/keeper/services/helpers.txt`; units `~/.config/systemd/user/rh-<app>-<name>.service`; logs `<workspace>/helpers/<name>.log` |
+| Isolation answer | `~/.rho/keeper/isolation.txt` |
 | People and sessions | `~/.rho/keeper/users.yml`, `~/.rho/keeper/auth-sessions.txt` |
 | Access token, signing keys | `~/.rho/auth/` |
 | Keeper's own settings | `~/.rho/keeper/data/settings.conf` |

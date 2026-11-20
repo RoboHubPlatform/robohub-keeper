@@ -31,6 +31,8 @@ include "keeper/deps.rho"
 include "keeper/integrations.rho"
 include "keeper/bus_users_text.rho"
 include "keeper/bus_users.rho"
+include "keeper/helpers_text.rho"
+include "keeper/helpers.rho"
 include "keeper/overview.rho"
 include "keeper/plugins.rho"
 include "keeper/providers.rho"
@@ -131,6 +133,13 @@ route GET "/api/v1/jobs/{id}" => api_job
 // loopback only, with its broker password (ADR-0006).
 route POST "/api/v1/bus/users" => bus_users_post
 route DELETE "/api/v1/bus/users/{name}" => bus_users_delete
+// An application asks for helpers — units of its own the keeper writes and runs —
+// under the names its manifest declares; loopback only, with its client secret
+// (ADR-0018).
+route GET "/api/v1/helpers" => helpers_get
+route POST "/api/v1/helpers" => helpers_post
+route POST "/api/v1/helpers/{name}/{action}" => helpers_action
+route DELETE "/api/v1/helpers/{name}" => helpers_delete
 route GET "/plugins" => plugins_page
 route POST "/plugins/toggle" => plugins_toggle
 route POST "/plugins/test" => plugins_test

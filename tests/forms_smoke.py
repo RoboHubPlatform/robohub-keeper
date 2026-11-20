@@ -55,6 +55,9 @@ MACHINE = {
     "/app/{name}/{path...}": "nothing: a redirect to the application's own port, which checks the post",
     "/api/v1/bus/users": "an application's own broker password, on a loopback connection (tests/bus_users_smoke.py)",
     "/api/v1/bus/users/{name}": "an application's own broker password, on a loopback connection (tests/bus_users_smoke.py)",
+    "/api/v1/helpers": "an application's own client secret, on a loopback connection (tests/helpers_smoke.py)",
+    "/api/v1/helpers/{name}/{action}": "an application's own client secret, on a loopback connection (tests/helpers_smoke.py)",
+    "/api/v1/helpers/{name}": "an application's own client secret, on a loopback connection (tests/helpers_smoke.py)",
 }
 
 # Every other POST route, with fields that would act if the token were not

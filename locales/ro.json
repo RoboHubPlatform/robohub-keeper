@@ -717,5 +717,15 @@
   "dev.committed_on": "{repo}: commit {commit} pe {branch}. Nimic nu a fost trimis.",
   "dev.committed_to": "{repo}: commit {commit} în {branch}; copia de lucru este neschimbată; faceți push sau merge singur.",
   "dev.identity_not_maintainer": "{who}, care face commit în {repo}, nu este în MAINTAINERS.yml: CI va refuza o aprobare din acel commit.",
-  "dev.no_identity": "Nicio identitate git"
+  "dev.no_identity": "Nicio identitate git",
+  "limits.title": "Limite",
+  "limits.memory": "Memorie",
+  "limits.tasks": "Sarcini",
+  "limits.cpu_weight": "Pondere CPU",
+  "limits.refused": "Refuzat în manifest",
+  "limits.not_enforced": "Neaplicate pe această mașină",
+  "limits.not_enforced_body": "Unitatea conține aceste limite, dar mașina nu are cgroup v2 cu controlerul de memorie, deci systemd nu le aplică.",
+  "helpers.title": "Ajutoare",
+  "helpers.none": "Niciunul pornit: aplicația nu a cerut încă niciunul dintre ajutoarele declarate în manifestul ei.",
+  "helpers.unit_log": "{unit} · jurnal {log}"
 }

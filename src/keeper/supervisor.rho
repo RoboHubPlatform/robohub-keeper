@@ -318,8 +318,10 @@ fn app_unit_description(name: string, location: string) string {
 
 // app_unit_text is the unit the keeper writes for an application. It starts after
 // the applications it depends on (deploy.depends), and wants them; systemd
-// restarts it when it fails.
-// @req KEEP-APPS-0004
+// restarts it whenever it ends without being stopped, for ever, kills it when it
+// will not stop, watches it when its program can say it is alive, and bounds
+// what it may use (robohub ADR-0018).
+// @req KEEP-APPS-0004, KEEP-APPS-0017, KEEP-APPS-0018, KEEP-APPS-0019
 fn app_unit_text(name: string) string {
     if integration_is(name) {
         // An integration runs its service's own program with the configuration
@@ -327,10 +329,10 @@ fn app_unit_text(name: string) string {
         let path: string = catalog_get(name, "location")
         return "# Written by the RoboHub keeper for the integration " + name + " (" + path + ").\n" +
             "# The keeper writes it again when the integration changes; edits here are lost.\n" +
-            "[Unit]\nDescription=" + app_unit_description(name, path) + "\nAfter=network-online.target\n\n" +
+            "[Unit]\nDescription=" + app_unit_description(name, path) + "\nAfter=network-online.target\n" + unit_start_limit() + "\n" +
             "[Service]\nType=simple\nWorkingDirectory=" + integration_dir(name) + "\n" +
             "ExecStart=" + integration_command_line(name) + "\n" +
-            "ExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
+            "ExecReload=/bin/kill -HUP $MAINPID\n" + unit_restart_policy() + "\n[Install]\nWantedBy=default.target\n"
     }
     let location: string = app_canonical(catalog_get(name, "location"))
     var after: string = "network-online.target"
@@ -351,10 +353,107 @@ fn app_unit_text(name: string) string {
     if wants != "" {
         unit = unit + "Wants=" + str_trim(wants) + "\n"
     }
-    return unit + "\n[Service]\nType=simple\nWorkingDirectory=" + app_run_dir(name) + "\n" +
+    return unit + unit_start_limit() + "\n[Service]\n" + unit_type_lines(app_program_notifies(name)) +
+        "WorkingDirectory=" + app_run_dir(name) + "\n" +
         "EnvironmentFile=" + app_env_path(name) + "\n" +
-        "ExecStart=" + app_program(name) + "\n" + app_isolation(name) +
-        "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
+        "ExecStart=" + app_program(name) + "\n" + app_isolation(name) + unit_restart_policy() +
+        limit_lines(app_limit(location, "memory"), app_limit(location, "tasks"), app_limit(location, "cpu_weight")) +
+        "\n[Install]\nWantedBy=default.target\n"
+}
+
+// app_program_notifies is whether the program an application's unit runs can
+// tell systemd it is ready and alive: its file carries the marker rho puts in
+// every server that does. The file is read and searched here; nothing is run.
+// @req KEEP-APPS-0018
+fn app_program_notifies(name: string) bool {
+    if integration_is(name) {
+        return false
+    }
+    return program_has_marker(rho_read_text(app_program(name)))
+}
+
+// app_type_dropin is the drop-in beside an application's unit that a job writes
+// when it puts a release in use (app_type_fit_lines).
+fn app_type_dropin(name: string) string {
+    return getenv("HOME") + "/.config/systemd/user/" + app_unit_name(name) + ".service.d/keeper-type.conf"
+}
+
+// app_type_fit_lines is the shell a job runs once it has moved `current`: the
+// unit was written for the program in use before, so a drop-in says how systemd
+// follows the program now in use — watched when it carries the marker, a plain
+// process when not (a rollback to a release built before rho 0.20 would
+// otherwise wait for a READY=1 that never comes). The marker is looked for in
+// the keeper's own release path, never in anything a request carried.
+// @req KEEP-APPS-0018
+fn app_type_fit_lines(name: string) string {
+    if !app_released(name) {
+        return ""
+    }
+    let location: string = app_canonical(catalog_get(name, "location"))
+    let program: string = shell_quote(app_current(name) + "/" + app_command(name, location))
+    let dropin: string = shell_quote(app_type_dropin(name))
+    return "mkdir -p " + shell_quote(dir_of(app_type_dropin(name))) + "\n" +
+        "if grep -qaF -- " + SD_NOTIFY_MARKER + " " + program + "; then printf '%s' " + shell_quote(unit_type_dropin(true)) + " > " + dropin +
+        "; else printf '%s' " + shell_quote(unit_type_dropin(false)) + " > " + dropin + "; fi\n" +
+        "systemctl --user daemon-reload || true\n"
+}
+
+// app_limit is one resource limit of an application: what its manifest says
+// under `deploy.limits` (a block, or `{memory: 4G, tasks: 4096}` on one line),
+// or the default when it says nothing or says something that is not a limit.
+// @req KEEP-APPS-0019
+fn app_limit(location: string, key: string) string {
+    let value: string = app_limit_declared(location, key)
+    if value != "" && limit_problem(key, value) == "" {
+        return value
+    }
+    if rho_str_eq(key, "memory") {
+        return LIMIT_MEMORY_DEFAULT
+    }
+    if rho_str_eq(key, "tasks") {
+        return LIMIT_TASKS_DEFAULT
+    }
+    return LIMIT_CPU_WEIGHT_DEFAULT
+}
+
+// app_limit_declared is what a manifest says of one limit, as written, or "".
+fn app_limit_declared(location: string, key: string) string {
+    let manifest: string = manifest_of(location)
+    let value: string = unquote(str_trim(yaml.value(manifest, "deploy.limits." + key)))
+    if value != "" {
+        return value
+    }
+    return limit_flow_value(yaml.value(manifest, "deploy.limits"), key)
+}
+
+// app_limit_problems is why the limits a manifest declares were refused, one per
+// line (`deploy.limits.memory: memory is a size such as 512M or 2G`), or "".
+// @req KEEP-APPS-0019
+fn app_limit_problems(location: string) string {
+    var out: string = ""
+    var keys: string = "memory\ntasks\ncpu_weight\n"
+    while keys != "" {
+        let at: i32 = rho_str_index_of(keys, "\n")
+        let key: string = rho_str_slice(keys, 0, u32(at))
+        keys = rho_str_slice(keys, u32(at) + 1, u32(rho_strlen(keys)) - u32(at) - 1)
+        let value: string = app_limit_declared(location, key)
+        if value != "" && limit_problem(key, value) != "" {
+            out = out + "deploy.limits." + key + " = " + value + ": " + limit_problem(key, value) + "\n"
+        }
+    }
+    return out
+}
+
+// limits_enforced is whether this machine bounds a unit's resources: the unified
+// cgroup hierarchy (v2) with the memory controller. On cgroup v1 — WSL's, among
+// others — a user unit's limits are written and ignored.
+// @req KEEP-APPS-0019
+fn limits_enforced() bool {
+    var file: string = getenv("RHO_KEEPER_CGROUP_CONTROLLERS")
+    if file == "" {
+        file = "/sys/fs/cgroup/cgroup.controllers"
+    }
+    return rho_path_exists(file) && cgroup_v2_enforces(rho_read_text(file))
 }
 
 // app_isolation is what keeps a hosted application out of the keeper's and the
@@ -372,7 +471,11 @@ fn app_isolation(name: string) string {
         return out
     }
     let auth: string = auth_dir()
-    return out + "TemporaryFileSystem=" + keeper_state_dir() + ":ro\n" +
+    // A user manager makes the private view inside a user namespace: without
+    // PrivateUsers= systemd 249 cannot set up the mount namespace for a user
+    // service ("Operation not supported", status 226/NAMESPACE). Supplementary
+    // groups — dialout for a serial port — keep working, unmapped.
+    return out + "PrivateUsers=yes\nTemporaryFileSystem=" + keeper_state_dir() + ":ro\n" +
         "BindPaths=" + keeper_app_workspace(name) + " -" + app_home(name) + "\n" +
         "InaccessiblePaths=-" + auth + "/private.pem -" + auth + "/signing.key -" + auth + "/master.token -" +
         auth + "/credentials.json -" + auth + "/clients\n"
@@ -380,23 +483,44 @@ fn app_isolation(name: string) string {
 
 // app_isolation_works is whether this machine's systemd can give a user service
 // a private view of the file system: asked once of a throwaway unit with the
-// same settings, and the answer kept.
+// same settings, which the keeper writes and starts through `systemctl --user`
+// (no D-Bus needed, unlike systemd-run), and the answer kept. A `no` the old
+// systemd-run probe kept is asked again, once (isolation_kept).
+// @req KEEP-0006, KEEP-APPS-0021
 fn app_isolation_works() bool {
     let kept: string = keeper_state_dir() + "/isolation.txt"
-    let said: string = str_trim(rho_read_text(kept))
+    let said: string = isolation_kept(rho_read_text(kept))
     if rho_str_eq(said, "yes") {
         return true
     }
     if rho_str_eq(said, "no") {
         return false
     }
-    let code: u32 = rho_exec_args("systemd-run", "--user\n--wait\n--quiet\n--collect\n-p\nNoNewPrivileges=yes\n-p\nTemporaryFileSystem=" +
-        keeper_state_dir() + ":ro\n-p\nInaccessiblePaths=-" + auth_dir() + "/private.pem\ntrue\n", apps_report("isolation-probe"))
-    var answer: string = "no"
+    rho_lock("keeper.isolation-probe")
+    let again: string = isolation_kept(rho_read_text(kept))
+    if !rho_str_eq(again, "ask") {
+        rho_unlock("keeper.isolation-probe")
+        return rho_str_eq(again, "yes")
+    }
+    let unit: string = "rh-keeper-isolation-probe.service"
+    let dir: string = getenv("HOME") + "/.config/systemd/user"
+    ignore_u32(rho_exec_args("mkdir", "-p\n" + dir + "\n", apps_report("mkdir-units")))
+    ignore_bool(rho_write_text(dir + "/" + unit, isolation_probe_unit(keeper_state_dir(), auth_dir())))
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+    // The exit status is the answer: a oneshot start returns when /bin/true has
+    // run in the view, or fails when systemd could not make it.
+    let code: u32 = app_systemd("start\n" + unit + "\n", "isolation-probe")
+    if code != 0 {
+        ignore_u32(app_systemd("reset-failed\n" + unit + "\n", "isolation-probe-reset"))
+    }
+    ignore_u32(rho_exec_args("rm", "-f\n--\n" + dir + "/" + unit + "\n", apps_report("isolation-probe-rm")))
+    ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+    var answer: string = "no-v3"
     if code == 0 {
-        answer = "yes"
+        answer = "yes-v3"
     }
     ignore_bool(rho_write_text(kept, answer + "\n"))
+    rho_unlock("keeper.isolation-probe")
     info("keeper", "user-service isolation: " + answer)
     return code == 0
 }
@@ -422,8 +546,18 @@ fn app_install_unit(name: string) bool {
         }
     }
     let text: string = app_unit_text(name)
+    // A drop-in a job wrote for the release it put in use is folded into the
+    // unit, which is now written for the program in use (app_type_fit_lines).
+    var dropped: bool = false
+    if rho_path_exists(app_type_dropin(name)) {
+        ignore_u32(rho_exec_args("rm", "-f\n--\n" + app_type_dropin(name) + "\n", apps_report("type-dropin-rm")))
+        dropped = true
+    }
     if rho_str_eq(rho_read_text(app_unit_file(name)), text) {
-        return false
+        if dropped {
+            ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
+        }
+        return dropped
     }
     ignore_u32(rho_exec_args("mkdir", "-p\n" + getenv("HOME") + "/.config/systemd/user\n", apps_report("mkdir-units")))
     ignore_bool(rho_write_text(app_unit_file(name), text))
@@ -440,6 +574,7 @@ fn app_remove_unit_of(name: string) void {
     }
     ignore_u32(app_systemd("disable\n--now\n" + app_unit_name(name) + "\n", "disable-" + name))
     ignore_u32(rho_exec_args("rm", "-f\n" + app_unit_file(name) + "\n", apps_report("remove-unit-" + name)))
+    ignore_u32(rho_exec_args("rm", "-rf\n--\n" + dir_of(app_type_dropin(name)) + "\n", apps_report("remove-unit-" + name)))
     ignore_u32(app_systemd("daemon-reload\n", "daemon-reload"))
 }
 

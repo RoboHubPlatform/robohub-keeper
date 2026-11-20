@@ -178,6 +178,7 @@ fn job_back_out_lines(name: string) string {
         "  if [ -n \"$PREV\" ] && [ -d \"$PREV\" ]; then\n" +
         "    touch \"$REL/.failed\"\n" +
         "    ln -sfn \"$PREV\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current\n" +
+        app_type_fit_lines(name) +
         "    systemctl --user restart " + unit + " || true\n" +
         "    finish failed \"$1; release $(basename \"$PREV\") is back in use\"\n" +
         "  fi\n" +
@@ -260,7 +261,7 @@ fn job_build(name: string) string {
 // it and waits for it to answer.
 fn job_redeploy(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
-    return job_start(name, "redeploy", job_build_lines(name) + app_release_lines(name) + job_back_out_lines(name) +
+    return job_start(name, "redeploy", job_build_lines(name) + app_release_lines(name) + app_type_fit_lines(name) + job_back_out_lines(name) +
         "systemctl --user daemon-reload || true\n" +
         "systemctl --user restart " + unit + " || back_out \"systemd could not restart it\"\n" +
         job_health_or_back(name))
@@ -269,7 +270,7 @@ fn job_redeploy(name: string) string {
 // job_start_built builds an application that has never been built, then starts it.
 fn job_start_built(name: string) string {
     let unit: string = shell_quote(app_unit_name(name))
-    return job_start(name, "start", job_build_lines(name) + app_release_lines(name) +
+    return job_start(name, "start", job_build_lines(name) + app_release_lines(name) + app_type_fit_lines(name) +
         "systemctl --user start " + unit + " || finish failed \"systemd could not start it\"\n" +
         job_health_lines(name))
 }
@@ -290,6 +291,7 @@ fn job_rollback(name: string) string {
         "[ -n \"$prev\" ] || finish failed \"there is no earlier release\"\n" +
         "ln -sfn \"$prev\" " + home + "/current.next && mv -T " + home + "/current.next " + home + "/current || finish failed \"the release could not be put in use\"\n" +
         "echo \"Release $(basename \"$prev\") is in use again (was $(basename \"$cur\")).\"\n" +
+        app_type_fit_lines(name) +
         "systemctl --user restart " + unit + " || finish failed \"systemd could not restart it\"\n" +
         job_health_lines(name))
 }

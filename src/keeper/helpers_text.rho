@@ -1,0 +1,972 @@
+//
+// @file helpers_text.rho
+// @brief The rules of supervised units as text: the restart policy, the watchdog, resource limits, helper names and patterns, their environment, systemd's quoting, the helper unit and helpers.txt, and the small JSON a helper is asked for in.
+//
+// @module keeper.helpers_text
+// @project keeper
+// @author Aurel Miron
+// @date 2026-11-20
+//
+// SPDX-License-Identifier: MIT
+//
+
+module keeper.helpers_text
+
+// What supervising an application and its helpers decides, without a file, a
+// request or a systemd (robohub ADR-0018): the lines every unit the keeper
+// writes carries, whether a program can be watched, which resource limits a
+// manifest may ask for, which helper names an application may run, which
+// environment a helper may be given, how a value is quoted so systemd reads it
+// whole, the text of a helper's unit, the lines of services/helpers.txt, and the
+// JSON body `POST /api/v1/helpers` carries. supervisor.rho and helpers.rho do the
+// reading and writing; tests/helpers_test.rho checks these.
+//
+// A line of helpers.txt is
+//
+//   app|name
+//
+// and the unit it stands for is `rh-<app>-<name>.service`.
+//
+// Like apps_text.rho, a string is compared with rho_str_eq and the primitives are
+// declared by the module that includes this file.
+
+/// What a program built by rho 0.20.0 or later carries when it tells systemd it
+/// is ready and alive (sd_notify, with a watchdog that asks its own /healthz).
+const SD_NOTIFY_MARKER: string = "rho-sd-notify-v1"
+
+/// The resource limits an application gets when its manifest names none.
+const LIMIT_MEMORY_DEFAULT: string = "2G"
+const LIMIT_TASKS_DEFAULT: string = "1024"
+const LIMIT_CPU_WEIGHT_DEFAULT: string = "100"
+
+/// The longest helper name, and the most arguments and environment entries a
+/// helper may be given, and the longest of any one of them.
+const HELPER_NAME_MAX: u32 = 64
+const HELPER_ARGS_MAX: u32 = 64
+const HELPER_ENV_MAX: u32 = 64
+const HELPER_VALUE_MAX: u32 = 4096
+
+/* -------------------------------------------------------------------------- */
+/*  What every unit carries                                                   */
+/* -------------------------------------------------------------------------- */
+
+// unit_start_limit is the [Unit] line that keeps systemd restarting a unit for
+// ever, rather than giving up after five quick failures.
+// @req KEEP-APPS-0017
+fn unit_start_limit() string {
+    return "StartLimitIntervalSec=0\n"
+}
+
+// unit_restart_policy is the [Service] lines of the restart policy: restarted
+// whenever it ends without being stopped, five seconds later, and killed when it
+// has not stopped twenty seconds after being asked.
+// @req KEEP-APPS-0017
+fn unit_restart_policy() string {
+    return "Restart=always\nRestartSec=5\nTimeoutStopSec=20\n"
+}
+
+// program_has_marker is whether a program's bytes carry the sd_notify marker.
+// @req KEEP-APPS-0018
+fn program_has_marker(content: string) bool {
+    return rho_str_index_of(content, SD_NOTIFY_MARKER) >= 0
+}
+
+// unit_type_lines is how systemd is told to follow a program: one that says it
+// is ready and alive is watched, and restarted when it stops saying so for 30 s;
+// any other is a plain process with no watchdog, since it would be killed every
+// 30 s for never pinging one.
+// @req KEEP-APPS-0018
+fn unit_type_lines(notify: bool) string {
+    if notify {
+        return "Type=notify\nNotifyAccess=main\nWatchdogSec=30\n"
+    }
+    return "Type=simple\n"
+}
+
+// unit_type_dropin is the drop-in a job writes beside an application's unit
+// once it has put a release in use, saying how systemd follows that release's
+// program — the unit was written for the program in use before the job, and a
+// unit that waits for a READY=1 the program never sends would never start.
+// @req KEEP-APPS-0018
+fn unit_type_dropin(notify: bool) string {
+    var lines: string = "Type=simple\nNotifyAccess=none\nWatchdogSec=0\n"
+    if notify {
+        lines = unit_type_lines(true)
+    }
+    return "# Written by the RoboHub keeper for the release in use; removed when the unit is written again.\n" +
+        "[Service]\n" + lines
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Resource limits                                                           */
+/* -------------------------------------------------------------------------- */
+
+// digits_only is whether a value is one or more decimal digits.
+fn digits_only(value: string) bool {
+    let length: u32 = u32(rho_strlen(value))
+    if length == 0 {
+        return false
+    }
+    var i: u32 = 0
+    while i < length {
+        if !is_digit(rho_str_slice(value, i, 1)) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// limit_problem is why a value cannot be the limit a manifest names, or "" when
+// it can: `memory` a size (digits and K, M, G or T, more than nothing), `tasks` a
+// count of at least 16, `cpu_weight` a weight from 1 to 10000.
+// @req KEEP-APPS-0019
+fn limit_problem(key: string, value: string) string {
+    let length: u32 = u32(rho_strlen(value))
+    if rho_str_eq(key, "memory") {
+        if length < 2 || length > 13 {
+            return "memory is a size such as 512M or 2G"
+        }
+        let unit: string = rho_str_slice(value, length - 1, 1)
+        let number: string = rho_str_slice(value, 0, length - 1)
+        if rho_str_index_of("KMGT", unit) < 0 || !digits_only(number) {
+            return "memory is a size such as 512M or 2G"
+        }
+        if str_trim(str_replace(number, "0", " ")) == "" {
+            return "memory cannot be nothing"
+        }
+        return ""
+    }
+    if rho_str_eq(key, "tasks") {
+        if !digits_only(value) || length > 7 {
+            return "tasks is a whole number"
+        }
+        if rho_int_from_str(value) < 16 {
+            return "tasks is at least 16"
+        }
+        return ""
+    }
+    if rho_str_eq(key, "cpu_weight") {
+        if !digits_only(value) || length > 5 {
+            return "cpu_weight is a whole number"
+        }
+        let weight: u32 = rho_int_from_str(value)
+        if weight < 1 || weight > 10000 {
+            return "cpu_weight is from 1 to 10000"
+        }
+        return ""
+    }
+    return key + " is not a limit"
+}
+
+// limit_flow_value is one key of a limit map written on one line, as
+// `limits: {memory: 4G, tasks: 4096}`, or "" when it is not there.
+// @req KEEP-APPS-0019
+fn limit_flow_value(raw: string, key: string) string {
+    var rest: string = str_trim(raw)
+    let length: u32 = u32(rho_strlen(rest))
+    if length < 2 || !rho_str_starts_with(rest, "{") || !rho_str_eq(rho_str_slice(rest, length - 1, 1), "}") {
+        return ""
+    }
+    rest = rho_str_slice(rest, 1, length - 2) + ","
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, ",")
+        if at < 0 {
+            break
+        }
+        let pair: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let colon: i32 = rho_str_index_of(pair, ":")
+        if colon < 0 {
+            continue
+        }
+        if rho_str_eq(unquote(str_trim(rho_str_slice(pair, 0, u32(colon)))), key) {
+            return unquote(str_trim(rho_str_slice(pair, u32(colon) + 1, u32(rho_strlen(pair)) - u32(colon) - 1)))
+        }
+    }
+    return ""
+}
+
+// limit_line is one limit as the unit says it.
+// @req KEEP-APPS-0019
+fn limit_lines(memory: string, tasks: string, weight: string) string {
+    return "MemoryMax=" + memory + "\nTasksMax=" + tasks + "\nCPUWeight=" + weight + "\n"
+}
+
+// cgroup_v2_enforces is whether what /sys/fs/cgroup/cgroup.controllers says
+// lets a unit's memory be bounded: the unified hierarchy, with the memory
+// controller in it.
+// @req KEEP-APPS-0019
+fn cgroup_v2_enforces(controllers: string) bool {
+    return rho_str_index_of(" " + str_replace(str_trim(controllers), "\n", " ") + " ", " memory ") >= 0
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Helper names and the patterns a manifest declares                         */
+/* -------------------------------------------------------------------------- */
+
+// helper_name_ok is whether a helper may be called so: letters, digits, - and _,
+// 1 to 64 of them.
+// @req KEEP-APPS-0020
+fn helper_name_ok(name: string) bool {
+    let length: u32 = u32(rho_strlen(name))
+    if length == 0 || length > HELPER_NAME_MAX {
+        return false
+    }
+    var i: u32 = 0
+    while i < length {
+        let ch: string = rho_str_slice(name, i, 1)
+        if !is_lower(ch) && !is_upper(ch) && !is_digit(ch) && !rho_str_eq(ch, "-") && !rho_str_eq(ch, "_") {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// helper_pattern_ok is whether a manifest's `helpers:` entry is a pattern: a
+// helper name, or the start of one followed by a single `*`. A bare `*` is not:
+// an application names the helpers it runs.
+// @req KEEP-APPS-0020
+fn helper_pattern_ok(pattern: string) bool {
+    let length: u32 = u32(rho_strlen(pattern))
+    let star: i32 = rho_str_index_of(pattern, "*")
+    if star < 0 {
+        return helper_name_ok(pattern)
+    }
+    if u32(star) != length - 1 || length < 2 {
+        return false
+    }
+    return helper_name_ok(rho_str_slice(pattern, 0, length - 1))
+}
+
+// helper_pattern_match is whether a helper name is one a pattern allows: the
+// same name, or one that starts with the pattern's prefix and goes on.
+// @req KEEP-APPS-0020
+fn helper_pattern_match(pattern: string, name: string) bool {
+    if !helper_pattern_ok(pattern) || !helper_name_ok(name) {
+        return false
+    }
+    let length: u32 = u32(rho_strlen(pattern))
+    if rho_str_eq(rho_str_slice(pattern, length - 1, 1), "*") {
+        let prefix: string = rho_str_slice(pattern, 0, length - 1)
+        return rho_str_starts_with(name, prefix) && u32(rho_strlen(name)) > length - 1
+    }
+    return rho_str_eq(pattern, name)
+}
+
+// helper_declared is whether one of the patterns a manifest lists (one per line)
+// allows a helper name.
+// @req KEEP-APPS-0020
+fn helper_declared(patterns: string, name: string) bool {
+    var rest: string = patterns
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if helper_pattern_match(str_trim(line), name) {
+            return true
+        }
+    }
+    return false
+}
+
+// helper_unit is the unit an application's helper runs as.
+fn helper_unit(app: string, name: string) string {
+    return "rh-" + app + "-" + name + ".service"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  What a helper is given                                                    */
+/* -------------------------------------------------------------------------- */
+
+// helper_value_problem is why a value cannot go into a unit, or "": a line break
+// would start another directive, and a NUL ends the value early.
+// @req KEEP-APPS-0020
+fn helper_value_problem(value: string) string {
+    if rho_str_index_of(value, "\n") >= 0 || rho_str_index_of(value, "\r") >= 0 {
+        return "a value has a line break"
+    }
+    // A backend whose strings end at a NUL has none to find in one.
+    let nul: string = rho_str_from_byte(u8(0))
+    if rho_strlen(nul) == 1 && rho_str_index_of(value, nul) >= 0 {
+        return "a value has a NUL"
+    }
+    if u32(rho_strlen(value)) > HELPER_VALUE_MAX {
+        return "a value is longer than 4096 characters"
+    }
+    return ""
+}
+
+// helper_env_key_ok is whether an environment name is [A-Z_][A-Z0-9_]*, at most
+// 128 long.
+// @req KEEP-APPS-0020
+fn helper_env_key_ok(key: string) bool {
+    let length: u32 = u32(rho_strlen(key))
+    if length == 0 || length > 128 {
+        return false
+    }
+    var i: u32 = 0
+    while i < length {
+        let ch: string = rho_str_slice(key, i, 1)
+        if !is_upper(ch) && !rho_str_eq(ch, "_") && (i == 0 || !is_digit(ch)) {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+// helper_env_names_secret is whether an environment name says it holds a
+// secret.
+// @req KEEP-APPS-0020
+fn helper_env_names_secret(key: string) bool {
+    return rho_str_index_of(key, "SECRET") >= 0 || rho_str_index_of(key, "PASSWORD") >= 0 ||
+        rho_str_index_of(key, "TOKEN") >= 0 || rho_str_index_of(key, "KEY") >= 0
+}
+
+// helper_env_problem is why a helper cannot be given an environment entry, or
+// "". A unit file is readable by anyone who can read the user's configuration
+// and its environment is shown by systemctl, so a secret never goes in one: an
+// entry whose name says it is a secret is accepted only when its value is an
+// absolute path — the file the secret is in, which helpers.rho checks is there.
+// @req KEEP-APPS-0020
+fn helper_env_problem(key: string, value: string) string {
+    if !helper_env_key_ok(key) {
+        return "the environment name " + key + " is not [A-Z_][A-Z0-9_]*"
+    }
+    let problem: string = helper_value_problem(value)
+    if problem != "" {
+        return key + ": " + problem
+    }
+    if helper_env_names_secret(key) && (!rho_str_starts_with(value, "/") || rho_str_index_of(value, " ") >= 0) {
+        return key + " names a secret: a helper is given the path of the file a secret is in, never the secret"
+    }
+    return ""
+}
+
+// helper_path_problem is why a value cannot be the absolute path of a program or
+// a folder, or "": absolute, without a `.` or `..` part, a line break or a NUL.
+// helpers.rho checks that it is there and what it is.
+// @req KEEP-APPS-0020
+fn helper_path_problem(path: string) string {
+    if !rho_str_starts_with(path, "/") {
+        return "it is not an absolute path"
+    }
+    if rho_str_index_of(path + "/", "/../") >= 0 || rho_str_index_of(path + "/", "/./") >= 0 || rho_str_index_of(path, "//") >= 0 {
+        return "it has a . or .. part"
+    }
+    return helper_value_problem(path)
+}
+
+// path_within is whether a path is a folder or something under it.
+fn path_within(path: string, dir: string) bool {
+    return rho_str_eq(path, dir) || rho_str_starts_with(path, dir + "/")
+}
+
+/* -------------------------------------------------------------------------- */
+/*  systemd's quoting                                                         */
+/* -------------------------------------------------------------------------- */
+
+// unit_percent is a value with every `%` doubled, so systemd does not read a
+// specifier into it (WorkingDirectory=, StandardOutput=append:).
+// @req KEEP-APPS-0020
+fn unit_percent(value: string) string {
+    return str_replace(value, "%", "%%")
+}
+
+// unit_exec_word is one word of an ExecStart= line, read whole by systemd: in
+// double quotes, a backslash and a quote escaped, `%` and `$` doubled so neither
+// a specifier nor a variable is expanded into it.
+// @req KEEP-APPS-0020
+fn unit_exec_word(value: string) string {
+    let escaped: string = str_replace(str_replace(value, "\\", "\\\\"), "\"", "\\\"")
+    return "\"" + str_replace(str_replace(escaped, "%", "%%"), "$", "$$") + "\""
+}
+
+// unit_env_assignment is one Environment= word: `"KEY=value"`, a backslash and a
+// quote escaped and `%` doubled (systemd expands no variable there).
+// @req KEEP-APPS-0020
+fn unit_env_assignment(key: string, value: string) string {
+    let escaped: string = str_replace(str_replace(value, "\\", "\\\\"), "\"", "\\\"")
+    return "\"" + key + "=" + str_replace(escaped, "%", "%%") + "\""
+}
+
+/* -------------------------------------------------------------------------- */
+/*  A helper's unit                                                           */
+/* -------------------------------------------------------------------------- */
+
+// helper_unit_text is the unit a helper runs as: the program and its arguments
+// (one per line), its folder, its environment (`KEY=value` one per line), the
+// restart policy every unit the keeper writes has, NoNewPrivileges and whatever
+// isolation its application has, files it makes readable by its user only
+// (UMask=0077: a Zigbee2MQTT backup holds the network key, and as a process an
+// application started it ran under 077), and its output appended to its log. It is not
+// bound to its application's unit, so restarting the application leaves it
+// running.
+// @req KEEP-APPS-0017, KEEP-APPS-0020
+fn helper_unit_text(app: string, name: string, program: string, args: string, dir: string, env: string, log: string, isolation: string) string {
+    var exec: string = unit_exec_word(program)
+    var rest: string = args
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var arg: string = rest
+        if at < 0 { rest = "" } else { arg = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        exec = exec + " " + unit_exec_word(arg)
+    }
+    var environment: string = ""
+    rest = env
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        let eq: i32 = rho_str_index_of(line, "=")
+        if eq <= 0 {
+            continue
+        }
+        environment = environment + "Environment=" + unit_env_assignment(rho_str_slice(line, 0, u32(eq)),
+            rho_str_slice(line, u32(eq) + 1, u32(rho_strlen(line)) - u32(eq) - 1)) + "\n"
+    }
+    return "# Written by the RoboHub keeper for the application " + app + ", which asked for it.\n" +
+        "# The keeper writes it again when " + app + " asks again; edits here are lost.\n" +
+        "[Unit]\nDescription=RoboHub " + app + " helper " + name + "\n" + unit_start_limit() + "\n" +
+        "[Service]\nType=simple\nWorkingDirectory=" + unit_percent(dir) + "\n" + environment +
+        "ExecStart=" + exec + "\n" + "UMask=0077\n" + isolation + unit_restart_policy() +
+        "StandardOutput=append:" + unit_percent(log) + "\nStandardError=append:" + unit_percent(log) + "\n\n" +
+        "[Install]\nWantedBy=default.target\n"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The lines of helpers.txt                                                  */
+/* -------------------------------------------------------------------------- */
+
+// helper_lines_has is whether an application has a helper of that name.
+fn helper_lines_has(lines: string, app: string, name: string) bool {
+    return line_in_list(lines, app + "|" + name)
+}
+
+// helper_lines_with is the lines with an application's helper added once.
+fn helper_lines_with(lines: string, app: string, name: string) string {
+    if helper_lines_has(lines, app, name) {
+        return lines
+    }
+    return list_add(lines, app + "|" + name)
+}
+
+// helper_lines_without is the lines without an application's helper of that
+// name; an empty name drops every helper of the application.
+fn helper_lines_without(lines: string, app: string, name: string) string {
+    var out: string = ""
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_strlen(line) == 0 {
+            continue
+        }
+        if rho_str_eq(field(line, 0), app) && (rho_strlen(name) == 0 || rho_str_eq(field(line, 1), name)) {
+            continue
+        }
+        out = out + line + "\n"
+    }
+    return out
+}
+
+// helper_lines_of is the names of an application's helpers, one per line.
+fn helper_lines_of(lines: string, app: string) string {
+    var out: string = ""
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_str_eq(field(line, 0), app) && helper_name_ok(field(line, 1)) {
+            out = out + field(line, 1) + "\n"
+        }
+    }
+    return out
+}
+
+// helper_unit_clash is whether another application's helper has the same unit:
+// `mesh` asking for `zb-1` and `mesh-zb` asking for `1` would both be
+// `rh-mesh-zb-1.service`.
+// @req KEEP-APPS-0020
+fn helper_unit_clash(lines: string, app: string, name: string) bool {
+    let unit: string = helper_unit(app, name)
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        var line: string = rest
+        if at < 0 { rest = "" } else { line = rho_str_slice(rest, 0, u32(at)); rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1) }
+        if rho_strlen(line) == 0 || rho_str_eq(field(line, 0), app) {
+            continue
+        }
+        if rho_str_eq(helper_unit(field(line, 0), field(line, 1)), unit) {
+            return true
+        }
+    }
+    return false
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The `App` credential and the isolation answer                             */
+/* -------------------------------------------------------------------------- */
+
+// app_auth_part is one half of an `Authorization: App <app>:<secret>` value: 0
+// the application, 1 the secret; "" when the value is not of that scheme.
+// @req KEEP-APPS-0020
+fn app_auth_part(header: string, index: u32) string {
+    if !rho_str_starts_with(header, "App ") {
+        return ""
+    }
+    let rest: string = str_trim(rho_str_slice(header, 4, u32(rho_strlen(header)) - 4))
+    let colon: i32 = rho_str_index_of(rest, ":")
+    if colon <= 0 {
+        return ""
+    }
+    if index == 0 {
+        return rho_str_slice(rest, 0, u32(colon))
+    }
+    return rho_str_slice(rest, u32(colon) + 1, u32(rho_strlen(rest)) - u32(colon) - 1)
+}
+
+// isolation_kept is what a kept isolation.txt says: "yes", "no", or "ask" when
+// it must be asked (again). `yes` from the old probe stands: it could only say
+// yes by running. `no` from it does not: it said no wherever systemd-run had no
+// user D-Bus session to talk to, whatever systemd could do; nor does `no-v2`,
+// from a probe without PrivateUsers=, which a user manager needs to make a mount
+// namespace on a machine like WSL's. Each is asked again once, and the answer
+// kept as `yes-v3` or `no-v3`.
+// @req KEEP-APPS-0021
+fn isolation_kept(text: string) string {
+    let said: string = str_trim(text)
+    if rho_str_eq(said, "yes") || rho_str_eq(said, "yes-v2") || rho_str_eq(said, "yes-v3") {
+        return "yes"
+    }
+    if rho_str_eq(said, "no-v3") {
+        return "no"
+    }
+    return "ask"
+}
+
+// isolation_probe_unit is the throwaway unit that asks systemd whether it can
+// give a user service the view an application gets: the keeper's folder empty
+// and read-only, a key hidden, no new privileges, and nothing to run.
+// @req KEEP-APPS-0021
+fn isolation_probe_unit(state: string, auth: string) string {
+    return "# Written by the RoboHub keeper to ask whether systemd can isolate a user service; removed at once.\n" +
+        "[Unit]\nDescription=RoboHub keeper isolation probe\n\n" +
+        "[Service]\nType=oneshot\nNoNewPrivileges=yes\nPrivateUsers=yes\nTemporaryFileSystem=" + unit_percent(state) + ":ro\n" +
+        "InaccessiblePaths=-" + unit_percent(auth) + "/private.pem\nExecStart=/bin/true\n"
+}
+
+/* -------------------------------------------------------------------------- */
+/*  The JSON a helper is asked for in                                         */
+/* -------------------------------------------------------------------------- */
+
+// The body of POST /api/v1/helpers is one JSON object whose values are strings,
+// an array of strings and an object of strings. json_str_field finds a key
+// anywhere in a document, so `"name"` inside `env` could answer for the helper's
+// name; these read the top level of the object, and nothing nested is mistaken
+// for it.
+
+// hjson_ws is the first index at or after `i` that is not white space.
+fn hjson_ws(doc: string, i: u32) u32 {
+    let length: u32 = u32(rho_strlen(doc))
+    var at: u32 = i
+    while at < length {
+        let ch: string = rho_str_slice(doc, at, 1)
+        if !rho_str_eq(ch, " ") && !rho_str_eq(ch, "\n") && !rho_str_eq(ch, "\r") && !rho_str_eq(ch, "\t") {
+            return at
+        }
+        at = at + 1
+    }
+    return length
+}
+
+// hjson_string_end is the index just after the string that starts at `i`, or -1
+// when there is no string there or it does not end.
+fn hjson_string_end(doc: string, i: u32) i32 {
+    let length: u32 = u32(rho_strlen(doc))
+    if i >= length || !rho_str_eq(rho_str_slice(doc, i, 1), "\"") {
+        return -1
+    }
+    var at: u32 = i + 1
+    while at < length {
+        let ch: string = rho_str_slice(doc, at, 1)
+        if rho_str_eq(ch, "\\") {
+            at = at + 2
+            continue
+        }
+        if rho_str_eq(ch, "\"") {
+            return i32(at + 1)
+        }
+        at = at + 1
+    }
+    return -1
+}
+
+// hjson_value_end is the index just after the value that starts at `i`, or -1.
+fn hjson_value_end(doc: string, i: u32) i32 {
+    let length: u32 = u32(rho_strlen(doc))
+    if i >= length {
+        return -1
+    }
+    let first: string = rho_str_slice(doc, i, 1)
+    if rho_str_eq(first, "\"") {
+        return hjson_string_end(doc, i)
+    }
+    if rho_str_eq(first, "{") || rho_str_eq(first, "[") {
+        var depth: u32 = 0
+        var at: u32 = i
+        while at < length {
+            let ch: string = rho_str_slice(doc, at, 1)
+            if rho_str_eq(ch, "\"") {
+                let end: i32 = hjson_string_end(doc, at)
+                if end < 0 {
+                    return -1
+                }
+                at = u32(end)
+                continue
+            }
+            if rho_str_eq(ch, "{") || rho_str_eq(ch, "[") {
+                depth = depth + 1
+            } else if rho_str_eq(ch, "}") || rho_str_eq(ch, "]") {
+                depth = depth - 1
+                if depth == 0 {
+                    return i32(at + 1)
+                }
+            }
+            at = at + 1
+        }
+        return -1
+    }
+    var at: u32 = i
+    while at < length && rho_str_index_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.+-", rho_str_slice(doc, at, 1)) >= 0 {
+        at = at + 1
+    }
+    if at == i {
+        return -1
+    }
+    return i32(at)
+}
+
+// hjson_hex is the value of four hex digits, or 65536 when they are not.
+fn hjson_hex(digits: string) u32 {
+    if u32(rho_strlen(digits)) != 4 {
+        return 65536
+    }
+    var value: u32 = 0
+    var i: u32 = 0
+    while i < 4 {
+        var at: i32 = rho_str_index_of("0123456789abcdef", rho_str_slice(digits, i, 1))
+        if at < 0 {
+            at = rho_str_index_of("0123456789ABCDEF", rho_str_slice(digits, i, 1))
+        }
+        if at < 0 {
+            return 65536
+        }
+        value = value * 16 + u32(at)
+        i = i + 1
+    }
+    return value
+}
+
+// hjson_utf8 is a code point as UTF-8.
+fn hjson_utf8(code: u32) string {
+    if code < 128 {
+        return rho_str_from_byte(u8(code))
+    }
+    if code < 2048 {
+        return rho_str_from_byte(u8(192 + code / 64)) + rho_str_from_byte(u8(128 + code % 64))
+    }
+    if code < 65536 {
+        return rho_str_from_byte(u8(224 + code / 4096)) + rho_str_from_byte(u8(128 + (code / 64) % 64)) +
+            rho_str_from_byte(u8(128 + code % 64))
+    }
+    return rho_str_from_byte(u8(240 + code / 262144)) + rho_str_from_byte(u8(128 + (code / 4096) % 64)) +
+        rho_str_from_byte(u8(128 + (code / 64) % 64)) + rho_str_from_byte(u8(128 + code % 64))
+}
+
+// hjson_is_string is whether a raw value is exactly one JSON string.
+fn hjson_is_string(raw: string) bool {
+    return rho_strlen(raw) >= 2 && hjson_string_end(raw, 0) == i32(rho_strlen(raw))
+}
+
+// hjson_unquote is what a raw JSON string says, its escapes read; a \u escape
+// that is not one gives a NUL, which every value check refuses.
+fn hjson_unquote(raw: string) string {
+    if !hjson_is_string(raw) {
+        return ""
+    }
+    let length: u32 = u32(rho_strlen(raw)) - 1
+    var out: string = ""
+    var at: u32 = 1
+    while at < length {
+        let ch: string = rho_str_slice(raw, at, 1)
+        if !rho_str_eq(ch, "\\") || at + 1 >= length {
+            out = out + ch
+            at = at + 1
+            continue
+        }
+        let next: string = rho_str_slice(raw, at + 1, 1)
+        at = at + 2
+        if rho_str_eq(next, "n") {
+            out = out + "\n"
+        } else if rho_str_eq(next, "t") {
+            out = out + "\t"
+        } else if rho_str_eq(next, "r") {
+            out = out + "\r"
+        } else if rho_str_eq(next, "b") {
+            out = out + rho_str_from_byte(u8(8))
+        } else if rho_str_eq(next, "f") {
+            out = out + rho_str_from_byte(u8(12))
+        } else if rho_str_eq(next, "u") {
+            var code: u32 = 65536
+            if at + 4 <= length {
+                code = hjson_hex(rho_str_slice(raw, at, 4))
+            }
+            if code >= 65536 {
+                return out + rho_str_from_byte(u8(0))
+            }
+            at = at + 4
+            // A surrogate pair is one code point; a lone surrogate is none.
+            if code >= 55296 && code < 56320 && at + 6 <= length && rho_str_eq(rho_str_slice(raw, at, 2), "\\u") {
+                let low: u32 = hjson_hex(rho_str_slice(raw, at + 2, 4))
+                if low >= 56320 && low < 57344 {
+                    code = 65536 + (code - 55296) * 1024 + (low - 56320)
+                    at = at + 6
+                }
+            }
+            if code >= 55296 && code < 57344 {
+                return out + rho_str_from_byte(u8(0))
+            }
+            out = out + hjson_utf8(code)
+        } else {
+            // \" \\ \/ and anything else stand for themselves.
+            out = out + next
+        }
+    }
+    return out
+}
+
+// hjson_top is the raw text of a key's value at the top level of a JSON object,
+// or "" when the document is not an object or has no such key.
+fn hjson_top(doc: string, key: string) string {
+    let length: u32 = u32(rho_strlen(doc))
+    var at: u32 = hjson_ws(doc, 0)
+    if at >= length || !rho_str_eq(rho_str_slice(doc, at, 1), "{") {
+        return ""
+    }
+    at = hjson_ws(doc, at + 1)
+    while at < length {
+        if rho_str_eq(rho_str_slice(doc, at, 1), "}") {
+            return ""
+        }
+        let key_end: i32 = hjson_string_end(doc, at)
+        if key_end < 0 {
+            return ""
+        }
+        let found: string = hjson_unquote(rho_str_slice(doc, at, u32(key_end) - at))
+        at = hjson_ws(doc, u32(key_end))
+        if at >= length || !rho_str_eq(rho_str_slice(doc, at, 1), ":") {
+            return ""
+        }
+        at = hjson_ws(doc, at + 1)
+        let value_end: i32 = hjson_value_end(doc, at)
+        if value_end < 0 {
+            return ""
+        }
+        if rho_str_eq(found, key) {
+            return rho_str_slice(doc, at, u32(value_end) - at)
+        }
+        at = hjson_ws(doc, u32(value_end))
+        if at < length && rho_str_eq(rho_str_slice(doc, at, 1), ",") {
+            at = hjson_ws(doc, at + 1)
+        }
+    }
+    return ""
+}
+
+// hjson_items is the raw items of a JSON array (`[`…`]`) or the raw `key` and
+// value of each member of an object (`{`…`}`), one per line as `raw` or
+// `rawkey<TAB>rawvalue` — raw JSON has no line break or tab outside a string,
+// and inside one they are escaped — or "!" when the text is not one.
+fn hjson_items(raw: string, object: bool) string {
+    let length: u32 = u32(rho_strlen(raw))
+    var open: string = "["
+    var close: string = "]"
+    if object {
+        open = "{"
+        close = "}"
+    }
+    if length < 2 || !rho_str_eq(rho_str_slice(raw, 0, 1), open) {
+        return "!"
+    }
+    var out: string = ""
+    var at: u32 = hjson_ws(raw, 1)
+    if at < length && rho_str_eq(rho_str_slice(raw, at, 1), close) {
+        if hjson_ws(raw, at + 1) != length {
+            return "!"
+        }
+        return ""
+    }
+    while at < length {
+        var key: string = ""
+        if object {
+            let key_end: i32 = hjson_string_end(raw, at)
+            if key_end < 0 {
+                return "!"
+            }
+            key = rho_str_slice(raw, at, u32(key_end) - at) + "\t"
+            at = hjson_ws(raw, u32(key_end))
+            if at >= length || !rho_str_eq(rho_str_slice(raw, at, 1), ":") {
+                return "!"
+            }
+            at = hjson_ws(raw, at + 1)
+        }
+        let end: i32 = hjson_value_end(raw, at)
+        if end < 0 {
+            return "!"
+        }
+        out = out + key + rho_str_slice(raw, at, u32(end) - at) + "\n"
+        at = hjson_ws(raw, u32(end))
+        if at >= length {
+            return "!"
+        }
+        let sep: string = rho_str_slice(raw, at, 1)
+        if rho_str_eq(sep, close) {
+            if hjson_ws(raw, at + 1) != length {
+                return "!"
+            }
+            return out
+        }
+        if !rho_str_eq(sep, ",") {
+            return "!"
+        }
+        at = hjson_ws(raw, at + 1)
+    }
+    return "!"
+}
+
+// helper_args_problem is why a raw `args` value cannot be a helper's arguments,
+// or "": absent, or an array of at most 64 strings each fit for a unit.
+// @req KEEP-APPS-0020
+fn helper_args_problem(raw: string) string {
+    if raw == "" {
+        return ""
+    }
+    let items: string = hjson_items(raw, false)
+    if rho_str_eq(items, "!") {
+        return "args is an array of strings"
+    }
+    var count: u32 = 0
+    var rest: string = items
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let item: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        if !hjson_is_string(item) {
+            return "args is an array of strings"
+        }
+        let problem: string = helper_value_problem(hjson_unquote(item))
+        if problem != "" {
+            return "args: " + problem
+        }
+        count = count + 1
+    }
+    if count > HELPER_ARGS_MAX {
+        return "a helper has at most 64 arguments"
+    }
+    return ""
+}
+
+// helper_args is the arguments of a raw `args` value that helper_args_problem
+// accepted, one per line.
+fn helper_args(raw: string) string {
+    if raw == "" {
+        return ""
+    }
+    var out: string = ""
+    var rest: string = hjson_items(raw, false)
+    if rho_str_eq(rest, "!") {
+        return ""
+    }
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        out = out + hjson_unquote(rho_str_slice(rest, 0, u32(at))) + "\n"
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+    }
+    return out
+}
+
+// helper_env_lines is a raw `env` value as `KEY=value` lines, or "!" when it is
+// not an object of strings and "!<why>" when an entry could not be one line.
+// Each entry is still to be checked with helper_env_lines_problem.
+fn helper_env_lines(raw: string) string {
+    if raw == "" {
+        return ""
+    }
+    let items: string = hjson_items(raw, true)
+    if rho_str_eq(items, "!") {
+        return "!"
+    }
+    var out: string = ""
+    var rest: string = items
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let item: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let tab: i32 = rho_str_index_of(item, "\t")
+        let value: string = rho_str_slice(item, u32(tab) + 1, u32(rho_strlen(item)) - u32(tab) - 1)
+        if !hjson_is_string(value) {
+            return "!"
+        }
+        let key: string = hjson_unquote(rho_str_slice(item, 0, u32(tab)))
+        let text: string = hjson_unquote(value)
+        // A key with `=` or a line break, or a value with a line break, could
+        // not be told apart in these lines: it is refused here, with the reason.
+        if !helper_env_key_ok(key) {
+            return "!the environment name " + key + " is not [A-Z_][A-Z0-9_]*"
+        }
+        let problem: string = helper_value_problem(text)
+        if problem != "" {
+            return "!" + key + ": " + problem
+        }
+        out = out + key + "=" + text + "\n"
+    }
+    return out
+}
+
+// helper_env_lines_problem is why `KEY=value` lines cannot be a helper's
+// environment, or "".
+// @req KEEP-APPS-0020
+fn helper_env_lines_problem(lines: string) string {
+    if rho_str_eq(lines, "!") {
+        return "env is an object of strings"
+    }
+    if rho_str_starts_with(lines, "!") {
+        return rho_str_slice(lines, 1, u32(rho_strlen(lines)) - 1)
+    }
+    var count: u32 = 0
+    var rest: string = lines
+    while rho_strlen(rest) > 0 {
+        let at: i32 = rho_str_index_of(rest, "\n")
+        let line: string = rho_str_slice(rest, 0, u32(at))
+        rest = rho_str_slice(rest, u32(at) + 1, u32(rho_strlen(rest)) - u32(at) - 1)
+        let eq: i32 = rho_str_index_of(line, "=")
+        if eq < 0 {
+            return "env is an object of strings"
+        }
+        let problem: string = helper_env_problem(rho_str_slice(line, 0, u32(eq)), rho_str_slice(line, u32(eq) + 1, u32(rho_strlen(line)) - u32(eq) - 1))
+        if problem != "" {
+            return problem
+        }
+        count = count + 1
+    }
+    if count > HELPER_ENV_MAX {
+        return "a helper has at most 64 environment entries"
+    }
+    return ""
+}
