@@ -240,6 +240,10 @@ def main() -> int:
         def expect_req(*args, repo: Path = expected / "robohub"):
             """The same command, run by hand on the copy of the workspace."""
             env = dict(os.environ, ROBOHUB_WORKSPACE=str(expected))
+            # As for the keeper below: a RHO_WORKSPACE left in the environment (CI
+            # sets it to the real workspace) adds that workspace's repositories to
+            # the fixture's family, and rho req numbers from their ids instead.
+            env.pop("RHO_WORKSPACE", None)
             return run([str(req_bin), *args, "--dir", str(repo)], env=env)
 
         home = scratch / "home"

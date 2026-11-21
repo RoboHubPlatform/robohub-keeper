@@ -19,6 +19,6 @@ jobs:
     uses: RoboHubPlatform/robohub/.github/workflows/robohub-ci.yml@main
     secrets: inherit
     with:
-      siblings: robohub robohub-mesh
+      siblings: robohub robohub-mesh robohub-pico robohub-gateway
       components: rho-auth rho-log
       build: .
